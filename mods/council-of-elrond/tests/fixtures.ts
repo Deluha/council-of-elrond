@@ -50,6 +50,8 @@ export const REVISE = verdict('revise', 'Too wide.', 'Run rm -r build/out instea
 
 export type Asked = { question: string; options: readonly string[]; header: string | undefined }
 
+export type ProcessReply = { exitCode: number; stdout: string } | 'timeout'
+
 export type World = {
   cwd: string
   files: Map<string, string>
@@ -57,8 +59,9 @@ export type World = {
   /** Symbolic links: path -> where it really lands. */
   links: Map<string, string>
   surfaces: string[]
-  /** What the user answers: a label, free text, or `dismiss`. */
+  /** What the user answers: a label, free text, or `dismiss`. Queued `answers` go first. */
   answer: string
+  answers: string[]
   /** Model replies, in order; the last one repeats. */
   replies: ModelReply[]
   /** What reached the tool (the bottom of the chain), envelope stripped. */
@@ -68,6 +71,15 @@ export type World = {
   logs: string[]
   toasts: string[]
   toolResult: Record<string, unknown>
+  /** Every process the mod started, as argv. */
+  processes: string[][]
+  /** How a process answers, by its argv; absent: exit 0, no output. */
+  processReply: (argv: readonly string[]) => ProcessReply
+  notices: { id: string; text: string | undefined }[]
+  panes: string[]
+  statuses: (string | undefined)[]
+  configSets: { key: string; value: unknown }[]
+  commands: string[]
 }
 
 const strip = (e: Record<string, unknown>): Record<string, unknown> => {
@@ -77,7 +89,7 @@ const strip = (e: Record<string, unknown>): Record<string, unknown> => {
 
 export function world(
   on: On,
-  setup: Partial<Pick<World, 'answer' | 'replies' | 'surfaces' | 'cwd'>> & { cwdFails?: boolean } = {},
+  setup: Partial<Pick<World, 'answer' | 'answers' | 'replies' | 'surfaces' | 'cwd'>> & { cwdFails?: boolean } = {},
 ): World {
   const w: World = {
     cwd: setup.cwd ?? ROOT,
@@ -89,6 +101,7 @@ export function world(
     links: new Map(),
     surfaces: setup.surfaces ?? ['terminal'],
     answer: setup.answer ?? 'Keep blocked',
+    answers: setup.answers ?? [],
     replies: setup.replies ?? [APPROVE],
     ran: [],
     asked: [],
@@ -96,6 +109,13 @@ export function world(
     logs: [],
     toasts: [],
     toolResult: { result: 'ran' },
+    processes: [],
+    processReply: () => ({ exitCode: 0, stdout: '' }),
+    notices: [],
+    panes: [],
+    statuses: [],
+    configSets: [],
+    commands: [],
   }
 
   on('session.root', () => ({ value: ROOT }))
@@ -129,6 +149,47 @@ export function world(
       },
     }
   })
+  on('fs.list', ($, e) => {
+    const folder = e.path ?? w.cwd
+    const names = new Set<string>()
+    const kinds = new Map<string, 'file' | 'dir'>()
+    for (const [paths, kind] of [[[...w.files.keys()], 'file'], [[...w.dirs], 'dir']] as const) {
+      for (const path of paths) {
+        if (!path.startsWith(`${folder}/`)) continue
+        const name = path.slice(folder.length + 1).split('/')[0] ?? ''
+        if (name === '') continue
+        names.add(name)
+        kinds.set(name, path.slice(folder.length + 1).includes('/') ? 'dir' : kind)
+      }
+    }
+    return { value: [...names].map(name => ({ name, kind: kinds.get(name) ?? 'file', size: 0, mtimeMs: 0, isLink: false })) }
+  })
+  on('process.run', ($, e) => {
+    w.processes.push([...e.argv])
+    const reply = w.processReply(e.argv)
+    if (reply === 'timeout') return { deny: 'timed out' }
+    return { value: { exitCode: reply.exitCode, stdout: reply.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.notice', ($, e) => {
+    w.notices.push({ id: e.tool_use_id, text: e.text })
+    return { value: undefined }
+  })
+  on('ui.open', ($, e) => {
+    w.panes.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('ui.status', ($, e) => {
+    w.statuses.push(e.text)
+    return { value: undefined }
+  })
+  on('config.set', ($, e) => {
+    w.configSets.push({ key: e.key, value: e.value })
+    return { value: e.value }
+  })
+  on('command.register', ($, e) => {
+    w.commands.push(e.name)
+    return { value: { command: e.name } }
+  })
   on('ui.log', ($, e) => {
     w.logs.push(e.text)
     return { value: undefined }
@@ -149,8 +210,9 @@ export function world(
         .questions[0]
       if (question === undefined) return { deny: 'no question' }
       w.asked.push({ question: question.question, options: question.options.map(o => o.label), header: question.header })
-      if (w.answer === 'dismiss') return { deny: 'dismissed' }
-      return { result: { answers: { [question.question]: w.answer } } as never }
+      const answer = w.answers.shift() ?? w.answer
+      if (answer === 'dismiss') return { deny: 'dismissed' }
+      return { result: { answers: { [question.question]: answer } } as never }
     }
     w.ran.push(strip(e as unknown as Record<string, unknown>))
     return w.toolResult as never

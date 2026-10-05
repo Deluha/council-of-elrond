@@ -266,6 +266,7 @@ export const SHIPPED: Config = {
     String.raw`(^|[^a-z0-9])primary([^a-z0-9]|$)`,
   ],
   models: {},
+  gollum: { patterns: [], allowlist: [] },
 }
 
 /**

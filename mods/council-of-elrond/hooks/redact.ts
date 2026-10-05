@@ -40,7 +40,8 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     id: 'assignment',
     level: 'low',
     label: 'secret',
-    re: /\b((?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret)["']?\s*[=:]\s*["']?)([^\s"'&;,]{6,})/gi,
+    // Quotes may be JSON-escaped (`\"`); an already redacted value is left alone.
+    re: /\b((?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret)\\?["']?\s*[=:]\s*\\?["']?)(?!\[REDACTED)([^\s"'&;,\\]{6,})/gi,
     keep: 1,
   },
 ]

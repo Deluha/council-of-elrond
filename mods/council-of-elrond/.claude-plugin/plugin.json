@@ -1,11 +1,16 @@
 {
   "name": "council-of-elrond",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A council of specialist reviewers that gates risky tool calls before they run. Rules decide the tier; model members give a second opinion; anything uncertain comes to you.",
   "author": {
     "name": "council-of-elrond"
   },
-  "keywords": ["safety", "review", "gate", "tool-call"],
+  "keywords": [
+    "safety",
+    "review",
+    "gate",
+    "tool-call"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "gandalfEnabled": {
@@ -21,7 +26,43 @@
       "description": "\"default\" uses the project rules file's choice, else the built-in default (sonnet).",
       "required": false,
       "default": "default",
-      "options": ["default", "sonnet", "opus", "fable", "haiku"]
+      "options": [
+        "default",
+        "sonnet",
+        "opus",
+        "fable",
+        "haiku"
+      ]
+    },
+    "shadowMode": {
+      "type": "boolean",
+      "title": "Shadow mode",
+      "description": "Reviewers run and log their verdicts but never refuse. Block rules, protected paths and the secrets scan still enforce. Recommended for the first days. /council shadow on|off switches it for one session.",
+      "required": false,
+      "default": false
+    },
+    "gollumEnabled": {
+      "type": "boolean",
+      "title": "Secrets scan enabled",
+      "description": "Scans what gated calls would write or run for secrets: high-confidence finds are refused, possible ones come to you.",
+      "required": false,
+      "default": true
+    },
+    "galadrielEnabled": {
+      "type": "boolean",
+      "title": "Read-only preview enabled",
+      "description": "Before a review, runs fixed read-only inspections (delete targets, the commits a push would send, a file's diff) and shows the result to the reviewer and to you.",
+      "required": false,
+      "default": true
+    },
+    "previewLines": {
+      "type": "number",
+      "title": "Preview line limit",
+      "description": "Lines of the read-only preview kept for the reviewer.",
+      "required": false,
+      "default": 80,
+      "min": 5,
+      "max": 400
     },
     "reviewDeadlineSeconds": {
       "type": "number",
@@ -39,6 +80,13 @@
       "required": false,
       "default": 1500000,
       "min": 0
+    },
+    "toolErrorsAreWipes": {
+      "type": "boolean",
+      "title": "Tool errors count as failed attempts",
+      "description": "A gated call that ran and errored counts toward the lockout (3 on one operation, 5 on one kind, per prompt).",
+      "required": false,
+      "default": true
     },
     "auditLogPath": {
       "type": "string",

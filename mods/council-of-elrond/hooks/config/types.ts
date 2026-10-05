@@ -67,10 +67,29 @@ export type Config = {
   productionPatterns: readonly string[]
   /** Per-slot model: an alias (`sonnet`, `opus`, `fable`) or a full id. */
   models: Readonly<Partial<Record<ModelSlot, string>>>
+  /** The secrets scan's extra patterns and its allowlist. */
+  gollum: GollumConfig
+}
+
+export const SECRET_LEVELS = ['high', 'low'] as const
+
+export type GollumPattern = {
+  id: string
+  level: (typeof SECRET_LEVELS)[number]
+  /** Regex source, matched globally against what the call would write or run. */
+  regex: string
+  /** What the finding is called in the dialog and refusal (`deploy key`). */
+  label: string
+}
+
+export type GollumConfig = {
+  patterns: readonly GollumPattern[]
+  /** Exact secret strings, or `sha256:` fingerprints the dialog shows. Never regexes. */
+  allowlist: readonly string[]
 }
 
 /** What the project overrides file may hold: every field optional. */
-export type Overrides = Partial<Omit<Config, 'schemaVersion'>> & { schemaVersion: 1 }
+export type Overrides = Partial<Omit<Config, 'schemaVersion' | 'gollum'>> & { schemaVersion: 1; gollum?: Partial<GollumConfig> }
 
 export type RuleSource = 'shipped' | 'project'
 

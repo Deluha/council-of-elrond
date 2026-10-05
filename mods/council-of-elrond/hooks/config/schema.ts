@@ -5,11 +5,13 @@ import {
   MEMBERS,
   MODEL_SLOTS,
   PROFILES,
+  SECRET_LEVELS,
   TIERS,
 } from './types.js'
 import type {
   CheckName,
   Config,
+  GollumPattern,
   MemberName,
   ModelSlot,
   Overrides,
@@ -54,7 +56,16 @@ const TOP_KEYS = [
   'protectedBranches',
   'productionPatterns',
   'models',
+  'gollum',
 ] as const
+
+const GOLLUM_KEYS = ['patterns', 'allowlist'] as const
+const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label'] as const
+
+/** A fingerprint as the dialog shows it; anything else in the allowlist is an exact string. */
+export const SECRET_FINGERPRINT = /^sha256:[0-9a-f]{16}$/
+
+const MAX_ALLOWLIST_ENTRY = 500
 
 const RULE_KEYS = [
   'id',
@@ -69,7 +80,7 @@ const RULE_KEYS = [
   'reason',
 ] as const
 
-const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._\-[\]@:/]{0,99}$/
+export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._\-[\]@:/]{0,99}$/
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -157,6 +168,62 @@ function validateRule(raw: unknown, field: string, errors: string[]): Rule | und
     ...(raw.profile !== undefined && { profile: raw.profile as Profile }),
     reason: (raw.reason as string).trim(),
   }
+}
+
+function validateGollum(raw: unknown, errors: string[]): Overrides['gollum'] {
+  if (!isObject(raw)) {
+    errors.push('gollum: must be an object')
+    return undefined
+  }
+  for (const key of Object.keys(raw)) {
+    if (!includes(GOLLUM_KEYS, key)) errors.push(`gollum.${key}: unknown field`)
+  }
+  const out: { patterns?: GollumPattern[]; allowlist?: string[] } = {}
+  if (raw.patterns !== undefined) {
+    if (!Array.isArray(raw.patterns)) {
+      errors.push('gollum.patterns: must be a list')
+    } else {
+      const seen = new Set<string>()
+      out.patterns = []
+      raw.patterns.forEach((item, index) => {
+        const field = `gollum.patterns[${index}]`
+        if (!isObject(item)) {
+          errors.push(`${field}: must be an object`)
+          return
+        }
+        const before = errors.length
+        for (const key of Object.keys(item)) {
+          if (!includes(GOLLUM_PATTERN_KEYS, key)) errors.push(`${field}.${key}: unknown field`)
+        }
+        if (typeof item.id !== 'string' || item.id === '') errors.push(`${field}.id: required string`)
+        else if (seen.has(item.id)) errors.push(`${field}.id: "${item.id}" is used twice`)
+        if (!includes(SECRET_LEVELS, item.level)) errors.push(`${field}.level: one of ${SECRET_LEVELS.join(', ')}`)
+        const problem = regexError(item.regex, 'g')
+        if (problem !== undefined) errors.push(`${field}.regex: ${problem}`)
+        else if (new RegExp(item.regex as string).test('')) errors.push(`${field}.regex: must not match empty text`)
+        if (typeof item.label !== 'string' || item.label.trim() === '') errors.push(`${field}.label: required string`)
+        if (errors.length > before) return
+        seen.add(item.id as string)
+        out.patterns?.push({
+          id: item.id as string,
+          level: item.level as GollumPattern['level'],
+          regex: item.regex as string,
+          label: (item.label as string).trim(),
+        })
+      })
+    }
+  }
+  if (raw.allowlist !== undefined) {
+    const entries = stringList(raw.allowlist, 'gollum.allowlist', errors)
+    entries.forEach((entry, index) => {
+      if (entry.length > MAX_ALLOWLIST_ENTRY) errors.push(`gollum.allowlist[${index}]: longer than ${MAX_ALLOWLIST_ENTRY} characters`)
+      else if (!SECRET_FINGERPRINT.test(entry) && entry.length < 6) {
+        errors.push(`gollum.allowlist[${index}]: an exact secret of at least 6 characters, or a sha256: fingerprint`)
+      }
+    })
+    out.allowlist = entries
+  }
+  return out
 }
 
 /**
@@ -254,6 +321,11 @@ export function validateOverrides(
     }
   }
 
+  if (raw.gollum !== undefined) {
+    const gollum = validateGollum(raw.gollum, errors)
+    if (gollum !== undefined) overrides.gollum = gollum
+  }
+
   return errors.length > 0
     ? { overrides: undefined, errors }
     : { overrides, errors: [] }
@@ -281,6 +353,10 @@ export function mergeConfig(shipped: Config, overrides: Overrides): Config {
     protectedBranches: union(shipped.protectedBranches, overrides.protectedBranches),
     productionPatterns: union(shipped.productionPatterns, overrides.productionPatterns),
     models: { ...shipped.models, ...overrides.models },
+    gollum: {
+      patterns: [...shipped.gollum.patterns, ...(overrides.gollum?.patterns ?? [])],
+      allowlist: union(shipped.gollum.allowlist, overrides.gollum?.allowlist),
+    },
   }
 }
 
