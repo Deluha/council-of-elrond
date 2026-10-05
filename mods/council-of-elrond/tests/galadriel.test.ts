@@ -78,7 +78,8 @@ describe('in the pipeline', () => {
     await $.tool.call({ tool: 'Bash', command: 'git push --force origin feature' })
     for (const argv of w.processes) {
       expect(argv[0]).toBe('git')
-      expect(['rev-parse', 'remote', 'log']).toContain(argv[1])
+      // The preview's table, and the full council's diff of what the push would send.
+      expect(['rev-parse', 'remote', 'log', 'diff']).toContain(argv[1])
       expect(argv).not.toContain('push')
       expect(argv).not.toContain('--force')
     }

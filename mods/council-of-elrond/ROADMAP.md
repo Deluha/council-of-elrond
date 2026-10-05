@@ -12,8 +12,8 @@ How to finish the mod from where it stands, written so a new dev session can pic
 | 1 | Elrond, rules, Gandalf, escalation, fail-closed paths, audit log (plain mode) | ✅ Done: [Deluha/council-of-elrond#1](https://github.com/Deluha/council-of-elrond/pull/1) |
 | 2 | Gollum, Galadriel, operation keys, rounds, wipes, cache, commands, shadow mode | ✅ Done: [Deluha/council-of-elrond#2](https://github.com/Deluha/council-of-elrond/pull/2) |
 | 3 | Legolas, Aragorn (git and database profiles), routing | ✅ Done: [Deluha/council-of-elrond#3](https://github.com/Deluha/council-of-elrond/pull/3) |
-| 4 | Full council with Gimli | ⬜ Next |
-| 5 | Rule and allowlist suggestions, `/council report` | ⬜ |
+| 4 | Full council with Gimli | ✅ Done: Stage 4 pull request (see [DESIGN.md §8](./DESIGN.md)) |
+| 5 | Rule and allowlist suggestions, `/council report` | ⬜ Next |
 | 6 | Theme strings, then UI features in order | ⬜ |
 
 **Stop at every checkpoint (SPEC §20).** At each one: tests pass, `tsc` passes, `claude plugin validate`
@@ -27,7 +27,7 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (176 at the end of stage 3)
+cd mods/council-of-elrond && claude plugin test .     # all tests (207 at the end of stage 4)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
@@ -69,6 +69,12 @@ claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: l
 11. **Drawing from register.ts without JSX:** call the global `h(Element, props, ...children)` with elements from `$.ui.resolve(e)` and cast the result to `RenderElement`; the file stays `.ts`.
 12. **Test kit specifics (stage 2):** a `tool.call` bottom answer must carry `result` (an error is `{ result, isError: true, text }`); `$.session.start` needs `{ cwd, surface, isInteractive }` and a bottom hook returning `{ cwd }`; a `ui.render` hook that calls `next(e)` (SessionMode) needs a bottom `ui.render` hook in the test; `$.command.run` resolves `{ text: undefined, ref: undefined }` for a hook's `{}`.
 13. **Claude Code's own denial wording.** Automatic (verified in `-p`): "`rm in '<path>' needs approval. … Claude Code asks before a shell command creates, changes or removes files there.`" The person refusing at the prompt (from the binary): "The user doesn't want to proceed with this tool use. …", optionally ending "To tell you how to proceed, the user said: …", or "The user doesn't want to take this action right now. …". All come back from `next(e)` as `isError: true`.
+14. **`$.process.spawn` has no timeout** (stage 4, probed live in 2.1.289). End the loop with `stream.return()` from a `$.clock.after` timer.
+    - Doing so kills the child, with no orphan.
+    - A pending `after` cost the hook about 3 ms of budget while a spawn pull was in flight for 12 s: it does not burn the budget the way an awaited `$.clock.sleep` does.
+    - After `return()`, `stream.result` settles `undefined`, so track "ended by us" in a flag.
+    - In the test kit, a `process.spawn` bottom hook is an async generator returning `{ value: { code, signal } }` (or `{ deny }` for "can't start"). A generator stuck in an `await` never sees the consumer's `return()`, so a hanging stub must keep yielding.
+    - `mock.clock(on)` answers `clock.now/after/sleep`; the fixtures take `isClockMocked: true` (and `w.modelDelays`) instead of their default real-time `clock.now`.
 
 ### Conventions in this codebase
 
@@ -116,7 +122,7 @@ From the Step 0 review and the model discussion. These are binding unless the us
     - So `rm -rf ./build` and `rm -r build/` share a key.
     - A coarser per-verb counter (e.g. `git push`, any target) locks out at 5 wipes, to catch retries that change the target.
 
-Stage 2's own decisions (the ones the spec didn't cover) are in [DESIGN.md §6](./DESIGN.md), Stage 3's in [§7](./DESIGN.md).
+Stage 2's own decisions (the ones the spec didn't cover) are in [DESIGN.md §6](./DESIGN.md), Stage 3's in [§7](./DESIGN.md), Stage 4's in [§8](./DESIGN.md).
 
 12. **Refusals at Claude Code's own permission prompt** (answered in stage 2). The person's own refusal there, after the council let the call through, counts as a failed attempt (as "keep blocked"); an automatic denial with nobody asked (`-p`, a deny rule) does not. Recorded as `outcome: "refused-by-user"` and `"denied-by-permission"` (`outcomeOf` in `elrond/operations.ts`). *(Done.)*
 
@@ -205,14 +211,16 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 - [x] `/council` status lists all three members; `/council test` names the routed member, profile and any fallback.
 - [ ] Optional, **not run yet** (waiting on the user's approval because it costs real tokens): a ~40-case labelled eval (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injection attempts inside diffs) run live against the default models, to confirm prompt quality.
 
-## Stage 4: full council with Gimli
+## Stage 4: full council with Gimli ✅
 
-- [ ] **Big operations** in `rules.json` (`bigOperations`: rule ids or command regexes). Default: git push, merge to a protected branch, migrations.
-- [ ] All enabled model members run **in parallel** (`Promise.all`; probed fine, peak 2) on the `council` model slot (default `opus`), under one shared deadline passed as each call's remaining `timeoutMs`. Gimli runs alongside on its own timeouts (decision 3). Keep the sequential fallback (stop at first block) behind a flag.
-- [ ] **Combine** (`hooks/elrond/combine.ts`, pure): strictest wins (block > revise > approve); reasons labelled per member; a member error, timeout or malformed verdict is that member's block; a Gimli failure is a block. Members never see each other's verdicts.
-- [ ] **Gimli** (`hooks/members/gimli.ts` + register.ts runner): only `gimli.commands: [{ name, argv, timeoutMs }]` from `rules.json`; never anything from Claude or the call. Pass or fail by exit code; keep the last ~20 lines. `$.process.spawn` so `next.signal` and Esc kill it.
-- [ ] Gimli's commands live in `rules.json`, which is protected, so Claude can't add commands without the user's approval.
-- [ ] Tests (§19 Full council, Gimli): strictest wins, one member failing, Gimli failing, shared deadline (`mock.clock`), only configured commands run, Gimli timeout.
+- [x] **Big operations** in `rules.json` (`bigOperations`: rule ids, `/regex/flags` command patterns, or the check `merge-to-protected`). Default: git push, merge to a protected branch, migrations (`elrond/council.ts`, validated in `config/schema.ts`). `councilEnabled` in `/config` turns the council off.
+- [x] All enabled model members with something to review sit **in parallel** on the `council` model slot (default `opus`), under one shared deadline passed as each call's remaining `timeoutMs` (read with `$.clock.now()`, never a timer). Gimli runs alongside on its own timeouts (decision 3). Sequential fallback (stop at first block) behind `councilSequential`. Each seat's brief comes from the shared `briefOf`; Legolas reviews a push's or merge's range diff (DESIGN §8.3).
+- [x] **Combine** (`hooks/elrond/combine.ts`, pure): strictest wins; reasons labelled per member; a member error, timeout or malformed verdict is that member's block; a Gimli failure is a block. Blocked only for want of verdicts escalates to the user (DESIGN §8.6). Members never see each other's verdicts.
+- [x] **Gimli** (`hooks/members/gimli.ts` + `runCheck` in register.ts): only `gimli.commands: [{ name, argv, timeoutMs }]` from `rules.json`; pass or fail by exit code; the last 20 lines (redacted) for Claude, none in the audit log. `$.process.spawn`, a `$.clock.after` timeout (fact 14); Esc kills it; a member's block stops it.
+- [x] Gimli's commands live in `rules.json`, which is protected, so Claude can't add commands without the user's approval.
+- [x] `councilModel` `/config` row in `CONFIG_ROWS` and `settingsModel`, so `/council model council … --save` works. `/council` status shows the council and the checks; `/council test` names the council, its seats, model and checks.
+- [x] Tests (§19 Full council, Gimli) in `tests/council.test.ts`: strictest wins, one member failing, Gimli failing, shared deadline (`mock.clock`, parallel and sequential), only configured commands run, Gimli timeout, a block stopping a running check.
+- [x] Live headless check (`claude -p --plugin-dir`, throwaway repo): a push with a failing check was refused by the checks with its tail (2 Opus members approving, 1,860 tokens, 1.8 s; the diff reviewer sat out, as the branch was new); a push to an existing remote branch was approved by all three in about 2 s (3,042 tokens) and ran.
 
 ## Stage 5: suggestions and `/council report`
 
@@ -260,10 +268,17 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 
 ## Known follow-ups
 
+From stage 4:
+- **A push of a branch the remote doesn't have yet** has no range: the diff reviewer sits out, and Galadriel shows no commits. Diffing against `<remote>/HEAD` (the remote's default branch) when it exists would cover the common case.
+- **Esc during any review** (single or council) aborts the model calls, which then read as failures and may put a question to the user after they pressed Esc. Refusing at once when `next.signal.aborted` would be quieter.
+- **The council's cost.** Every push now costs about three Opus reviews (~3,000 tokens). If that's too much, the knobs are the `/config` council model, "Full council for big operations", or `disableRules`-style removal of a default entry (not offered: lists only add).
+- **Live UI check (user):** the new `/config` rows (full council on/off, model, one at a time, project checks) and the council lines in `/council` and `/council test`, in a terminal.
+- **The ~40-case live eval** is still not run (needs the user's go-ahead); a council-specific set (pushes of unrelated commits, migrations without rollback, failing checks) could join it.
+
 From stage 3:
 - **The ~40-case live eval** (Stage 3's optional item) has not been run; it needs the user's go-ahead for the tokens. Only a 3-call live smoke test ran (one per member and profile, all approve, ~1,000 tokens each).
 - **Migration tools' own files aren't read.** The database reviewer sees inline SQL, heredocs and `.sql` files named in the command; `prisma migrate deploy`, `alembic upgrade` and the like don't name their files, so it sees the command only. Looking them up is tool-specific (and the migrations folders are protected paths, so a shell mention of them already asks).
-- **Mixed compound commands go to Gandalf** (DESIGN §7.1). Stage 4's full council for big operations may be the better home for, say, `git push && psql …`; revisit when it lands.
+- ~~Mixed compound commands go to Gandalf~~ Decided in stage 4 (DESIGN §8.9): one that contains a big operation goes to the full council; others stay with Gandalf.
 - **Live UI check (user):** the new `/config` rows (Legolas and Aragorn enabled and model, diff line limit) in a terminal.
 
 From stage 2:
@@ -271,7 +286,7 @@ From stage 2:
 - **Live UI check in a terminal (user):** the `/council` pane, the `council: shadow` / `council: bypass` label, the "Council: you allowed this once" line under the permission dialog, the secrets dialog with three options and the allowlist confirm.
 - **Scan allowed calls too?** The secrets scan follows SPEC §4 and reads gated calls only (DESIGN §6.1). Scanning every call is cheap; it needs the user's say-so since it changes the pipeline order.
 - **Plain-mode identifiers.** `/council` prints member ids such as `gandalf` where you type them (DESIGN §6.16); stage 6's plain-mode test should decide whether ids count as theme text.
-- `/config` has no model row for the full council yet, so `/council model council … --save` is session-only until stage 4 adds it (add it to `CONFIG_ROWS` and `settingsModel` in register.ts).
+- ~~`/config` has no model row for the full council~~ Added in stage 4.
 
 From stage 1:
 - `interpretRejection` detects "Chat about this" by looking for `chat` in the rejection message; the real wording is unverified. Check it live.

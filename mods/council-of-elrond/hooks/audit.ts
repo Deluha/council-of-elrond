@@ -34,6 +34,15 @@ export type AuditRecord = {
   outcome: 'ran' | 'error' | 'refused' | 'refused-by-user' | 'denied-by-permission'
   /** An identical call was approved earlier this prompt, so no reviewer ran. */
   cached?: true
+  /**
+   * A big operation's full council: the entry that made it big, each member's
+   * own verdict (or `failed`, `skipped`) and tokens, each check's result. No output.
+   */
+  council?: {
+    entry: string
+    voices: readonly { member: string; profile: string | null; verdict: string; tokens: number }[]
+    checks: readonly { name: string; status: string; ms: number }[]
+  }
   latencyMs: number
   tokens: number
   /** Present for a subagent's call. */

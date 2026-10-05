@@ -48,7 +48,8 @@ function gitArgs(part: ShellPart): { sub: string; rest: readonly string[] } | un
   return sub === undefined ? undefined : { sub, rest: part.coreWords.slice(2) }
 }
 
-function pushInspections(rest: readonly string[]): Inspection[] {
+/** The remote a push names, and the commits it would send as a git range. */
+function pushRange(rest: readonly string[]): { remote?: string; range: string } {
   const words = positionals(rest)
   const remote = words[0] !== undefined && SAFE_REF.test(words[0]) ? words[0] : undefined
   const refspec = words[1]
@@ -58,6 +59,17 @@ function pushInspections(rest: readonly string[]): Inspection[] {
     remote !== undefined && destination !== undefined && SAFE_REF.test(destination)
       ? `${remote}/${destination}..HEAD`
       : '@{upstream}..HEAD'
+  return { ...(remote !== undefined && { remote }), range }
+}
+
+/** The ref a merge names, past the options that take a value. */
+function mergeRef(rest: readonly string[]): string | undefined {
+  const valued = new Set(['-m', '-F', '-s', '-X', '--file', '--strategy', '--strategy-option', '--cleanup', '--into-name'])
+  return positionals(rest.filter((word, i) => !valued.has(rest[i - 1] ?? ''))).find(word => SAFE_REF.test(word))
+}
+
+function pushInspections(rest: readonly string[]): Inspection[] {
+  const { remote, range } = pushRange(rest)
   return [
     { kind: 'git', label: 'current branch', argv: ['git', 'rev-parse', '--abbrev-ref', 'HEAD'] },
     ...(remote !== undefined ? [{ kind: 'git' as const, label: `remote ${remote}`, argv: ['git', 'remote', 'get-url', remote] }] : []),
@@ -73,8 +85,7 @@ const HISTORY: readonly Inspection[] = [
 
 /** A merge shows the current branch and the commits it would bring in. */
 function mergeInspections(rest: readonly string[]): Inspection[] {
-  const valued = new Set(['-m', '-F', '-s', '-X', '--file', '--strategy', '--strategy-option', '--cleanup', '--into-name'])
-  const ref = positionals(rest.filter((word, i) => !valued.has(rest[i - 1] ?? ''))).find(word => SAFE_REF.test(word))
+  const ref = mergeRef(rest)
   return [
     { kind: 'git', label: 'current branch', argv: ['git', 'rev-parse', '--abbrev-ref', 'HEAD'] },
     ...(ref !== undefined
@@ -160,4 +171,21 @@ export function formatPreview(results: readonly InspectionResult[], maxLines: nu
   }
   if (blocks.length === 0) return undefined
   return truncate(blocks.join('\n'), maxLines, maxLines * 200)
+}
+
+/**
+ * For the full council's diff reviewer: the changes a push would send, or a
+ * merge would bring in, as one read-only `git diff` from this table. The
+ * range comes from the same validated refs the preview uses; a call git
+ * would run elsewhere (`-C`, `--git-dir`) gets none.
+ */
+export function rangeDiffInspection(kind: 'push' | 'merge', part: ShellPart): Inspection | undefined {
+  const git = gitArgs(part)
+  if (git === undefined) return undefined
+  const range = kind === 'push' ? pushRange(git.rest).range : (() => {
+    const ref = mergeRef(git.rest)
+    return ref === undefined ? undefined : `HEAD...${ref}`
+  })()
+  if (range === undefined) return undefined
+  return { kind: 'git', label: range, argv: ['git', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', range, '--'] }
 }

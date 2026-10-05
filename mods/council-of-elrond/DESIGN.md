@@ -1,7 +1,7 @@
 # council-of-elrond: design
 
-Status: **Stage 3** (Stage 2 plus Legolas, Aragorn's git and database profiles, and routing between
-the three model members; plain mode).
+Status: **Stage 4** (Stage 3 plus the full council for big operations, with the project's own
+checks; plain mode).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
 Built and checked against Claude Code **2.1.289**; its generated API types are vendored at
 `mods/types/claude-code.d.ts` and are the source of truth over docs, samples and the spec.
@@ -34,11 +34,13 @@ settings. The interactive `/plugin` "mods active" line can't be read from a head
 ```
 hooks: session.start, prompt.submit, command.run{command=council},
        ui.render{component=Pane, requestId=council}, ui.render{component=SessionMode}, tool.call
-calls: $.command.register, $.config.set (via councilModel), $.env.get (via loadContext), $.fs.exists,
+calls: $.clock.after (via runCheck), $.clock.now (via convene, runCheck), $.command.register,
+       $.config.set (via councilModel), $.env.get (via loadContext), $.fs.exists,
        $.fs.list (via previewOf), $.fs.read (via appendAudit, councilOutput, fileDiffOf, loadContext,
-       scriptsOf, sqlFilesOf, writeAllowlist), $.fs.stat (via loadContext, previewOf, realPathOf),
-       $.fs.write (via appendAudit, writeAllowlist), $.model.complete (via probeModel, review),
-       $.process.run (via previewOf), $.session.cwd, $.session.root (via loadContext),
+       scriptsOf, sqlFilesOf, writeAllowlist), $.fs.stat (via loadContext, previewOf, realPathOf,
+       sqlFilesOf), $.fs.write (via appendAudit, writeAllowlist), $.model.complete (via probeModel,
+       review), $.process.run (via currentBranchOf, previewOf, rangeDiffOf),
+       $.process.spawn (via runCheck), $.session.cwd, $.session.root (via loadContext),
        $.session.surfaces (via escalate, show, syncIndicator), $.state.get, $.state.set,
        $.ui.ask (via confirmAllowlist, escalate), $.ui.log, $.ui.notice, $.ui.open (via show),
        $.ui.resolve, $.ui.status (via syncIndicator), $.ui.toast (via warnOnce)
@@ -46,8 +48,9 @@ env reads: HOME
 state: council-of-elrond.session, council-of-elrond.panel
 ```
 
-There is no `tool.check` hook: the mod never takes part in the permission decision. The only process
-it starts is a read-only `git` from Galadriel's table (§6).
+There is no `tool.check` hook: the mod never takes part in the permission decision. The processes it
+starts are read-only `git` commands from Galadriel's table (§6, §8), and, for a big operation, the
+project checks the user listed in `rules.json` (`gimli.commands`, §8).
 
 ## 3. Data flow
 
@@ -65,8 +68,17 @@ tool.call ─► classify (pure, rules only)
              │                     └► instruction ─► refuse, rounds reset; chat ─► refuse
              │ review ─► cached approve this prompt? ─► next(e)
              │           Galadriel preview (fixed table, read-only, 5 s each, ≤ 3)
+             │           out of rounds (2) ─► escalate (shadow: pass)
+             │           big operation? (pure; a git merge reads the current branch) ─► full council:
+             │              seats (pure): Gandalf · Legolas (file diff, or push/merge range) ·
+             │                            Aragorn per profile; all on the council model
+             │              checks: gimli.commands spawned first, own timeouts, run alongside
+             │              members: parallel (or one at a time) under one deadline (time left)
+             │              combine (pure): strictest wins; no verdict = block; failed check = block
+             │                 approve ─► cache, next(e) · revise/block ─► refuse, labelled
+             │                 blocked only for want of verdicts ─► escalate (shadow: pass)
              │           route (pure): the rule's member and profile, else Gandalf
-             │           out of rounds (2) / nobody on / budget spent ─► escalate (shadow: pass)
+             │           nobody on / budget spent ─► escalate (shadow: pass)
              │           brief: Gandalf (call, preview, scripts) · Legolas (diff, git status)
              │                  Aragorn git (command, preview, protected branches)
              │                  Aragorn database (command, SQL, production matches)
@@ -82,7 +94,7 @@ tool.call ─► classify (pure, rules only)
 /council ─► parse (pure) ─► output lines ─► pane (where a surface draws) or ui.log; never Claude
 ```
 
-- **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`: one file per member, `brief.ts` pairing each member and profile with its prompts), routing, escalation, refusal and model choice (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
+- **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`: one file per member, `brief.ts` pairing each member and profile with its prompts, `gimli.ts` the checks' outcomes), routing, the full council's seats (`elrond/council.ts`) and its verdict (`elrond/combine.ts`), escalation, refusal and model choice (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
 - **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 2), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt you send (composer, bridge or SDK origin): it clears rounds, failed attempts, lockouts and the cache.
 - **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load, after the mod's own allowlist write, and on `/council reload` (never by watching the file).
 
@@ -105,6 +117,13 @@ tool.call ─► classify (pure, rules only)
 | Writing the allowlist fails, or `rules.json` is broken | Nothing is written (a broken file is never rewritten); the call stays blocked, with a transcript line. |
 | `/council` registration refused (32-command cap) | A transcript line; the gate is unaffected. |
 | `/council` handler throws | The usage line is logged; the command returns no text. |
+| A council member errors, times out or answers malformed | Counts as that member's block. With no real objection and every check passed, the call comes to you; beside a real block, Claude is refused. |
+| The council's deadline has passed before a member is asked (one at a time) | That member gives no verdict (a block); no request is sent. |
+| A project check fails, times out or can't start | A block, with its last 20 lines (redacted) for Claude; none of its output in the audit log. |
+| A project check ignores being ended | The council stops waiting at its timeout and calls `return()` on the stream, which kills the child (verified live). |
+| The current branch can't be read for a `git merge` | The merge counts as one into a protected branch (full council). |
+| The range a push or merge would change can't be read (a new branch, a bad ref) | The diff reviewer sits out of that council; the others decide. |
+| Esc during a council | The model requests abort and the check processes are killed with the dispatch. |
 | `/council model` probe gets an API error | The switch is refused. A timeout switches with a warning; a failing model then fails closed per review. |
 | `$.ui.notice` refused (no dialog open) | Ignored; the call still runs as allowed. |
 | Module fails to load, mod disabled, `disableAllHooks`, `--safe-mode`, `--bare` | **No gate at all.** Outside the mod's reach. |
@@ -152,3 +171,39 @@ tool.call ─► classify (pure, rules only)
 7. **Who decided.** Aragorn's refusals say "the git reviewer" or "the database reviewer"; status counts both profiles under `aragorn`. The audit line's `member` and `profile` are the ones that reviewed (or the ones the route wanted, when nobody could); in Stage 2 `profile` came from the rule.
 8. **`/config` rows** for Legolas and Aragorn (enabled, model) and `diffLines`, so `/council model legolas|aragorn … --save` writes them. The full council's row arrives with it in Stage 4; until then `--save` for `council` stays session-only and says so.
 9. **A reason containing a file name was cut** (`notes.txt`, `v1.2`): the two-sentence limit (Stage 1) split on any `.`. It now ends a sentence only at `.`, `!` or `?` followed by whitespace. Found in the live check.
+
+## 8. Decisions the spec did not cover (Stage 4)
+
+1. **Big operations** (`bigOperations` in `rules.json`, `elrond/council.ts`). Entries are rule ids, `/regex/flags` matched against each shell part's core (as rule `command` patterns are), or the named check `merge-to-protected`. The roadmap named only the first two; a merge's target is the checked-out branch, which no pattern sees.
+   - The defaults: `/^git\s+push(\s|$)/`, `merge-to-protected` and `database-migration`.
+   - Like the other lists, project entries only add to the shipped ones. "Full council for big operations" in `/config` (on by default) turns the council off as a whole; big operations then go to their routed member.
+   - Only the review tier can be big: block and ask decide first.
+   - A project rule may not take a check's name, and the `g`/`y` regex flags are refused (for `tools` patterns too), since one RegExp is tested again and again.
+2. **Merge into a protected branch.** `git merge <ref>` (not `--abort`, `--quit` or `--continue`) is big when the checked-out branch matches `protectedBranches`; register.ts reads it with one `git rev-parse --abbrev-ref HEAD`, only for a call that has a git merge. An unreadable branch, or a detached `HEAD`, counts as protected. `gh pr merge` always counts, since its base isn't in the command. `/council test` runs nothing, so it assumes a protected branch and says so.
+3. **Who sits** (`councilSeats`). Every enabled model member with something of this call to review:
+   - Gandalf always.
+   - Aragorn once per profile the call's review parts ask for (both, for `git push && psql …`), so neither prompt carries the other's baggage. A big operation that is neither git nor database (a project's `kubectl apply`) gets no Aragorn.
+   - Legolas for a file tool's diff, or for a push or merge: the changes it would send (`<remote>/<branch>..HEAD`, or `@{upstream}..HEAD`) or bring in (`HEAD...<ref>`), read by one `git diff --no-color --no-ext-diff --no-textconv <range> --` from Galadriel's table (refs validated as before). It is cut to the diff limit and redacted, and only runs while the preview is on. A range git can't read (a branch the remote doesn't have yet) seats nobody: Legolas sits out.
+   - Legolas's system prompt now names both kinds of change, and the prompt says which it is.
+   - Each seat gets its own brief from the shared `briefOf`, and every seat runs on the `council` model slot.
+4. **One deadline, by the clock's reading.** `convene` reads `$.clock.now()` (a `$` call, free of the hook's budget) and passes each request the deadline minus the time spent, so the deadline is never a timer.
+   - In parallel, every member gets nearly the whole deadline.
+   - One at a time ("Full council one at a time", off by default), each gets what is left, and the first block (a block verdict or a member without one), or a failed check, stops the rest. They read as skipped.
+   - A member with no time left gives no verdict and sends nothing.
+   - The deadline is the council model's (Opus 45 s), or "Review deadline".
+5. **Gimli's runner.** `$.process.spawn` has no timeout, so each command's own timeout is a `$.clock.after` that ends the loop with `return()`, which kills the child. A probe in 2.1.289 settled the cost: a pending `after` cost the hook about 3 ms of its 10 s budget while a spawn pull was in flight for 12 s, and a 3 s `after` killed a `sleep 30` on time with no orphan.
+   - Once ended, the runner returns at once even if the stream is slow to close.
+   - The checks run in parallel with each other, all in the project root, by argv with no shell, with standard input closed.
+   - The first failing check stops the others, and a member's block stops any still running: a check can only add a block, so its result can no longer change the outcome. A revise does not stop them, since a failed check still raises it to a block.
+   - Esc kills them through the dispatch's signal.
+   - Commands are validated: a name, a non-empty argv, a timeout of 1–600 s (default 120 s), and at most 8 commands.
+   - `gimliEnabled` (on) switches them off. No commands configured, no checks.
+6. **Combining** (`elrond/combine.ts`). Strictest wins. Claude reads every voice that didn't approve, one per line and labelled ("the git reviewer (block): …"), with the alternatives labelled the same way. A failed check adds its last 20 lines; a stopped one adds nothing.
+   - **Blocked only for want of verdicts** (members failed, nobody objected, every check passed): the call comes to the user, as a single reviewer's failure does (§11 of the spec), instead of telling Claude a timeout was a verdict.
+   - **Beside a real objection or a failed check**, a failure is just that member's block, and Claude is refused.
+   - **Nobody reviewed** (every seat sat out): the user decides. The project checks never approve alone: with no model member on, a big operation comes to the user.
+7. **Accounting.** A council is one review: one round on the operation (none when blocked only for want of verdicts), one failed attempt on a refusal, and its approve is cached like any other. Each member's own verdict counts under its name, and the council's under `council`, the checks' under `gimli`. The audit line's `member` is `council`, with a `council` field: the entry that made it big, each voice's verdict and tokens, and each check's status and time. Its `reason` leaves out check output, so the log holds none.
+8. **Shadow mode** shadows the council too, the project checks included: they run, their result is logged, and the call goes on. Only the rules, protected paths, the ask tier, the secrets scan and lockouts enforce in shadow.
+9. **Mixed compound commands** (the Stage 3 follow-up). A mixed call that contains a big operation (`git push && psql …`) now goes to the full council, where each specialist reviews it with its own checklist and Aragorn sits once per profile. Other mixed calls (`git rebase && rm -rf build`) stay with Gandalf: sending every mixed call to the council would run the project checks, minutes long, for a cleanup command.
+10. **`/config` rows.** "Full council model" (the same picker as the others) joins `CONFIG_ROWS`, so `/council model council … --save` writes it. Also new: "Full council for big operations", "Full council one at a time" and "Project checks enabled".
+

@@ -21,8 +21,13 @@ export type CallDiff = {
 
 export type LegolasContext = {
   tool: string
-  /** The file, relative to the project root where inside it. */
+  /** The file, relative to the project root where inside it; for a range, what the range is. */
   path: string
+  /**
+   * For the full council: the diff is not one file's change but what a push
+   * would send or a merge would bring in, and `call` is the command.
+   */
+  range?: { kind: 'push' | 'merge'; call: string }
   /** The diff, redacted already. */
   diff: CallDiff
   ruleReasons: readonly string[]
@@ -209,7 +214,7 @@ const NOTES: Readonly<Record<NonNullable<CallDiff['note']>, string>> = {
 
 export function legolasSystem(nonce: string): string {
   return [
-    'You review one proposed file change from a coding assistant before it is written, as a diff.',
+    'You review proposed changes from a coding assistant before they land, as a diff: a file change about to be written, or the commits a git push would send or a merge would bring in.',
     'Check, in order:',
     "1. Request: does the change do what the user asked for in their latest message, and only that?",
     '2. Scope: does it touch unrelated code or files, or grow beyond the request?',
@@ -227,10 +232,12 @@ export function legolasPrompt(context: LegolasContext, nonce: string): string {
   const limits = LEGOLAS_LIMITS
   const sections = [
     `Tool: ${context.tool}`,
-    `File: ${context.path}${context.diff.isNew ? ' (new file)' : ''}`,
+    ...(context.range !== undefined
+      ? [`Command:\n${untrusted('call', truncate(context.range.call, 40, 4_000), nonce)}`, `The changes the ${context.range.kind} would ${context.range.kind === 'push' ? 'send' : 'bring in'}: ${context.path}`]
+      : [`File: ${context.path}${context.diff.isNew ? ' (new file)' : ''}`]),
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
     ...(context.diff.note !== undefined ? [NOTES[context.diff.note]] : []),
-    'Proposed change:',
+    context.range !== undefined ? 'The changes, as a diff:' : 'Proposed change:',
     untrusted('diff', context.diff.diff, nonce),
     ...(context.preview !== undefined
       ? [`The file in git (read-only preview):\n${untrusted('preview', truncate(context.preview, limits.previewLines, limits.previewChars), nonce)}`]

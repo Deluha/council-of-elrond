@@ -1,6 +1,6 @@
 {
   "name": "council-of-elrond",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A council of specialist reviewers that gates risky tool calls before they run. Rules decide the tier; model members give a second opinion; anything uncertain comes to you.",
   "author": {
     "name": "council-of-elrond"
@@ -75,6 +75,41 @@
         "fable",
         "haiku"
       ]
+    },
+    "councilEnabled": {
+      "type": "boolean",
+      "title": "Full council for big operations",
+      "description": "Big operations (by default a git push, a merge into a protected branch, a migration; bigOperations in the rules file) go to every enabled reviewer at once, with the project checks. Off: one reviewer takes them, as for any other call.",
+      "required": false,
+      "default": true
+    },
+    "councilModel": {
+      "type": "string",
+      "title": "Full council model",
+      "description": "The model every reviewer uses when it sits on the full council. \"default\" uses the project rules file's choice, else the built-in default (opus).",
+      "required": false,
+      "default": "default",
+      "options": [
+        "default",
+        "sonnet",
+        "opus",
+        "fable",
+        "haiku"
+      ]
+    },
+    "councilSequential": {
+      "type": "boolean",
+      "title": "Full council one at a time",
+      "description": "Asks the council's reviewers one after another under the same deadline, stopping at the first block, instead of all at once. Slower; can spend fewer tokens.",
+      "required": false,
+      "default": false
+    },
+    "gimliEnabled": {
+      "type": "boolean",
+      "title": "Project checks enabled",
+      "description": "Runs the commands in gimli.commands of the rules file (tests, lint, typecheck) alongside the full council; a failing check blocks. Each has its own timeout (120 s unless set, at most 600 s).",
+      "required": false,
+      "default": true
     },
     "shadowMode": {
       "type": "boolean",

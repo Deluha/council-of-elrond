@@ -28,15 +28,25 @@ export function globToRegExp(glob: string): RegExp {
  * Throws on a regex that does not compile.
  */
 export function toolMatcher(pattern: string): (tool: string) => boolean {
-  const regex = /^\/(.+)\/([a-z]*)$/.exec(pattern)
-  if (regex !== null) {
-    const compiled = new RegExp(regex[1] as string, regex[2])
-    return tool => compiled.test(tool)
-  }
+  const compiled = slashRegex(pattern)
+  if (compiled !== undefined) return tool => compiled.test(tool)
   if (pattern.includes('*')) {
     const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
     const compiled = new RegExp(`^${escaped}$`)
     return tool => compiled.test(tool)
   }
   return tool => tool === pattern
+}
+
+/**
+ * A pattern written `/source/flags` as a RegExp; undefined for anything else.
+ * Throws on a regex that does not compile. Stateful flags (`g`, `y`) are
+ * refused, since one RegExp is tested again and again.
+ */
+export function slashRegex(pattern: string): RegExp | undefined {
+  const regex = /^\/(.+)\/([a-z]*)$/.exec(pattern)
+  if (regex === null) return undefined
+  const flags = regex[2] ?? ''
+  if (/[gy]/.test(flags)) throw new Error('the g and y flags are not allowed')
+  return new RegExp(regex[1] as string, flags)
 }

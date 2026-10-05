@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PluginOptions, Register, RenderElement, ToolCallResult } from 'claude-code'
+import type { EngineInterface, PluginOptions, ProcessSpawnResult, Register, RenderElement, ToolCallResult } from 'claude-code'
 
 import type { CouncilPanel } from '../types'
 import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, ROTATED_FILES } from './audit.js'
@@ -8,10 +8,14 @@ import { OVERRIDES_PATH } from './config/defaults.js'
 import { loadConfig, MODEL_ID } from './config/schema.js'
 import type { LoadedConfig } from './config/schema.js'
 import { MODEL_SLOTS } from './config/types.js'
-import type { MemberName, ModelSlot } from './config/types.js'
+import type { GimliCommand, MemberName, ModelSlot } from './config/types.js'
 import { withAllowlistEntry } from './config/write.js'
 import type { FileEdit } from './config/write.js'
 import { isSlot, logOutput, modelsOutput, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
+import { combine, hasRealBlock } from './elrond/combine.js'
+import type { Voice } from './elrond/combine.js'
+import { bigOperationOf, councilSeats, needsCurrentBranch, rangeOf } from './elrond/council.js'
+import type { Big, CouncilSeat } from './elrond/council.js'
 import type { CouncilCommand, Output } from './elrond/commands.js'
 import { interpretAnswer, interpretRejection, optionsOf, questionText } from './elrond/escalation.js'
 import type { Answer, MemberOpinion, Unanswered } from './elrond/escalation.js'
@@ -39,11 +43,13 @@ import { ARAGORN_LIMITS, productionHits, sqlOf } from './members/aragorn.js'
 import type { SqlPiece } from './members/aragorn.js'
 import { requestOf, whoOf } from './members/brief.js'
 import type { Brief } from './members/brief.js'
-import { formatPreview, INSPECTION_TIMEOUT_MS, MAX_LISTED, planPreview } from './members/galadriel.js'
+import { formatPreview, INSPECTION_TIMEOUT_MS, MAX_LISTED, planPreview, rangeDiffInspection } from './members/galadriel.js'
 import type { Inspection, InspectionResult } from './members/galadriel.js'
 import { GANDALF_LIMITS } from './members/gandalf.js'
+import { isGimliBlock, keepTail, statusOf, tailOf } from './members/gimli.js'
+import type { GimliRun } from './members/gimli.js'
 import { patternsWith, scanCall } from './members/gollum.js'
-import { callDiff } from './members/legolas.js'
+import { callDiff, LEGOLAS_LIMITS } from './members/legolas.js'
 import type { CallDiff, Current } from './members/legolas.js'
 import type { GollumFinding } from './members/gollum.js'
 import { newNonce, parseVerdict, truncate } from './members/shared.js'
@@ -102,6 +108,7 @@ const CONFIG_ROWS: Readonly<Partial<Record<ModelSlot, string>>> = {
   gandalf: 'council-of-elrond.gandalfModel',
   legolas: 'council-of-elrond.legolasModel',
   aragorn: 'council-of-elrond.aragornModel',
+  council: 'council-of-elrond.councilModel',
 }
 
 /** What the `/config` model picker offers; anything else is session-only. */
@@ -119,6 +126,10 @@ type Settings = {
   legolasModel: string
   aragornEnabled: boolean
   aragornModel: string
+  councilEnabled: boolean
+  councilModel: string
+  councilSequential: boolean
+  gimliEnabled: boolean
   diffLines: number
   reviewDeadlineSeconds: number
   tokenBudget: number
@@ -140,6 +151,10 @@ const settingsOf = (options: PluginOptions): Settings => ({
   legolasModel: modelSetting(options.legolasModel),
   aragornEnabled: options.aragornEnabled !== false,
   aragornModel: modelSetting(options.aragornModel),
+  councilEnabled: options.councilEnabled !== false,
+  councilModel: modelSetting(options.councilModel),
+  councilSequential: options.councilSequential === true,
+  gimliEnabled: options.gimliEnabled !== false,
   diffLines: typeof options.diffLines === 'number' ? options.diffLines : 200,
   reviewDeadlineSeconds: typeof options.reviewDeadlineSeconds === 'number' ? options.reviewDeadlineSeconds : 0,
   tokenBudget: typeof options.tokenBudget === 'number' ? options.tokenBudget : 1_500_000,
@@ -184,9 +199,19 @@ const enabledMembers = (): Enabled => ({
   aragorn: settings.aragornEnabled,
 })
 
-/** The /config row's model for a slot; the full council has none yet. */
-const settingsModel = (slot: ModelSlot): string | undefined =>
-  slot === 'gandalf' ? settings.gandalfModel : slot === 'legolas' ? settings.legolasModel : slot === 'aragorn' ? settings.aragornModel : undefined
+/** The /config row's model for a slot. */
+const settingsModel = (slot: ModelSlot): string => {
+  switch (slot) {
+    case 'gandalf':
+      return settings.gandalfModel
+    case 'legolas':
+      return settings.legolasModel
+    case 'aragorn':
+      return settings.aragornModel
+    case 'council':
+      return settings.councilModel
+  }
+}
 
 function warnOnce($: EngineInterface, key: string, line: string, toast?: string): void {
   if (warned.has(key)) return
@@ -441,6 +466,148 @@ async function review($: EngineInterface, brief: Brief, model: string, deadlineM
   }
 }
 
+/** The checked-out branch, for whether a merge lands on a protected one; unknown on any failure. */
+async function currentBranchOf($: EngineInterface, root: string): Promise<string | undefined> {
+  try {
+    const run = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
+    const branch = run.stdout.trim()
+    return run.exitCode === 0 && branch !== '' ? branch : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * What a push would send or a merge bring in, for the diff reviewer: one
+ * read-only `git diff` from Galadriel's table, cut to the diff limit and
+ * redacted. Undefined when git can't say.
+ */
+async function rangeDiffOf($: EngineInterface, argv: readonly string[], ctx: Context): Promise<string | undefined> {
+  try {
+    const run = await $.process.run(argv, { cwd: ctx.root, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
+    if (run.exitCode !== 0) return undefined
+    const diff = run.stdout.slice(0, LEGOLAS_LIMITS.diffChars * 4).trimEnd()
+    return redact(truncate(diff === '' ? '(no changes)' : diff, settings.diffLines, LEGOLAS_LIMITS.diffChars), ctx.patterns)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Runs one of the project's checks from the rules file, by argument vector,
+ * in the project root. Its own timeout ends it (a clock timer, which costs
+ * the hook no budget while the child's output is awaited); so does `stop`
+ * once the council has blocked, and Esc, through the dispatch's signal.
+ */
+async function runCheck($: EngineInterface, command: GimliCommand, root: string, stop: AbortSignal): Promise<GimliRun> {
+  const started = await $.clock.now()
+  let ended: 'timeout' | 'stopped' | undefined
+  let exit: ProcessSpawnResult | undefined
+  let output = ''
+  let isEnded: () => void = () => undefined
+  const endedEarly = new Promise<void>(resolve => {
+    isEnded = resolve
+  })
+  const stream = $.process.spawn({ argv: command.argv, cwd: root })
+  const end = (why: 'timeout' | 'stopped'): void => {
+    if (ended !== undefined || exit !== undefined) return
+    ended = why
+    isEnded()
+    // Ending the loop is what kills the child.
+    void stream.return(undefined as never).catch(() => undefined)
+  }
+  const timer = $.clock.after(command.timeoutMs, () => end('timeout'))
+  const onStop = (): void => end('stopped')
+  stop.addEventListener('abort', onStop)
+  if (stop.aborted) onStop()
+  const reading = (async () => {
+    for await (const chunk of stream) output = keepTail(output, chunk.text)
+    if (ended === undefined) exit = await stream.result
+  })().catch(() => {
+    // It could not start, or its stream broke: no exit code, so it does not pass.
+  })
+  try {
+    // Ended early, the run is over even if the stream is slow to close.
+    await Promise.race([reading, endedEarly])
+  } finally {
+    timer.cancel()
+    stop.removeEventListener('abort', onStop)
+  }
+  const ms = (await $.clock.now()) - started
+  return {
+    name: command.name,
+    status: statusOf(ended, exit),
+    ...(ended === undefined && exit !== undefined && { code: exit.code, signal: exit.signal }),
+    tail: tailOf(output),
+    ms,
+  }
+}
+
+/** One seat at the full council: who, and the brief it reviews (none: it sits out, saying why). */
+type Sitting = { seat: CouncilSeat; who: StringKey; brief?: Brief; skip?: string }
+
+type Held = { voices: Voice[]; tokens: number[]; runs: GimliRun[] }
+
+/**
+ * The full council. The project's checks start first and run on their own
+ * timeouts (decision 3); the model members run in parallel, or one at a time
+ * stopping at the first block, under one shared deadline passed to each
+ * request as the time remaining. Each member sees only its own brief.
+ */
+async function convene(
+  $: EngineInterface,
+  sittings: readonly Sitting[],
+  model: string,
+  deadlineMs: number,
+  isSequential: boolean,
+  checks: readonly GimliCommand[],
+  root: string,
+  signal: AbortSignal,
+): Promise<Held> {
+  const started = await $.clock.now()
+  const stop = new AbortController()
+  let isCheckFailed = false
+  const checking = Promise.all(
+    checks.map(command =>
+      runCheck($, command, root, stop.signal).then(run => {
+        if (isGimliBlock(run)) {
+          isCheckFailed = true
+          stop.abort()
+        }
+        return run
+      }),
+    ),
+  )
+  const tokens: number[] = sittings.map(() => 0)
+  const baseOf = (sitting: Sitting) => ({ who: sitting.who, member: sitting.seat.member, ...(sitting.seat.member === 'aragorn' && { profile: sitting.seat.profile }) })
+  const ask = async (sitting: Sitting, index: number): Promise<Voice> => {
+    const base = baseOf(sitting)
+    if (sitting.brief === undefined) return { kind: 'skipped', ...base, why: sitting.skip ?? '' }
+    const remaining = Math.floor(deadlineMs - ((await $.clock.now()) - started))
+    if (remaining < 1) return { kind: 'failed', ...base, problem: text('council.deadline') }
+    const result = await review($, sitting.brief, model, remaining, signal)
+    tokens[index] = result.tokens
+    return result.ok ? { kind: 'verdict', ...base, verdict: result.verdict } : { kind: 'failed', ...base, problem: result.problem }
+  }
+  let voices: Voice[]
+  if (isSequential) {
+    voices = []
+    for (const [index, sitting] of sittings.entries()) {
+      const isBlocked = isCheckFailed || voices.some(voice => voice.kind === 'failed' || (voice.kind === 'verdict' && voice.verdict.verdict === 'block'))
+      voices.push(
+        isBlocked
+          ? { kind: 'skipped', ...baseOf(sitting), why: text('council.stopped') }
+          : await ask(sitting, index),
+      )
+    }
+  } else {
+    voices = await Promise.all(sittings.map(ask))
+  }
+  // A check can only add a block: once a member has blocked, one still running cannot matter.
+  if (hasRealBlock(voices)) stop.abort()
+  return { voices, tokens, runs: await checking }
+}
+
 /** Puts the call to the user; where nobody can be asked, says so. */
 async function escalate($: EngineInterface, question: string, withAllowlist: boolean): Promise<Answer | Unanswered> {
   const surfaces = await $.session.surfaces().catch(() => [])
@@ -552,9 +719,8 @@ async function probeModel($: EngineInterface, model: string): Promise<{ ok: true
 function modelChoice(slot: ModelSlot, ctx: Context, sessionModels: Readonly<Partial<Record<ModelSlot, string>>>): ModelChoice {
   const project = ctx.loaded.compiled.config.models[slot]
   const sessionModel = sessionModels[slot]
-  const row = settingsModel(slot)
   return resolveModel(slot, {
-    ...(row !== undefined && { settings: row }),
+    settings: settingsModel(slot),
     ...(project !== undefined && { project }),
     ...(sessionModel !== undefined && { session: sessionModel }),
   })
@@ -613,6 +779,8 @@ async function councilOutput($: EngineInterface, command: CouncilCommand): Promi
           legolas: { enabled: settings.legolasEnabled, choice: modelChoice('legolas', ctx, state.models) },
           aragorn: { enabled: settings.aragornEnabled, choice: modelChoice('aragorn', ctx, state.models) },
         },
+        council: { enabled: settings.councilEnabled, choice: modelChoice('council', ctx, state.models), sequential: settings.councilSequential },
+        gimli: { enabled: settings.gimliEnabled, commands: ctx.loaded.compiled.config.gimli.commands.length },
         gollumEnabled: settings.gollumEnabled,
         galadrielEnabled: settings.galadrielEnabled,
         tokenBudget: settings.tokenBudget,
@@ -654,7 +822,20 @@ async function councilOutput($: EngineInterface, command: CouncilCommand): Promi
         seated === undefined
           ? undefined
           : { route: seated, ...(seated.kind === 'member' && { choice: modelChoice(seated.member, ctx, state.models) }) }
-      return testOutput(redact(command.command, ctx.patterns), classification, operation, reviewer)
+      // The current branch is not read: a merge counts as one into a protected branch.
+      const big = bigOperationOf(classification, ctx.loaded.compiled)
+      const council =
+        big === undefined
+          ? undefined
+          : {
+              big,
+              enabled: settings.councilEnabled,
+              seats: councilSeats(call, classification, enabledMembers(), { ranges: settings.galadrielEnabled }),
+              choice: modelChoice('council', ctx, state.models),
+              checks: settings.gimliEnabled ? ctx.loaded.compiled.config.gimli.commands.map(check => check.name) : [],
+              isBranchAssumed: big.entry === 'merge-to-protected' && needsCurrentBranch(classification, ctx.loaded.compiled),
+            }
+      return testOutput(redact(command.command, ctx.patterns), classification, operation, reviewer, council)
     }
     case 'models': {
       const ctx = await contextOf($)
@@ -794,6 +975,7 @@ export const register: Register = (on, options) => {
     let isCached = false
     let isShadowed = false
     let preview: string | undefined
+    let councilRecord: AuditRecord['council']
 
     /** Audits the call, then counts it: a failed attempt, or a success that clears its operation. */
     const finish = async (result: ToolCallResult, isWipe = false): Promise<ToolCallResult> => {
@@ -817,6 +999,7 @@ export const register: Register = (on, options) => {
         latencyMs: Date.now() - started,
         tokens,
         ...(isCached && { cached: true as const }),
+        ...(councilRecord !== undefined && { council: councilRecord }),
         ...(e.agentId !== undefined && { agentId: e.agentId }),
       }
       await audit($, record, ctx.root)
@@ -980,8 +1163,100 @@ export const register: Register = (on, options) => {
     // 8. The read-only preview, for the reviewer and the user.
     if (settings.galadrielEnabled) preview = await previewOf($, planPreview(call, classification, where), ctx)
 
-    // 9. Route: the rule's member, else the fallback; nobody on means the user decides.
+    /**
+     * A big operation: every enabled member with something to review sits on
+     * the council's model, the project's checks run alongside, and the
+     * strictest verdict wins. Blocked only for want of verdicts comes to you.
+     */
+    const holdCouncil = async (big: Big): Promise<ToolCallResult> => {
+      member = 'council'
+      profile = null
+      const seats = councilSeats(call, classification, enabledMembers(), { ranges: settings.galadrielEnabled })
+      if (seats.length === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', [])
+      if (state.tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
+      const choice = modelChoice('council', ctx, state.models)
+      model = choice.model
+      const range = rangeOf(classification)
+      const ruleReasons = [...new Set(classification.findings.map(finding => finding.reason))]
+      const sittings: Sitting[] = []
+      for (const seat of seats) {
+        const who = whoOf(seat.member, seat.member === 'aragorn' ? seat.profile : undefined)
+        if (seat.member === 'legolas' && seat.range !== undefined) {
+          const inspection = range === undefined ? undefined : rangeDiffInspection(range.kind, range.part)
+          const diff = inspection?.kind === 'git' ? await rangeDiffOf($, inspection.argv, ctx) : undefined
+          sittings.push(
+            inspection === undefined || diff === undefined
+              ? { seat, who, skip: text('council.noRange') }
+              : {
+                  seat,
+                  who,
+                  brief: {
+                    member: 'legolas',
+                    context: { tool: call.tool, path: inspection.label, range: { kind: seat.range, call: callText(call, ctx.patterns) }, diff: { diff, isNew: false }, ruleReasons, latestPrompt: state.latestPrompt },
+                  },
+                },
+          )
+          continue
+        }
+        const asked: Seat = seat.member === 'aragorn' ? { member: 'aragorn', profile: seat.profile } : { member: seat.member }
+        sittings.push({ seat, who, brief: await briefOf($, asked, call, classification, cwd, realPath, state, preview, ctx) })
+      }
+      const checks = settings.gimliEnabled ? ctx.loaded.compiled.config.gimli.commands : []
+      const reviewStarted = Date.now()
+      const held = await convene($, sittings, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), settings.councilSequential, checks, ctx.root, next.signal)
+      const runs = held.runs.map(run => ({ ...run, tail: redact(run.tail, ctx.patterns) }))
+      const combined = combine(held.voices, runs)
+      const reviewMs = Date.now() - reviewStarted
+      tokens = held.tokens.reduce((sum, n) => sum + n, 0)
+      isShadowed = shadow
+      const isVerdict = combined.reviewed > 0 && !combined.isFailureOnly
+      verdictText = isVerdict ? combined.verdict : 'failed'
+      // The audit keeps no check output: the summary leaves it out.
+      reasonText = combined.summary || null
+      councilRecord = {
+        entry: big.entry,
+        voices: held.voices.map((voice, index) => ({
+          member: voice.member,
+          profile: voice.profile ?? null,
+          verdict: voice.kind === 'verdict' ? voice.verdict.verdict : voice.kind,
+          tokens: held.tokens[index] ?? 0,
+        })),
+        checks: runs.map(run => ({ name: run.name, status: run.status, ms: run.ms })),
+      }
+      await update($, session, value => {
+        let counted = addReviewTime(addTokens(sessionOf(value), tokens), reviewMs)
+        for (const voice of held.voices) {
+          if (voice.kind !== 'skipped') counted = count(counted, voice.member, voice.kind === 'verdict' ? voice.verdict.verdict : 'failed')
+        }
+        if (runs.length > 0) counted = count(counted, 'gimli', runs.some(isGimliBlock) ? 'block' : 'approve')
+        counted = count(counted, 'council', isVerdict ? combined.verdict : 'failed')
+        return isVerdict && !shadow ? noteRound(counted, operation.key, combined.verdict === 'approve') : counted
+      })
+
+      if (combined.reviewed === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', combined.opinions)
+      if (combined.isFailureOnly) return shadow ? passInShadow() : askUser('escalate.councilFailed', combined.opinions)
+      if (combined.verdict === 'approve') {
+        await update($, session, value => {
+          const current = sessionOf(value)
+          return { ...current, cache: cacheApprove(current.cache, fingerprint) }
+        })
+        return finish(await proceed())
+      }
+      if (shadow) {
+        $.ui.log(text('notice.shadowVerdict', { who: text('who.fullCouncil'), verdict: combined.verdict, tool: call.tool }), { to: 'debug' })
+        return passInShadow()
+      }
+      return refuse({ who: 'who.fullCouncil', verdict: combined.verdict, reason: combined.reason, alternative: combined.alternative }, true)
+    }
+
+    // 9. Route: a big operation to the full council; anything else to the rule's member, else the fallback.
     if (isOutOfRounds(state, operation.key) && !shadow) return askUser('escalate.rounds', [])
+    if (settings.councilEnabled) {
+      const compiled = ctx.loaded.compiled
+      const branch = needsCurrentBranch(classification, compiled) ? await currentBranchOf($, ctx.root) : undefined
+      const big = bigOperationOf(classification, compiled, branch !== undefined ? { currentBranch: branch } : {})
+      if (big !== undefined) return holdCouncil(big)
+    }
     if (seated === undefined || seated.kind === 'none') return shadow ? passInShadow() : askUser('escalate.memberOff', [])
     if (state.tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
 

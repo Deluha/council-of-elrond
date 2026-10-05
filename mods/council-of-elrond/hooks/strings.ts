@@ -20,6 +20,22 @@ const TABLE = {
   'who.council': { plain: 'the council' },
   'who.gollum': { plain: 'the secrets scan' },
   'who.galadriel': { plain: 'the read-only preview' },
+  'who.gimli': { plain: 'the project checks' },
+  'who.fullCouncil': { plain: 'the full council' },
+
+  // The full council's combined verdict, each voice labelled
+  'council.voice': { plain: '{who} ({verdict}): {reason}' },
+  'council.noVerdict': { plain: '{who} (block): no verdict ({problem})' },
+  'council.deadline': { plain: "the full council's deadline passed before it was asked" },
+  'council.stopped': { plain: 'not asked: an earlier member had already blocked' },
+  'council.noRange': { plain: 'not asked: the changes could not be read' },
+  'gimli.passed': { plain: '"{name}" passed.' },
+  'gimli.failed': { plain: '"{name}" failed with exit code {code}.' },
+  'gimli.killed': { plain: '"{name}" was ended by {signal}.' },
+  'gimli.timedOut': { plain: '"{name}" did not finish within {seconds} s and was ended.' },
+  'gimli.error': { plain: '"{name}" could not be started.' },
+  'gimli.stopped': { plain: '"{name}" was stopped: the council had already blocked.' },
+  'gimli.tail': { plain: 'Its last lines:\n{tail}' },
 
   // Refusals Claude reads
   'refusal.head': { plain: 'This call was refused before it ran.' },
@@ -49,6 +65,7 @@ const TABLE = {
   'alternative.lockout': {
     plain: 'Stop retrying this. Tell the user what failed and why, and propose a different approach for them to approve.',
   },
+  'alternative.gimli': { plain: 'Make the failing project checks ({names}) pass, then try again.' },
   'alternative.chat': { plain: 'Stop and talk the call through with the user before doing anything else.' },
 
   // Escalation (the question the user answers)
@@ -76,6 +93,7 @@ const TABLE = {
   'escalate.memberOff': { plain: 'Its reviewer is switched off.' },
   'escalate.budget': { plain: "The session's review token budget is spent." },
   'escalate.failed': { plain: 'The reviewer could not give a verdict.' },
+  'escalate.councilFailed': { plain: 'A big operation went to the full council, and members of it could not give a verdict.' },
   'escalate.rounds': { plain: 'The reviewer refused this operation twice since you last wrote; it comes to you before any further review.' },
   'escalate.secretLow': { plain: 'The secrets scan found something that may be a secret.' },
 
@@ -113,6 +131,12 @@ const TABLE = {
   'cmd.members': { plain: 'Members:' },
   'cmd.member': { plain: '  {who} [{id}]: {state}, model {model} ({source}); approved {approved}, revised {revised}, blocked {blocked}, no verdict {failed}' },
   'cmd.memberCode': { plain: '  {who}: {state}' },
+  'cmd.council': {
+    plain: '  {who} [council], for big operations: {state}, model {model} ({source}), {order}; approved {approved}, revised {revised}, blocked {blocked}',
+  },
+  'cmd.council.parallel': { plain: 'members in parallel' },
+  'cmd.council.sequential': { plain: 'members one at a time, stopping at the first block' },
+  'cmd.gimli': { plain: '  {who}, for big operations: {state}, {count} commands configured; passed {approved}, failed {blocked}' },
   'cmd.on': { plain: 'on' },
   'cmd.off': { plain: 'off' },
   'cmd.attempts': { plain: 'Since your last prompt: {count} refused or failed attempts over {ops} operations, {locked} locked out' },
@@ -148,6 +172,14 @@ const TABLE = {
   'route.disabled': { plain: 'it is switched off, so the fallback reviewer takes it' },
   'route.mixed': { plain: 'the parts of the command name different reviewers, so the fallback reviewer takes all of it' },
   'route.no-diff': { plain: 'there is no file to diff, so the fallback reviewer takes it' },
+  'cmd.testCouncil': { plain: 'Reviewer: {who} (a big operation: {entry}), model {model} ({source}). Seats: {seats}.' },
+  'cmd.seat': { plain: '{who} [{id}]' },
+  'cmd.seatRange': { plain: '{who} [{id}], on what the {kind} would change' },
+  'cmd.testCouncilNobody': { plain: 'Reviewer: none: it is a big operation ({entry}), but no member of {who} is switched on; it would come to you.' },
+  'cmd.testCouncilOff': { plain: '  It is a big operation ({entry}), but {who} is switched off in /config, so one reviewer takes it.' },
+  'cmd.testCouncilChecks': { plain: '  {who} would run alongside: {names}.' },
+  'cmd.testCouncilNoChecks': { plain: '  No project checks are configured in the rules file.' },
+  'cmd.testCouncilBranch': { plain: '  A merge goes to {who} when the current branch is protected; /council test runs nothing, so it assumed so.' },
   'cmd.testOperation': { plain: 'Operation key: {key}' },
   'cmd.modelTitle': { plain: 'Models (session switch, then /config, then the project file, then built-in)' },
   'cmd.modelLine': { plain: '  {id}: {model} ({source})' },

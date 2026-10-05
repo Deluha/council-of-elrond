@@ -1,4 +1,6 @@
 import type { On } from 'claude-code'
+import { mock } from 'claude-code/testing'
+import type { MockClock } from 'claude-code/testing'
 
 import { SHIPPED } from '../hooks/config/defaults.js'
 import { compileConfig } from '../hooks/config/schema.js'
@@ -52,6 +54,13 @@ export type Asked = { question: string; options: readonly string[]; header: stri
 
 export type ProcessReply = { exitCode: number; stdout: string } | 'timeout'
 
+/**
+ * How a spawned check answers, by its argv: its output and exit code; `hang`
+ * writes its output and never exits (until the clock or Esc ends it);
+ * `no-start` cannot start.
+ */
+export type SpawnReply = { code: number | null; signal?: string | null; output?: string } | { hang: true; output?: string } | 'no-start'
+
 export type World = {
   cwd: string
   files: Map<string, string>
@@ -75,6 +84,14 @@ export type World = {
   processes: string[][]
   /** How a process answers, by its argv; absent: exit 0, no output. */
   processReply: (argv: readonly string[]) => ProcessReply
+  /** The mocked clock, when the world was made with one. */
+  clock: MockClock | undefined
+  /** How long each model request takes on the mocked clock, in order (absent: at once). */
+  modelDelays: number[]
+  /** Every check the mod spawned, as argv, and how many were ended before they exited. */
+  spawned: string[][]
+  spawnReply: (argv: readonly string[]) => SpawnReply
+  ended: number
   notices: { id: string; text: string | undefined }[]
   panes: string[]
   statuses: (string | undefined)[]
@@ -89,7 +106,11 @@ const strip = (e: Record<string, unknown>): Record<string, unknown> => {
 
 export function world(
   on: On,
-  setup: Partial<Pick<World, 'answer' | 'answers' | 'replies' | 'surfaces' | 'cwd'>> & { cwdFails?: boolean } = {},
+  setup: Partial<Pick<World, 'answer' | 'answers' | 'replies' | 'surfaces' | 'cwd'>> & {
+    cwdFails?: boolean
+    /** A mocked clock (`w.clock`) answers `$.clock`; else `$.clock.now` reads real time. */
+    isClockMocked?: boolean
+  } = {},
 ): World {
   const w: World = {
     cwd: setup.cwd ?? ROOT,
@@ -111,6 +132,11 @@ export function world(
     toolResult: { result: 'ran' },
     processes: [],
     processReply: () => ({ exitCode: 0, stdout: '' }),
+    clock: undefined,
+    modelDelays: [],
+    spawned: [],
+    spawnReply: () => ({ code: 0 }),
+    ended: 0,
     notices: [],
     panes: [],
     statuses: [],
@@ -170,6 +196,28 @@ export function world(
     if (reply === 'timeout') return { deny: 'timed out' }
     return { value: { exitCode: reply.exitCode, stdout: reply.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
+  if (setup.isClockMocked === true) w.clock = mock.clock(on)
+  else on('clock.now', () => ({ value: Date.now() }))
+  on('process.spawn', async function* ($, e, next) {
+    w.spawned.push([...e.argv])
+    const reply = w.spawnReply(e.argv)
+    if (reply === 'no-start') return { deny: `ENOENT: ${e.argv[0]}` }
+    let isDone = false
+    try {
+      if (reply.output !== undefined) yield { stream: 'stdout' as const, text: reply.output }
+      // Runs on, quietly writing, until the reader leaves (the engine kills the child then).
+      if ('hang' in reply) {
+        for (;;) {
+          await (w.clock !== undefined ? w.clock.sleep(1_000) : new Promise<void>(() => undefined))
+          yield { stream: 'stdout' as const, text: '.' }
+        }
+      }
+      isDone = true
+      return { value: { code: 'code' in reply ? reply.code : 0, signal: 'signal' in reply ? (reply.signal ?? null) : null } }
+    } finally {
+      if (!isDone) w.ended++
+    }
+  })
   on('ui.notice', ($, e) => {
     w.notices.push({ id: e.tool_use_id, text: e.text })
     return { value: undefined }
@@ -198,8 +246,14 @@ export function world(
     w.toasts.push(e.text)
     return { value: undefined }
   })
-  on('model.complete', ($, e) => {
+  on('model.complete', async ($, e) => {
     w.modelRequests.push(e as unknown as Record<string, unknown>)
+    const delay = w.modelDelays.shift()
+    if (delay !== undefined && w.clock !== undefined) {
+      await w.clock.sleep(delay)
+      // Past its own timeout, the request is abandoned.
+      if (typeof e.timeoutMs === 'number' && delay >= e.timeoutMs) return { value: { isAnswered: false, reason: 'aborted', usage: USAGE } as never }
+    }
     const reply = w.replies.length > 1 ? w.replies.shift() : w.replies[0]
     if (reply === undefined || reply === 'refuse-request') return { deny: 'model is blocked by policy' }
     return { value: reply as never }

@@ -74,12 +74,17 @@ describe('/council', () => {
     await council($, 'test "rm -rf build"')
     expect(w.logs.join('\n')).toMatch(/Reviewer: .+ \[gandalf\], model sonnet \(built-in\)/)
     w.logs.length = 0
-    await council($, 'test "git push origin feature"')
+    await council($, 'test "git rebase main"')
     expect(w.logs.join('\n')).toContain('Reviewer: the git reviewer [aragorn/git], model opus (built-in)')
     w.logs.length = 0
-    await council($, 'test "git push origin feature && rm -rf build"')
+    await council($, 'test "git rebase main && rm -rf build"')
     expect(w.logs.join('\n')).toContain('Reviewer: the destructive-operations reviewer [gandalf], model sonnet (built-in)')
     expect(w.logs.join('\n')).toContain('The rule names the git reviewer [aragorn/git], but the parts of the command name different reviewers')
+    w.logs.length = 0
+    await council($, 'test "git push origin feature && rm -rf build"')
+    expect(w.logs.join('\n')).toContain('Reviewer: the full council (a big operation: /^git\\s+push(\\s|$)/), model opus (built-in).')
+    expect(w.logs.join('\n')).toContain('Seats: the destructive-operations reviewer [gandalf]; the diff reviewer [legolas], on what the push would change; the git reviewer [aragorn/git].')
+    expect(w.logs.join('\n')).toContain('No project checks are configured')
     w.logs.length = 0
     await council($, 'test "ls -la"')
     expect(w.logs.join('\n')).toContain('No rule matches above allow')
@@ -168,18 +173,21 @@ describe('models', () => {
     expect(w.logs.join('\n')).toContain('gandalf: claude-opus-5-5 (session)')
   })
 
-  test('--save writes the diff and git-and-database rows too; the full council has none yet', async ($, on) => {
+  test('--save writes the diff, git-and-database and full council rows', async ($, on) => {
     const w = world(on, { surfaces: [], replies: [APPROVE] })
     await council($, 'model legolas opus --save')
     await council($, 'model aragorn sonnet --save')
-    await council($, 'model council sonnet --save')
+    await council($, 'model council fable --save')
     expect(w.configSets).toEqual([
       { key: 'council-of-elrond.legolasModel', value: 'opus' },
       { key: 'council-of-elrond.aragornModel', value: 'sonnet' },
+      { key: 'council-of-elrond.councilModel', value: 'fable' },
     ])
-    expect(w.logs.join('\n')).toContain('council has no /config row yet')
+    expect(w.logs.join('\n')).not.toContain('no /config row')
+    // A push is a big operation: every member sits on the council's model, not its own.
+    const before = w.modelRequests.length
     await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })
-    expect(w.modelRequests.at(-1)).toMatchObject({ model: 'sonnet' })
+    expect(w.modelRequests.slice(before).map(request => request.model)).toEqual(['fable', 'fable', 'fable'])
   })
 
   test('default clears the session switch; unknown members and ids are refused', async ($, on) => {
