@@ -1,0 +1,4 @@
+{
+  "description": "Elrond: classifies every tool call, routes gated ones to the council, escalates to the user, keeps the audit log",
+  "modules": ["./register.ts"]
+}
