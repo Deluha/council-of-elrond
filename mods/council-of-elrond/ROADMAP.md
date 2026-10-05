@@ -12,7 +12,7 @@ How to finish the mod from where it stands, written so a new dev session can pic
 | 1 | Elrond, rules, Gandalf, escalation, fail-closed paths, audit log (plain mode) | ✅ Done: [Deluha/council-of-elrond#1](https://github.com/Deluha/council-of-elrond/pull/1) |
 | 2 | Gollum, Galadriel, operation keys, rounds, wipes, cache, commands, shadow mode | ✅ Done: [Deluha/council-of-elrond#2](https://github.com/Deluha/council-of-elrond/pull/2) |
 | 3 | Legolas, Aragorn (git and database profiles), routing | ✅ Done: [Deluha/council-of-elrond#3](https://github.com/Deluha/council-of-elrond/pull/3) |
-| 4 | Full council with Gimli | ✅ Done: Stage 4 pull request (see [DESIGN.md §8](./DESIGN.md)) |
+| 4 | Full council with Gimli | ✅ Done: [Deluha/council-of-elrond#4](https://github.com/Deluha/council-of-elrond/pull/4) |
 | 5 | Rule and allowlist suggestions, `/council report` | ⬜ Next |
 | 6 | Theme strings, then UI features in order | ⬜ |
 
