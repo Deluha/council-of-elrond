@@ -28,6 +28,15 @@ describe('the plan comes from the table alone', () => {
     expect(bare.at(-1)).toMatchObject({ argv: ['git', 'log', '--oneline', '-n', '30', '@{upstream}..HEAD', '--'] })
   })
 
+  test('a merge shows the branch and the commits it would bring in', () => {
+    expect(bash('git merge --no-ff feature').map(step => (step.kind === 'git' ? step.argv : []))).toEqual([
+      ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+      ['git', 'log', '--oneline', '-n', '30', 'HEAD..feature', '--'],
+    ])
+    expect(bash('git merge --abort')).toHaveLength(1)
+    expect(bash('git merge -m fix -s ort feature').at(1)).toMatchObject({ argv: ['git', 'log', '--oneline', '-n', '30', 'HEAD..feature', '--'] })
+  })
+
   test('names that would read as options never reach git', () => {
     for (const command of ['git push --upload-pack=evil origin main', 'git push -- --output=x main', 'git push origin --exec=x']) {
       for (const step of bash(command)) {
@@ -40,6 +49,7 @@ describe('the plan comes from the table alone', () => {
 
   test('reset and rebase show recent history; file writes show the diff and tracking', () => {
     expect(bash('git reset --hard HEAD~3').map(step => (step.kind === 'git' ? step.argv[1] : ''))).toEqual(['log', 'status'])
+    expect(bash('git commit --amend -m x').at(0)).toMatchObject({ argv: ['git', 'log', '--oneline', '--decorate=short', '-n', '20', '--'] })
     const write = plan({ tool: 'Write', input: { file_path: `${ROOT}/src/app.ts`, content: 'x' } })
     expect(write.map(step => (step.kind === 'git' ? step.argv : []))).toEqual([
       ['git', 'diff', '--stat', 'HEAD', '--', 'src/app.ts'],

@@ -74,8 +74,34 @@ describe('/council', () => {
     await council($, 'test "rm -rf build"')
     expect(w.logs.join('\n')).toMatch(/Reviewer: .+ \[gandalf\], model sonnet \(built-in\)/)
     w.logs.length = 0
+    await council($, 'test "git push origin feature"')
+    expect(w.logs.join('\n')).toContain('Reviewer: the git reviewer [aragorn/git], model opus (built-in)')
+    w.logs.length = 0
+    await council($, 'test "git push origin feature && rm -rf build"')
+    expect(w.logs.join('\n')).toContain('Reviewer: the destructive-operations reviewer [gandalf], model sonnet (built-in)')
+    expect(w.logs.join('\n')).toContain('The rule names the git reviewer [aragorn/git], but the parts of the command name different reviewers')
+    w.logs.length = 0
     await council($, 'test "ls -la"')
     expect(w.logs.join('\n')).toContain('No rule matches above allow')
+  })
+
+  test('test names the fallback when the rule\'s member is off, and nobody when Gandalf is off too', { options: { aragornEnabled: false } }, async ($, on) => {
+    const w = world(on, { surfaces: [] })
+    await council($, 'test "psql -c \'DELETE FROM t\'"')
+    const shown = w.logs.join('\n')
+    expect(shown).toContain('Reviewer: the destructive-operations reviewer [gandalf]')
+    expect(shown).toContain('The rule names the database reviewer [aragorn/database], but it is switched off')
+  })
+
+  test('status lists every model member with its state, model and counts', { options: { legolasEnabled: false } }, async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [BLOCK] })
+    await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })
+    await council($)
+    const shown = w.logs.join('\n')
+    expect(shown).toMatch(/\[gandalf\]: on, model sonnet \(built-in\); approved 0/)
+    expect(shown).toMatch(/\[legolas\]: off, model sonnet/)
+    expect(shown).toMatch(/\[aragorn\]: on, model opus \(built-in\); approved 0, revised 0, blocked 1/)
+    expect(shown).not.toContain('later version')
   })
 
   test('rules shows each rule with its source', async ($, on) => {
@@ -140,6 +166,20 @@ describe('models', () => {
     expect(w.logs.join('\n')).toContain('Not saved')
     await council($, 'model')
     expect(w.logs.join('\n')).toContain('gandalf: claude-opus-5-5 (session)')
+  })
+
+  test('--save writes the diff and git-and-database rows too; the full council has none yet', async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [APPROVE] })
+    await council($, 'model legolas opus --save')
+    await council($, 'model aragorn sonnet --save')
+    await council($, 'model council sonnet --save')
+    expect(w.configSets).toEqual([
+      { key: 'council-of-elrond.legolasModel', value: 'opus' },
+      { key: 'council-of-elrond.aragornModel', value: 'sonnet' },
+    ])
+    expect(w.logs.join('\n')).toContain('council has no /config row yet')
+    await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })
+    expect(w.modelRequests.at(-1)).toMatchObject({ model: 'sonnet' })
   })
 
   test('default clears the session switch; unknown members and ids are refused', async ($, on) => {

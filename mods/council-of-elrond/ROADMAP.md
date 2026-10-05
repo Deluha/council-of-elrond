@@ -11,8 +11,8 @@ How to finish the mod from where it stands, written so a new dev session can pic
 | 0 | Research, plan | ✅ Done ([DESIGN.md §1](./DESIGN.md)) |
 | 1 | Elrond, rules, Gandalf, escalation, fail-closed paths, audit log (plain mode) | ✅ Done: [Deluha/council-of-elrond#1](https://github.com/Deluha/council-of-elrond/pull/1) |
 | 2 | Gollum, Galadriel, operation keys, rounds, wipes, cache, commands, shadow mode | ✅ Done: [Deluha/council-of-elrond#2](https://github.com/Deluha/council-of-elrond/pull/2) |
-| 3 | Legolas, Aragorn (git and database profiles), routing | ⬜ Next |
-| 4 | Full council with Gimli | ⬜ |
+| 3 | Legolas, Aragorn (git and database profiles), routing | ✅ Done: Stage 3 pull request (see [DESIGN.md §7](./DESIGN.md)) |
+| 4 | Full council with Gimli | ⬜ Next |
 | 5 | Rule and allowlist suggestions, `/council report` | ⬜ |
 | 6 | Theme strings, then UI features in order | ⬜ |
 
@@ -27,7 +27,7 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (135 at the end of stage 2)
+cd mods/council-of-elrond && claude plugin test .     # all tests (176 at the end of stage 3)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
@@ -116,7 +116,7 @@ From the Step 0 review and the model discussion. These are binding unless the us
     - So `rm -rf ./build` and `rm -r build/` share a key.
     - A coarser per-verb counter (e.g. `git push`, any target) locks out at 5 wipes, to catch retries that change the target.
 
-Stage 2's own decisions (the ones the spec didn't cover) are in [DESIGN.md §6](./DESIGN.md).
+Stage 2's own decisions (the ones the spec didn't cover) are in [DESIGN.md §6](./DESIGN.md), Stage 3's in [§7](./DESIGN.md).
 
 12. **Refusals at Claude Code's own permission prompt** (answered in stage 2). The person's own refusal there, after the council let the call through, counts as a failed attempt (as "keep blocked"); an automatic denial with nobody asked (`-p`, a deny rule) does not. Recorded as `outcome: "refused-by-user"` and `"denied-by-permission"` (`outcomeOf` in `elrond/operations.ts`). *(Done.)*
 
@@ -188,21 +188,22 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 
 ---
 
-## Stage 3: Legolas and Aragorn, with routing
+## Stage 3: Legolas and Aragorn, with routing ✅
 
-- [ ] **Routing** (`hooks/elrond/routing.ts`, pure): `classification.decided.member/profile` → member; disabled or missing → Gandalf (fallback); Gandalf disabled → escalate. Stage 1 sends everything to Gandalf (see `MEMBER_WHO` and the `// Review. Stage 1 seats Gandalf alone` branch in register.ts).
-- [ ] **Legolas** (`hooks/members/legolas.ts`): diff from the call's arguments.
+- [x] **Routing** (`hooks/elrond/routing.ts`, pure): `classification.decided.member/profile` → member; disabled or missing → Gandalf (fallback); Gandalf disabled → escalate. Also: parts naming different members → Gandalf; Legolas named for a call with no file → Gandalf; Aragorn without a profile → git for `git`, else database (DESIGN §7.1–2).
+- [x] **Legolas** (`hooks/members/legolas.ts`): diff from the call's arguments.
   - Edit: a hunk from `old_string` → `new_string` with surrounding file context via `$.fs.read`.
   - Write: current file (if any) vs `content`.
   - NotebookEdit: the cell source.
   - Truncate to a diff line limit (`diffLines` option).
   - Checklist (§5): matches the request, scope creep or unrelated files, deleted or weakened tests, disabled checks, unexpected dependency, CI or config changes, obvious breakage. **No style review.**
-- [ ] **Aragorn, git profile** (`hooks/members/aragorn.ts`): command plus Galadriel's git preview (branch, remote, commits to be sent) plus the latest prompt. Checklist: protected target branch, force flags, rewriting pushed history, unrelated commits.
-- [ ] **Aragorn, database profile:** command plus migration or SQL content (truncated; read migration files named in the call, or heredoc and `-c` SQL). Checklist: rollback path, destructive DDL, UPDATE or DELETE without WHERE, production-looking target (config patterns), transaction wrapping, long locks on large tables. Separate system prompt per profile.
-- [ ] `userConfig`: `legolasEnabled`, `legolasModel`, `aragornEnabled`, `aragornModel` (same picker options as Gandalf).
-- [ ] Generalise `reviewByGandalf` into one top-level `review($, member, profile, context, model, deadline, signal)` in register.ts. Members only supply `system(nonce)` and `prompt(context, nonce)`.
-- [ ] Tests (§19 Routing, Model members): each member and profile gets its triggers, with Gandalf as fallback; approve, revise and block for each member.
-- [ ] Optional, needs the user's approval because it costs real tokens: a ~40-case labelled eval (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injection attempts inside diffs) run live against the default models, to confirm prompt quality.
+- [x] **Aragorn, git profile** (`hooks/members/aragorn.ts`): command plus Galadriel's git preview (branch, remote, commits to be sent) plus the latest prompt. Checklist: protected target branch, force flags, rewriting pushed history, unrelated commits.
+- [x] **Aragorn, database profile:** command plus migration or SQL content (truncated; read migration files named in the call, or heredoc and `-c` SQL). Checklist: rollback path, destructive DDL, UPDATE or DELETE without WHERE, production-looking target (config patterns), transaction wrapping, long locks on large tables. Separate system prompt per profile.
+- [x] `userConfig`: `legolasEnabled`, `legolasModel`, `aragornEnabled`, `aragornModel` (same picker options as Gandalf), plus `diffLines`; `CONFIG_ROWS` has their rows, so `--save` works for them.
+- [x] Generalise `reviewByGandalf` into one top-level `review($, brief, model, deadline, signal)` in register.ts; the `Brief` (`members/brief.ts`) carries member, profile and context together. Members only supply `system(nonce)` and `prompt(context, nonce)`.
+- [x] Tests (§19 Routing, Model members): each member and profile gets its triggers, with Gandalf as fallback; approve, revise and block for each member (`tests/routing.test.ts`, `tests/members.test.ts`).
+- [x] `/council` status lists all three members; `/council test` names the routed member, profile and any fallback.
+- [ ] Optional, **not run yet** (waiting on the user's approval because it costs real tokens): a ~40-case labelled eval (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injection attempts inside diffs) run live against the default models, to confirm prompt quality.
 
 ## Stage 4: full council with Gimli
 
@@ -259,13 +260,18 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 
 ## Known follow-ups
 
+From stage 3:
+- **The ~40-case live eval** (Stage 3's optional item) has not been run; it needs the user's go-ahead for the tokens. Only a 3-call live smoke test ran (one per member and profile, all approve, ~1,000 tokens each).
+- **Migration tools' own files aren't read.** The database reviewer sees inline SQL, heredocs and `.sql` files named in the command; `prisma migrate deploy`, `alembic upgrade` and the like don't name their files, so it sees the command only. Looking them up is tool-specific (and the migrations folders are protected paths, so a shell mention of them already asks).
+- **Mixed compound commands go to Gandalf** (DESIGN §7.1). Stage 4's full council for big operations may be the better home for, say, `git push && psql …`; revisit when it lands.
+- **Live UI check (user):** the new `/config` rows (Legolas and Aragorn enabled and model, diff line limit) in a terminal.
+
 From stage 2:
 - **Verify the prompt-refusal wording live** in a terminal. The patterns come from the 2.1.289 binary ("The user doesn't want to proceed with this tool use", "…take this action right now"); after a Claude Code update, re-check them (`grep -a` the binary) or a refusal reads as an ordinary tool error.
 - **Live UI check in a terminal (user):** the `/council` pane, the `council: shadow` / `council: bypass` label, the "Council: you allowed this once" line under the permission dialog, the secrets dialog with three options and the allowlist confirm.
 - **Scan allowed calls too?** The secrets scan follows SPEC §4 and reads gated calls only (DESIGN §6.1). Scanning every call is cheap; it needs the user's say-so since it changes the pipeline order.
 - **Plain-mode identifiers.** `/council` prints member ids such as `gandalf` where you type them (DESIGN §6.16); stage 6's plain-mode test should decide whether ids count as theme text.
-- `/config` has a model row for Gandalf only, so `/council model <legolas|aragorn|council> … --save` is session-only until stage 3 adds their rows (add them to `CONFIG_ROWS` in register.ts).
-- Stage 3 routing should replace the `// Stage 2 seats Gandalf alone` branch and pass each member's `preview`.
+- `/config` has no model row for the full council yet, so `/council model council … --save` is session-only until stage 4 adds it (add it to `CONFIG_ROWS` and `settingsModel` in register.ts).
 
 From stage 1:
 - `interpretRejection` detects "Chat about this" by looking for `chat` in the rejection message; the real wording is unverified. Check it live.

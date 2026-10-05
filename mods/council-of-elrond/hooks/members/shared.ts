@@ -18,8 +18,8 @@ const MAX_REASON_CHARS = 400
 
 /** At most two sentences, and at most MAX_REASON_CHARS. */
 export function twoSentences(text: string): string {
-  const sentences = text.trim().match(/[^.!?]+[.!?]+(\s|$)|[^.!?]+$/g) ?? [text.trim()]
-  const kept = sentences.slice(0, 2).join('').trim()
+  // A sentence ends at . ! or ? before whitespace, so `notes.txt` or `v1.2` stay whole.
+  const kept = text.trim().split(/(?<=[.!?])\s+/).slice(0, 2).join(' ')
   return kept.length > MAX_REASON_CHARS ? `${kept.slice(0, MAX_REASON_CHARS - 1)}…` : kept
 }
 

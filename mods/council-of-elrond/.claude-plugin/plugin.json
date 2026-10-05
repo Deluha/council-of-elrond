@@ -1,6 +1,6 @@
 {
   "name": "council-of-elrond",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A council of specialist reviewers that gates risky tool calls before they run. Rules decide the tier; model members give a second opinion; anything uncertain comes to you.",
   "author": {
     "name": "council-of-elrond"
@@ -24,6 +24,48 @@
       "type": "string",
       "title": "Gandalf model",
       "description": "\"default\" uses the project rules file's choice, else the built-in default (sonnet).",
+      "required": false,
+      "default": "default",
+      "options": [
+        "default",
+        "sonnet",
+        "opus",
+        "fable",
+        "haiku"
+      ]
+    },
+    "legolasEnabled": {
+      "type": "boolean",
+      "title": "Legolas (diffs) enabled",
+      "description": "Off: file edits and writes Legolas would review go to Gandalf instead (or to you, if Gandalf is off too).",
+      "required": false,
+      "default": true
+    },
+    "legolasModel": {
+      "type": "string",
+      "title": "Legolas model",
+      "description": "\"default\" uses the project rules file's choice, else the built-in default (sonnet).",
+      "required": false,
+      "default": "default",
+      "options": [
+        "default",
+        "sonnet",
+        "opus",
+        "fable",
+        "haiku"
+      ]
+    },
+    "aragornEnabled": {
+      "type": "boolean",
+      "title": "Aragorn (git and databases) enabled",
+      "description": "Off: git history and database calls Aragorn would review go to Gandalf instead (or to you, if Gandalf is off too).",
+      "required": false,
+      "default": true
+    },
+    "aragornModel": {
+      "type": "string",
+      "title": "Aragorn model",
+      "description": "\"default\" uses the project rules file's choice, else the built-in default (opus).",
       "required": false,
       "default": "default",
       "options": [
@@ -63,6 +105,15 @@
       "default": 80,
       "min": 5,
       "max": 400
+    },
+    "diffLines": {
+      "type": "number",
+      "title": "Diff line limit",
+      "description": "Lines of a file change's diff kept for the reviewer.",
+      "required": false,
+      "default": 200,
+      "min": 20,
+      "max": 2000
     },
     "reviewDeadlineSeconds": {
       "type": "number",

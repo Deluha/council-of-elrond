@@ -36,6 +36,8 @@ describe('verdict parsing', () => {
   test('the reason is held to two sentences', () => {
     const parsed = parseVerdict('{"verdict":"approve","reason":"One. Two. Three. Four.","safer_alternative":""}')
     expect(parsed.ok && parsed.verdict.reason).toBe('One. Two.')
+    const named = parseVerdict('{"verdict":"approve","reason":"Creates notes.txt as asked. Tag v1.2 is local. Fine.","safer_alternative":""}')
+    expect(named.ok && named.verdict.reason).toBe('Creates notes.txt as asked. Tag v1.2 is local.')
   })
 })
 

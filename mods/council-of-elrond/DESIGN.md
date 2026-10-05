@@ -1,7 +1,7 @@
 # council-of-elrond: design
 
-Status: **Stage 2** (Stage 1 plus Gollum, Galadriel, operation keys, rounds, failed attempts and
-lockout, the approve cache, `/council`, shadow mode and the mode label; plain mode).
+Status: **Stage 3** (Stage 2 plus Legolas, Aragorn's git and database profiles, and routing between
+the three model members; plain mode).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
 Built and checked against Claude Code **2.1.289**; its generated API types are vendored at
 `mods/types/claude-code.d.ts` and are the source of truth over docs, samples and the spec.
@@ -35,13 +35,13 @@ settings. The interactive `/plugin` "mods active" line can't be read from a head
 hooks: session.start, prompt.submit, command.run{command=council},
        ui.render{component=Pane, requestId=council}, ui.render{component=SessionMode}, tool.call
 calls: $.command.register, $.config.set (via councilModel), $.env.get (via loadContext), $.fs.exists,
-       $.fs.list (via previewOf), $.fs.read (via appendAudit, councilOutput, loadContext, scriptsOf,
-       writeAllowlist), $.fs.stat (via loadContext, previewOf, realPathOf), $.fs.write (via appendAudit,
-       writeAllowlist), $.model.complete (via probeModel, reviewByGandalf), $.process.run (via previewOf),
-       $.session.cwd, $.session.root (via loadContext), $.session.surfaces (via escalate, show,
-       syncIndicator), $.state.get, $.state.set, $.ui.ask (via confirmAllowlist, escalate), $.ui.log,
-       $.ui.notice, $.ui.open (via show), $.ui.resolve, $.ui.status (via syncIndicator),
-       $.ui.toast (via warnOnce)
+       $.fs.list (via previewOf), $.fs.read (via appendAudit, councilOutput, fileDiffOf, loadContext,
+       scriptsOf, sqlFilesOf, writeAllowlist), $.fs.stat (via loadContext, previewOf, realPathOf),
+       $.fs.write (via appendAudit, writeAllowlist), $.model.complete (via probeModel, review),
+       $.process.run (via previewOf), $.session.cwd, $.session.root (via loadContext),
+       $.session.surfaces (via escalate, show, syncIndicator), $.state.get, $.state.set,
+       $.ui.ask (via confirmAllowlist, escalate), $.ui.log, $.ui.notice, $.ui.open (via show),
+       $.ui.resolve, $.ui.status (via syncIndicator), $.ui.toast (via warnOnce)
 env reads: HOME
 state: council-of-elrond.session, council-of-elrond.panel
 ```
@@ -65,8 +65,12 @@ tool.call ─► classify (pure, rules only)
              │                     └► instruction ─► refuse, rounds reset; chat ─► refuse
              │ review ─► cached approve this prompt? ─► next(e)
              │           Galadriel preview (fixed table, read-only, 5 s each, ≤ 3)
-             │           out of rounds (2) / member off / budget spent ─► escalate (shadow: pass)
-             │           Gandalf ($.model.complete, own deadline)
+             │           route (pure): the rule's member and profile, else Gandalf
+             │           out of rounds (2) / nobody on / budget spent ─► escalate (shadow: pass)
+             │           brief: Gandalf (call, preview, scripts) · Legolas (diff, git status)
+             │                  Aragorn git (command, preview, protected branches)
+             │                  Aragorn database (command, SQL, production matches)
+             │           review ($.model.complete, the member's own prompts, own deadline)
              │              approve ─► cache, next(e)
              │              revise / block ─► refuse (verdict, rounds left)  round, failed attempt
              │                              (shadow: logged, next(e))
@@ -78,7 +82,7 @@ tool.call ─► classify (pure, rules only)
 /council ─► parse (pure) ─► output lines ─► pane (where a surface draws) or ui.log; never Claude
 ```
 
-- **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`), escalation, refusal and model choice (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
+- **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`: one file per member, `brief.ts` pairing each member and profile with its prompts), routing, escalation, refusal and model choice (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
 - **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 2), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt you send (composer, bridge or SDK origin): it clears rounds, failed attempts, lockouts and the cache.
 - **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load, after the mod's own allowlist write, and on `/council reload` (never by watching the file).
 
@@ -90,7 +94,9 @@ tool.call ─► classify (pure, rules only)
 | Hook throws after the call ran | `.catch` replays the real result (`next.called`); the call is not re-run and Claude isn't told a call that ran was refused. |
 | Hook overruns its 10 s own-time budget | **Probe result: the engine did not cut the hook off in the test kit, even with `.catch`.** A hook that overran and then called `next(e)` ran the call. Elrond therefore passes calls only through `proceed()`, which refuses when `next.budget.remainingMs` < 1 s. The hook's own work is bounded to make this unlikely: commands over 20,000 characters aren't parsed (review), parse depth ≤ 4, ≤ 200 parts. |
 | Model error, timeout (`timeoutMs`), empty reply, malformed verdict, request refused | Escalate to you; "keep blocked" refuses. |
-| Token budget spent / Gandalf switched off | Escalate without a model call. |
+| Token budget spent / no enabled member can take the call (the named one and Gandalf off) | Escalate without a model call. |
+| The file a diff needs can't be read (over 4 MiB, permissions) | The diff shows the call's own text and the prompt says so; the review goes on. |
+| A `.sql` file the call names is missing, unreadable, or lands outside the project (by name or real path) | Left out of the database reviewer's context; the review goes on. |
 | Nobody can be asked (no surface) | Refuse, saying why. |
 | `$.ui.ask` dismissed / "Chat about this" | Refuse (recorded as `dismissed` / `chat`). |
 | Overrides file broken, unknown version, invalid field | Ignored whole; shipped rules enforce; a transcript line lists errors by field, plus a toast. |
@@ -112,7 +118,7 @@ tool.call ─► classify (pure, rules only)
 5. **`cd` inside a compound command** moves where later parts' paths land. An unknown target (`cd $X`) is treated as `/`, so a later relative recursive delete is blocked rather than guessed at.
 6. **Running a program by path** (`./deploy.sh`) is script execution (review), along with interpreters running files.
 7. **Models.** Built-in defaults are `sonnet` (Gandalf, Legolas), `opus` (Aragorn, full council), with no Haiku in any default. Aliases track the newest model of the family this Claude Code build knows. Layers, in order: session switch (Stage 2), `/config` row, project file, built-in. Settings follow the family: Sonnet 2,000 tokens / low effort / 30 s, Opus 2,000 / low / 45 s, Fable 4,000 / low / 90 s, Haiku 400 / no effort / 20 s.
-8. **Stage 1 routing.** Every review goes to Gandalf until Legolas and Aragorn exist (Stage 3). The audit log records the member that actually reviewed.
+8. **Stage 1 routing.** Every review went to Gandalf until Legolas and Aragorn existed (superseded in Stage 3, §7). The audit log records the member that actually reviewed.
 9. **Allow before bypass.** The classifier runs first; the allow tier passes before the state is read, so allow adds no state or audit I/O. Bypass then applies to gated calls only. The behaviour is the same as the spec's order.
 10. **Plain-mode notices say "Council:"**, not the plugin's name, which contains a theme word. The engine labels toasts with the plugin's name itself; that is outside the mod's reach.
 
@@ -135,3 +141,14 @@ tool.call ─► classify (pure, rules only)
 15. **Redaction fixes.** The assignment pattern now matches JSON-escaped quotes (`\"hunter2\"`), which Stage 1 missed in file-tool call text, and leaves an already-redacted value alone, so redacting twice is stable.
 16. **Identifiers stay as written.** Plain-mode output names member ids where you type them (`/council model gandalf …`, `[gandalf]` in the status), since they are config keys. The string table itself holds no theme text (tested).
 
+## 7. Decisions the spec did not cover (Stage 3)
+
+1. **Routing** (`elrond/routing.ts`). A review-tier call goes to the member its rule names; Aragorn's profile comes from the rule. Gandalf takes it instead when the rule names nobody, the named member is off (`disabled`), the call's review parts name different members (`mixed`: one specialist would judge only its own part, and Gandalf's checklist is the general one), or the diff reviewer is named for a call with no file (`no-diff`). With the member Gandalf would replace and Gandalf both off, the call comes to you ("its reviewer is switched off"). Gandalf being off never stops an enabled specialist. `/council test` prints the fallback and why.
+2. **Aragorn named without a profile** (a project rule) takes the git profile for a `git` command and the database profile for anything else.
+3. **One `review()` for every member.** `review($, brief, model, deadline, signal)` in register.ts: a `Brief` (`members/brief.ts`) carries the member, its profile and the context together, so a context can't reach another member's prompt. Members supply only `system(nonce)` and `prompt(context, nonce)`. The request, deadline, token accounting and strict verdict parse are shared.
+4. **The diff is built from the call** (`members/legolas.ts`). Edit: the replacement applied in memory to the file as it stands (`replace_all` honoured), shown as unified hunks with 3 lines of context. Write: the new content against the current file (a new file is all added). NotebookEdit: the cell's source, by `cell_id`, for replace, insert and delete. The text not found, or a file that can't be read, gives the call's own text with a note in the prompt. The diff is bounded so the hook's own time stays small: the common head and tail are trimmed and only a middle under 250,000 line pairs is matched line by line; anything larger is one removed block and one added block. Cut to `diffLines` (default 200), redacted. Legolas also gets Galadriel's file preview (diff stat, whether git tracks it).
+5. **The database profile's SQL** (`members/aragorn.ts`): per client, its inline options (`psql -c`, `mysql -e`, `mongosh --eval`, `clickhouse -q`, `sqlcmd -Q`, `cqlsh -e`), heredocs, and `.sql` files (or `-f` files) the database parts name, at most 3, 150 lines each. A file is read only when it is inside the project both by name and by real path, so a link can't pull in a file from elsewhere. The configured production patterns are matched in code and the matches named in the prompt. A SQL file write (`sql-file-write`) gets its diff instead.
+6. **The git profile's context** adds the protected branches. Galadriel's table gained `git merge` (the current branch and the commits it would bring in; the values of `-m`, `-s`, `-X` and similar are never read as the ref) and `git commit --amend` (recent history). The history log is decorated with remote branches (`--decorate=short`), so "already pushed" is visible to the reviewer.
+7. **Who decided.** Aragorn's refusals say "the git reviewer" or "the database reviewer"; status counts both profiles under `aragorn`. The audit line's `member` and `profile` are the ones that reviewed (or the ones the route wanted, when nobody could); in Stage 2 `profile` came from the rule.
+8. **`/config` rows** for Legolas and Aragorn (enabled, model) and `diffLines`, so `/council model legolas|aragorn … --save` writes them. The full council's row arrives with it in Stage 4; until then `--save` for `council` stays session-only and says so.
+9. **A reason containing a file name was cut** (`notes.txt`, `v1.2`): the two-sentence limit (Stage 1) split on any `.`. It now ends a sentence only at `.`, `!` or `?` followed by whitespace. Found in the live check.
