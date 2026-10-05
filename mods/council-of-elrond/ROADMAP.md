@@ -10,8 +10,8 @@ How to finish the mod from where it stands, written so a new dev session can pic
 | :- | :- | :- |
 | 0 | Research, plan | ✅ Done ([DESIGN.md §1](./DESIGN.md)) |
 | 1 | Elrond, rules, Gandalf, escalation, fail-closed paths, audit log (plain mode) | ✅ Done: [Deluha/council-of-elrond#1](https://github.com/Deluha/council-of-elrond/pull/1) |
-| 2 | Gollum, Galadriel, operation keys, rounds, wipes, cache, commands, shadow mode | ⬜ Next |
-| 3 | Legolas, Aragorn (git and database profiles), routing | ⬜ |
+| 2 | Gollum, Galadriel, operation keys, rounds, wipes, cache, commands, shadow mode | ✅ Done: [Deluha/council-of-elrond#2](https://github.com/Deluha/council-of-elrond/pull/2) |
+| 3 | Legolas, Aragorn (git and database profiles), routing | ⬜ Next |
 | 4 | Full council with Gimli | ⬜ |
 | 5 | Rule and allowlist suggestions, `/council report` | ⬜ |
 | 6 | Theme strings, then UI features in order | ⬜ |
@@ -27,14 +27,14 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (65 at the end of stage 1)
+cd mods/council-of-elrond && claude plugin test .     # all tests (135 at the end of stage 2)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
 
 - **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289**. If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts`), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
 - **Keep the mod out of the session building it.** Don't load it into your own dev session (the skill's hot-reload folder, or `--plugin-dir` on the session you work in): it would gate your own tool calls.
-- **Live checks run headless.** Use `claude -p --plugin-dir ./mods/council-of-elrond "<prompt>"` with harmless commands, then clean up `build/` and `.claude/council-of-elrond/audit/`.
+- **Live checks run headless.** Use `claude -p --plugin-dir ./mods/council-of-elrond "<prompt>"` with harmless commands, ideally in a throwaway `git init` folder, then clean it up along with the generated `.claude-plugin/types/` and `tsconfig.json` in the mod folder. `/council` output only shows with `--output-format stream-json --verbose` (as `system/ui_log`).
 
 ### Hard-won API facts (verified by probes; details in DESIGN.md)
 
@@ -66,6 +66,9 @@ claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: l
    - `$.tool.call` input types drop `agentId`, but it arrives at runtime (cast `as never`).
    - Registering the same event twice in one test fails the load; use fixture switches instead.
 10. **`--plugin-dir` writes generated files into the mod folder.** It writes `.claude-plugin/types/` and `tsconfig.json`, both gitignored.
+11. **Drawing from register.ts without JSX:** call the global `h(Element, props, ...children)` with elements from `$.ui.resolve(e)` and cast the result to `RenderElement`; the file stays `.ts`.
+12. **Test kit specifics (stage 2):** a `tool.call` bottom answer must carry `result` (an error is `{ result, isError: true, text }`); `$.session.start` needs `{ cwd, surface, isInteractive }` and a bottom hook returning `{ cwd }`; a `ui.render` hook that calls `next(e)` (SessionMode) needs a bottom `ui.render` hook in the test; `$.command.run` resolves `{ text: undefined, ref: undefined }` for a hook's `{}`.
+13. **Claude Code's own denial wording.** Automatic (verified in `-p`): "`rm in '<path>' needs approval. … Claude Code asks before a shell command creates, changes or removes files there.`" The person refusing at the prompt (from the binary): "The user doesn't want to proceed with this tool use. …", optionally ending "To tell you how to proceed, the user said: …", or "The user doesn't want to take this action right now. …". All come back from `next(e)` as `isError: true`.
 
 ### Conventions in this codebase
 
@@ -106,64 +109,61 @@ From the Step 0 review and the model discussion. These are binding unless the us
 7. **Unmatched MCP tools are allowed**, plus a shipped review rule for tool names containing mutating verbs (`mcp-mutating`). *(Done.)*
 8. **Build in the repo** (`./mods/council-of-elrond`). Verify with tests, `tsc` and validate; the user runs live UI checks in a terminal with `--plugin-dir`.
 9. **Config reload.** Load at session start, after the mod's own writes to `rules.json` (confirmed rules, allowlist entries), and on a new `/council reload`. Never by watching the file.
-10. **Possible second prompt on the ask tier.** "Allow once" calls `next(e)`, and Claude Code may still ask. Accept it, and label the permission dialog with `$.ui.notice(e.tool_use_id, "council: you allowed this once")`. *(Not built yet: do it in stage 2.)*
+10. **Possible second prompt on the ask tier.** "Allow once" calls `next(e)`, and Claude Code may still ask. Accept it, and label the permission dialog with `$.ui.notice(e.tool_use_id, "Council: you allowed this once")`. *(Done.)*
 11. **Operation keys (stage 2):** tool family + verb + normalised target set.
     - Paths are resolved to real paths under the root, flags dropped, targets sorted.
     - Push uses remote + branch; SQL uses the target database.
     - So `rm -rf ./build` and `rm -r build/` share a key.
     - A coarser per-verb counter (e.g. `git push`, any target) locks out at 5 wipes, to catch retries that change the target.
 
-### Open question for the user (ask before building wipes in stage 2)
+Stage 2's own decisions (the ones the spec didn't cover) are in [DESIGN.md §6](./DESIGN.md).
 
-- **Does a refusal at Claude Code's own permission prompt, after the council approved, count as a wipe?**
-  - These come back from `next(e)` as `isError: true` with "needs approval" text, recorded today as `outcome: "error"`.
-  - Proposal: count the user's own refusal at the prompt as a wipe (same as "keep blocked"); don't count an automatic denial where nobody could be asked.
-  - To tell the two apart, compare `result.text` against the permission-denial wording, verified live, and record it as a distinct `outcome` (`denied-by-permission`).
+12. **Refusals at Claude Code's own permission prompt** (answered in stage 2). The person's own refusal there, after the council let the call through, counts as a failed attempt (as "keep blocked"); an automatic denial with nobody asked (`-p`, a deny rule) does not. Recorded as `outcome: "refused-by-user"` and `"denied-by-permission"` (`outcomeOf` in `elrond/operations.ts`). *(Done.)*
 
 ---
 
-## Stage 2: Gollum, Galadriel, operation keys, rounds, wipes, cache, commands, shadow
+## Stage 2: Gollum, Galadriel, operation keys, rounds, wipes, cache, commands, shadow ✅
 
 Pipeline order to implement (SPEC §4): bypass → classify → allow → block → **lockout** → **Gollum** →
 ask → **Galadriel** → route → act → **after the tool runs**.
 
 ### Gollum: `hooks/members/gollum.ts` (pure scan) + register.ts wiring
-- [ ] Scan the call: shell command text plus heredoc input, Write content, Edit `new_string`, NotebookEdit source, and MCP input JSON. Reuse `SECRET_PATTERNS` and `isRandomLooking` in `hooks/redact.ts` (each pattern already has a `level`).
-- [ ] **High finding:** refuse without asking, and tell Claude to remove the secret. Never offer a rule.
-- [ ] **Low finding:** ask with a redacted snippet. Options: keep blocked, allow once, add to allowlist. Allowlist only after a second confirm that shows the exact entry; write it to `rules.json` (`gollum.allowlist`), then reload config (decision 9).
-- [ ] Config: `gollum: { patterns: [{ id, level, regex, label }], allowlist: [...] }` in `rules.json`, added to `TOP_KEYS` and validated in `hooks/config/schema.ts`. Allowlist entries are exact strings or fingerprints, never regexes.
-- [ ] Gollum runs with every model member disabled and in shadow mode (§13, §22). Bypass skips it, as it skips every step (§4 step 1).
-- [ ] Tests (§19 Gollum): high and low findings, redaction in dialog, refusal, audit and prompt, allowlist honoured, allowlist written only on confirm.
+- [x] Scan the call: shell command text plus heredoc input, Write content, Edit `new_string`, NotebookEdit source, and MCP input JSON. Reuse `SECRET_PATTERNS` and `isRandomLooking` in `hooks/redact.ts` (each pattern already has a `level`).
+- [x] **High finding:** refuse without asking, and tell Claude to remove the secret. Never offer a rule.
+- [x] **Low finding:** ask with a redacted snippet. Options: keep blocked, allow once, add to allowlist. Allowlist only after a second confirm that shows the exact entry; write it to `rules.json` (`gollum.allowlist`), then reload config (decision 9).
+- [x] Config: `gollum: { patterns: [{ id, level, regex, label }], allowlist: [...] }` in `rules.json`, added to `TOP_KEYS` and validated in `hooks/config/schema.ts`. Allowlist entries are exact strings or fingerprints, never regexes.
+- [x] Gollum runs with every model member disabled and in shadow mode (§13, §22). Bypass skips it, as it skips every step (§4 step 1).
+- [x] Tests (§19 Gollum): high and low findings, redaction in dialog, refusal, audit and prompt, allowlist honoured, allowlist written only on confirm.
 
 ### Galadriel: `hooks/members/galadriel.ts` (pure plan) + register.ts runner
-- [ ] A **fixed table in code**: for a part's verb, which read-only inspections to run, as argv with the call's targets passed as data after `--`. Never run the proposed command or any part of it.
+- [x] A **fixed table in code**: for a part's verb, which read-only inspections to run, as argv with the call's targets passed as data after `--`. Never run the proposed command or any part of it.
   - rm, find -delete: count and list targets via `$.fs.stat`/`$.fs.list` (no process), capped.
   - git push: `git rev-parse --abbrev-ref HEAD`, `git remote get-url <remote>`, `git log --oneline <remote>/<branch>..HEAD` (capped).
   - git reset, rebase: `git log --oneline -n 20`, `git status --porcelain`.
   - Edit, Write: `git diff --stat -- <path>`, and whether the file is tracked (`git ls-files --error-unmatch -- <path>`).
-- [ ] `$.process.run(argv, { cwd: root, timeoutMs: 5000 })`; failures and timeouts give "no preview". **No preview is never a reason to allow or block.**
-- [ ] Output truncated to the preview line limit. Add a `previewLines` userConfig option (default 80).
-- [ ] Gandalf's prompt already accepts `preview`; pass it, and show it in escalations.
-- [ ] Tests (§19 Galadriel): never runs the proposed command (assert the `process.run` argv), timeout gives no preview, and inspections are built only from the table.
+- [x] `$.process.run(argv, { cwd: root, timeoutMs: 5000 })`; failures and timeouts give "no preview". **No preview is never a reason to allow or block.**
+- [x] Output truncated to the preview line limit. Add a `previewLines` userConfig option (default 80).
+- [x] Gandalf's prompt already accepts `preview`; pass it, and show it in escalations.
+- [x] Tests (§19 Galadriel): never runs the proposed command (assert the `process.run` argv), timeout gives no preview, and inspections are built only from the table.
 
 ### Operation keys, rounds, wipes, lockout, cache: `hooks/elrond/operations.ts` (pure)
-- [ ] `operationKeyOf(call, classification, context)` per decision 11; `verbKeyOf` for the coarse counter.
-- [ ] Extend `CouncilSession` (`types/index.d.ts` + `hooks/state.ts`) with:
+- [x] `operationKeyOf(call, classification, context)` per decision 11; `verbKeyOf` for the coarse counter.
+- [x] Extend `CouncilSession` (`types/index.d.ts` + `hooks/state.ts`) with:
   - `ops: Record<key, { rounds, wipes, lockedOut, awaitingUser }>`;
   - `verbWipes: Record<verb, number>`;
   - `cache: { epoch, fingerprints[] }`;
   - `shadow`, and `models` (session switches).
 
   Bump `v` to 2 (`sessionOf` resets an old shape).
-- [ ] **Rounds:** each review verdict on a key is one round. After 2 non-approve rounds, escalate, with no model call until the user answers. A typed instruction resets that key's rounds.
-- [ ] **Wipes:** block, revise, keep blocked (including dismiss and nobody-to-ask, per decision 4), and a gated call that ran and errored (`toolErrorsAreWipes` userConfig, default on; see the open question). At 3 wipes on a key, lock out: refuse, and tell Claude to stop retrying, summarise what failed and propose another approach. A successful approved call resets its own key. `resetForPrompt` clears rounds, wipes, lockouts and the cache.
-- [ ] **Cache:** an approve for an identical fingerprint is reused within the same turn (key on `turn.start`'s `turnId`, or `promptEpoch` if subagent turns complicate it). Never cache block or revise.
-- [ ] Refusals now include **rounds left** (`Refusal.roundsLeft` already exists) and the lockout message. Audit lines carry `opKey`.
-- [ ] Tests (§19 Rounds, Wipes, Cache): 2-round cap and escalation, including a **rephrased retry** (different fingerprint, same key); wipe counting; lockout; reset on a new prompt; reset on success; approve reused; block not reused.
+- [x] **Rounds:** each review verdict on a key is one round. After 2 non-approve rounds, escalate, with no model call until the user answers. A typed instruction resets that key's rounds.
+- [x] **Wipes:** block, revise, keep blocked (including dismiss and nobody-to-ask, per decision 4), a gated call that ran and errored (`toolErrorsAreWipes` userConfig, default on), and the person's refusal at Claude Code's own prompt (decision 12). At 3 wipes on a key, lock out: refuse, and tell Claude to stop retrying, summarise what failed and propose another approach. A successful approved call resets its own key. `resetForPrompt` clears rounds, wipes, lockouts and the cache.
+- [x] **Cache:** an approve for an identical fingerprint is reused within the same turn (key on `turn.start`'s `turnId`, or `promptEpoch` if subagent turns complicate it). Never cache block or revise.
+- [x] Refusals now include **rounds left** (`Refusal.roundsLeft` already exists) and the lockout message. Audit lines carry `opKey`.
+- [x] Tests (§19 Rounds, Wipes, Cache): 2-round cap and escalation, including a **rephrased retry** (different fingerprint, same key); wipe counting; lockout; reset on a new prompt; reset on success; approve reused; block not reused.
 
 ### Commands: register.ts (`session.start` registers, `command.run` answers)
-- [ ] One command, `/council`, with `argumentHint`; parse `e.args` in a pure `hooks/elrond/commands.ts`. Registration can reject (32-command cap), so catch and log it.
-- [ ] Subcommands:
+- [x] One command, `/council`, with `argumentHint`; parse `e.args` in a pure `hooks/elrond/commands.ts`. Registration can reject (32-command cap), so catch and log it.
+- [x] Subcommands:
   - `/council`: status (members enabled, mode, per-member counts, wipes, tokens spent, median review time; add `reviewMs[]` to state).
   - `off` / `on`: bypass. Session only; never persisted.
   - `shadow on|off`.
@@ -173,18 +173,18 @@ ask → **Galadriel** → route → act → **after the tool runs**.
   - `model [<member> <model> [--save]]`: decision 2.
   - `reload`: decision 9.
   - `report` comes in stage 5.
-- [ ] Output per decision 1: return `{}`, draw in a pane (`$.ui.open` from the command is "asked", so it seats at any width; it needs a `ui.render` hook on `Pane`), and fall back to `$.ui.log` lines.
-- [ ] **Indicator** while bypass or shadow is on (SPEC §13, §17): a `ui.render` hook on `SessionMode` adding a label (terminal + desktop), plus `$.ui.status` elsewhere. Plain labels now ("council: bypass", "council: shadow"), themed in stage 6 ("Leeroy mode").
-- [ ] Tests (§19 Commands, Modes): `/council test` runs nothing (no `process.run`, no `tool.call` reaches the bottom); bypass passes gated calls and logs them; shadow logs verdicts and never blocks, while rules, protected paths and Gollum still enforce.
+- [x] Output per decision 1: return `{}`, draw in a pane (`$.ui.open` from the command is "asked", so it seats at any width; it needs a `ui.render` hook on `Pane`), and fall back to `$.ui.log` lines.
+- [x] **Indicator** while bypass or shadow is on (SPEC §13, §17): a `ui.render` hook on `SessionMode` adding a label (terminal + desktop), plus `$.ui.status` elsewhere. Plain labels now ("council: bypass", "council: shadow"), themed in stage 6 ("Leeroy mode").
+- [x] Tests (§19 Commands, Modes): `/council test` runs nothing (no `process.run`, no `tool.call` reaches the bottom); bypass passes gated calls and logs them; shadow logs verdicts and never blocks, while rules, protected paths and Gollum still enforce.
 
 ### Shadow mode
-- [ ] `shadowMode` userConfig (boolean, default off) plus the session toggle.
-- [ ] Model verdicts are logged with `shadow: true` and never refuse. Escalations caused by model failures also pass in shadow (logged), since only the second opinion is shadowed. Block tier, ask tier, protected paths and Gollum still enforce.
-- [ ] First-run toast (decision 6).
+- [x] `shadowMode` userConfig (boolean, default off) plus the session toggle.
+- [x] Model verdicts are logged with `shadow: true` and never refuse. Escalations caused by model failures also pass in shadow (logged), since only the second opinion is shadowed. Block tier, ask tier, protected paths and Gollum still enforce.
+- [x] First-run toast (decision 6).
 
 ### Also in stage 2
-- [ ] `$.ui.notice` on "allow once" (decision 10).
-- [ ] Bypass is only settable by command now; the stage 1 bypass branch already logs to debug. Add the indicator.
+- [x] `$.ui.notice` on "allow once" (decision 10).
+- [x] Bypass is only settable by command now; the stage 1 bypass branch already logs to debug. Add the indicator.
 
 ---
 
@@ -257,8 +257,17 @@ ask → **Galadriel** → route → act → **after the tool runs**.
   - [ ] the README states the limits plainly.
 - [ ] Live interactive check by the user in a terminal: the dialog, the pane, the band, the indicator.
 
-## Known follow-ups from stage 1
+## Known follow-ups
 
+From stage 2:
+- **Verify the prompt-refusal wording live** in a terminal. The patterns come from the 2.1.289 binary ("The user doesn't want to proceed with this tool use", "…take this action right now"); after a Claude Code update, re-check them (`grep -a` the binary) or a refusal reads as an ordinary tool error.
+- **Live UI check in a terminal (user):** the `/council` pane, the `council: shadow` / `council: bypass` label, the "Council: you allowed this once" line under the permission dialog, the secrets dialog with three options and the allowlist confirm.
+- **Scan allowed calls too?** The secrets scan follows SPEC §4 and reads gated calls only (DESIGN §6.1). Scanning every call is cheap; it needs the user's say-so since it changes the pipeline order.
+- **Plain-mode identifiers.** `/council` prints member ids such as `gandalf` where you type them (DESIGN §6.16); stage 6's plain-mode test should decide whether ids count as theme text.
+- `/config` has a model row for Gandalf only, so `/council model <legolas|aragorn|council> … --save` is session-only until stage 3 adds their rows (add them to `CONFIG_ROWS` in register.ts).
+- Stage 3 routing should replace the `// Stage 2 seats Gandalf alone` branch and pass each member's `preview`.
+
+From stage 1:
 - `interpretRejection` detects "Chat about this" by looking for `chat` in the rejection message; the real wording is unverified. Check it live.
 - `$.ui.ask` behaviour in SDK and cloud hosts is undocumented. If it can hang there, consider refusing when the only surfaces are remote ones.
 - `isReadOnly` from `next(e)`'s result is unused. It could let Galadriel or the cache skip work.

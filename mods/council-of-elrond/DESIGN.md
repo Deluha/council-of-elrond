@@ -1,6 +1,7 @@
 # council-of-elrond: design
 
-Status: **Stage 1** (Elrond, rules, Gandalf, escalation, fail-closed paths, audit log; plain mode).
+Status: **Stage 2** (Stage 1 plus Gollum, Galadriel, operation keys, rounds, failed attempts and
+lockout, the approve cache, `/council`, shadow mode and the mode label; plain mode).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
 Built and checked against Claude Code **2.1.289**; its generated API types are vendored at
 `mods/types/claude-code.d.ts` and are the source of truth over docs, samples and the spec.
@@ -31,38 +32,55 @@ settings. The interactive `/plugin` "mods active" line can't be read from a head
 ## 2. Hooks used (from `claude plugin validate`)
 
 ```
-hooks: session.start, prompt.submit, tool.call
-calls: $.env.get (via loadContext), $.fs.exists (via appendAudit, loadContext),
-       $.fs.read (via appendAudit, loadContext, scriptsOf), $.fs.stat (via loadContext, realPathOf),
-       $.fs.write (via appendAudit), $.model.complete (via reviewByGandalf), $.session.cwd,
-       $.session.root (via loadContext), $.session.surfaces (via escalate), $.state.get,
-       $.state.set, $.ui.ask (via escalate), $.ui.log, $.ui.toast (via warnOnce)
+hooks: session.start, prompt.submit, command.run{command=council},
+       ui.render{component=Pane, requestId=council}, ui.render{component=SessionMode}, tool.call
+calls: $.command.register, $.config.set (via councilModel), $.env.get (via loadContext), $.fs.exists,
+       $.fs.list (via previewOf), $.fs.read (via appendAudit, councilOutput, loadContext, scriptsOf,
+       writeAllowlist), $.fs.stat (via loadContext, previewOf, realPathOf), $.fs.write (via appendAudit,
+       writeAllowlist), $.model.complete (via probeModel, reviewByGandalf), $.process.run (via previewOf),
+       $.session.cwd, $.session.root (via loadContext), $.session.surfaces (via escalate, show,
+       syncIndicator), $.state.get, $.state.set, $.ui.ask (via confirmAllowlist, escalate), $.ui.log,
+       $.ui.notice, $.ui.open (via show), $.ui.resolve, $.ui.status (via syncIndicator),
+       $.ui.toast (via warnOnce)
 env reads: HOME
-state: council-of-elrond.session
+state: council-of-elrond.session, council-of-elrond.panel
 ```
 
-There is no `tool.check` hook: the mod never takes part in the permission decision.
+There is no `tool.check` hook: the mod never takes part in the permission decision. The only process
+it starts is a read-only `git` from Galadriel's table (§6).
 
 ## 3. Data flow
 
 ```
 tool.call ─► classify (pure, rules only)
              │ allow ──────────────────────────────► next(e)            (no I/O beyond cwd/stat)
-             │ block ──► refuse (rule reason)                            audit
-             │ ask   ──► escalate ─► allow once ──► next(e)              audit
-             │                    └► keep blocked / instruction / dismissed / chat / nobody ─► refuse
-             │ review ─► bypass? ─► next(e)                              audit
-             │           member off / budget spent ─► escalate
+             │ gated: fingerprint, operation key ───────────────────────── audit, count
+             │ bypass ─► next(e)
+             │ block ──► refuse (rule reason)                            failed attempt
+             │ locked out (3 on the key / 5 on the verb) ─► refuse, "stop retrying"
+             │ Gollum: high ─► refuse ("remove the secret")              failed attempt
+             │         low ──► ask ─► allow once / allowlist (confirm, write, reload) ─► continue
+             │ ask ─────► escalate ─► allow once ──► notice, next(e)
+             │                     └► keep blocked / dismissed / nobody ─► refuse   failed attempt
+             │                     └► instruction ─► refuse, rounds reset; chat ─► refuse
+             │ review ─► cached approve this prompt? ─► next(e)
+             │           Galadriel preview (fixed table, read-only, 5 s each, ≤ 3)
+             │           out of rounds (2) / member off / budget spent ─► escalate (shadow: pass)
              │           Gandalf ($.model.complete, own deadline)
-             │              approve ─► next(e)
-             │              revise / block ─► refuse (verdict)
-             │              error / timeout / malformed ─► escalate
+             │              approve ─► cache, next(e)
+             │              revise / block ─► refuse (verdict, rounds left)  round, failed attempt
+             │                              (shadow: logged, next(e))
+             │              error / timeout / malformed ─► escalate (shadow: pass)
+             │ after next(e): ran ─► clears its operation; error ─► failed attempt (setting);
+             │                you refuse at Claude Code's prompt ─► failed attempt;
+             │                automatic denial (nobody asked) ─► recorded, not counted
              └─ any throw before next ─► .catch ─► refuse
+/council ─► parse (pure) ─► output lines ─► pane (where a surface draws) or ui.log; never Claude
 ```
 
 - **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`), escalation, refusal and model choice (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
-- **State.** One `$.state` value, `council-of-elrond.session` (`types/index.d.ts`). `resetForPrompt` is the single reset, run on every prompt you send (composer, bridge or SDK origin).
-- **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load.
+- **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 2), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt you send (composer, bridge or SDK origin): it clears rounds, failed attempts, lockouts and the cache.
+- **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load, after the mod's own allowlist write, and on `/council reload` (never by watching the file).
 
 ## 4. Failure modes
 
@@ -77,6 +95,12 @@ tool.call ─► classify (pure, rules only)
 | `$.ui.ask` dismissed / "Chat about this" | Refuse (recorded as `dismissed` / `chat`). |
 | Overrides file broken, unknown version, invalid field | Ignored whole; shipped rules enforce; a transcript line lists errors by field, plus a toast. |
 | Audit write fails | Logged to the debug log; never changes a decision. |
+| A preview inspection fails or times out (5 s) | That inspection is left out; no preview is never a reason to allow or block. |
+| Writing the allowlist fails, or `rules.json` is broken | Nothing is written (a broken file is never rewritten); the call stays blocked, with a transcript line. |
+| `/council` registration refused (32-command cap) | A transcript line; the gate is unaffected. |
+| `/council` handler throws | The usage line is logged; the command returns no text. |
+| `/council model` probe gets an API error | The switch is refused. A timeout switches with a warning; a failing model then fails closed per review. |
+| `$.ui.notice` refused (no dialog open) | Ignored; the call still runs as allowed. |
 | Module fails to load, mod disabled, `disableAllHooks`, `--safe-mode`, `--bare` | **No gate at all.** Outside the mod's reach. |
 
 ## 5. Decisions the spec did not cover (Stage 1)
@@ -91,3 +115,23 @@ tool.call ─► classify (pure, rules only)
 8. **Stage 1 routing.** Every review goes to Gandalf until Legolas and Aragorn exist (Stage 3). The audit log records the member that actually reviewed.
 9. **Allow before bypass.** The classifier runs first; the allow tier passes before the state is read, so allow adds no state or audit I/O. Bypass then applies to gated calls only. The behaviour is the same as the spec's order.
 10. **Plain-mode notices say "Council:"**, not the plugin's name, which contains a theme word. The engine labels toasts with the plugin's name itself; that is outside the mod's reach.
+
+## 6. Decisions the spec did not cover (Stage 2)
+
+1. **The secrets scan reads gated calls only.** It sits after the allow step, as SPEC §4 orders it, so allowed calls stay free of work. A `curl` GET with a key in a header or a `git commit` is not scanned. Scanning every call is cheap (patterns only) and could be turned on if you prefer.
+2. **Allowlist entries are fingerprints.** The dialog offers `sha256:` plus 16 hex digits of the secret, so the secret never lands in `rules.json`. Hand-written exact strings (6+ characters) are honoured too. The entry is written only after a second question showing it, and only for a single finding. Cancel keeps the call blocked, which counts as a failed attempt.
+3. **Low-confidence heuristics.** Assignment values that look like code (`$X`, `process.env.X`, `getToken()`, a digit-free identifier such as `string`) and hashes (`sha512-…`, `integrity`) are not findings, so code doesn't trigger a question per write.
+4. **One question for a secret on the ask tier.** Allowing at the secrets dialog also answers the ask tier, since the dialog already showed the call and its rule. A secret on the review tier still goes to the reviewer after you allow it.
+5. **Previews on the review tier only.** SPEC §4 puts the ask step before Galadriel. Preview commands come only from the table in `members/galadriel.ts`. Git refs and remotes are validated (no leading `-`, no `..`), a `git -C`/`--git-dir`/`--work-tree` call gets no preview, and git runs with `GIT_OPTIONAL_LOCKS=0`, no prompts and no pager. The preview is redacted before it reaches a model or the dialog. File writes show `git diff --stat HEAD`.
+6. **Operation keys** (`elrond/operations.ts`). Shell keys use each gated part's verb (program plus subcommand for git, npm, docker, kubectl and similar) and its sorted targets. Arguments of path programs (`rm`, `mv`, `chmod`, …) and redirect targets are resolved lexically under the root; shell symbolic links are not resolved, as in the classifier. File tools share the `file:` family on the real path. The verb key drops the targets.
+7. **Rounds are counted, not flagged.** "Out of rounds" is `rounds ≥ 2` on the key, so no separate `awaitingUser` flag exists. "Keep blocked" leaves the rounds used up, so the next attempt asks you again; a typed instruction resets them.
+8. **What counts as a failed attempt.** It counts: a block-tier refusal, a high secret, a reviewer's revise or block, keep blocked, dismissed, nobody to ask, and a cancelled allowlist confirm. A gated call that ran and errored also counts (`toolErrorsAreWipes`). It doesn't count: a lockout refusal, "chat about this", a typed instruction. A successful run (approved, allowed once, cached or bypassed) clears its own key. The per-verb counter clears only on a new prompt.
+9. **The cache lives until your next prompt** (keyed on the prompt epoch, not `turn.start`'s `turnId`, which subagent turns would complicate). A config reload clears it too.
+10. **Shadow mode** shadows the second opinion only. Verdicts are logged with `shadow: true` and use no rounds or failed attempts; a reviewer failure, a switched-off reviewer or a spent budget passes (logged). Rules, protected paths, the ask tier, the secrets scan and lockouts still enforce. The session switch wins over the `/config` setting.
+11. **`/council model`.** A one-request probe (16 tokens) checks the model first. `--save` writes only the `gandalf` row (the only `/config` model row so far) and only picker values; anything else stays session-only and says so.
+12. **`/council` output** is drawn in a pane (`$.ui.open` from the command, so it seats at any width) where a surface draws, else as `ui.log` lines. Verified live: a plain `claude -p "/council …"` prints nothing, and in stream-json the lines arrive as `system/ui_log` messages; the command's result carries no text.
+13. **The mode label** is added to `SessionMode` (terminal and desktop). `$.ui.status` carries it only when a surface without that site (VS Code, mobile) is attached, so the terminal doesn't show it twice.
+14. **Permission-check outcomes, told apart by wording** (ROADMAP decision 12). Your refusal at Claude Code's own prompt ("The user doesn't want to proceed with this tool use…", "…take this action right now", read from the 2.1.289 binary) is `refused-by-user` and counts as a failed attempt, whatever `toolErrorsAreWipes` says. An automatic denial ("… needs approval …", verified live in `-p`; deny-rule wording) is `denied-by-permission` and never counts. Text matching neither is an ordinary tool error. The user-refusal wording is checked first.
+15. **Redaction fixes.** The assignment pattern now matches JSON-escaped quotes (`\"hunter2\"`), which Stage 1 missed in file-tool call text, and leaves an already-redacted value alone, so redacting twice is stable.
+16. **Identifiers stay as written.** Plain-mode output names member ids where you type them (`/council model gandalf …`, `[gandalf]` in the status), since they are config keys. The string table itself holds no theme text (tested).
+

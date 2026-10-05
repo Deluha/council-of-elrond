@@ -38,6 +38,9 @@ export type Finding = {
   profile?: Profile
   /** The part of the call it is about: one shell command, or the file path. */
   subject: string
+  /** The parsed shell part, and the directory it runs in (after any `cd`). */
+  part?: ShellPart
+  cwd?: string
 }
 
 export type Classification = {
@@ -197,7 +200,7 @@ export function classify(call: Call, config: CompiledConfig, context: ClassifyCo
         : strictest(shipped.map(rule => toFinding(rule, subject.label)))
     const deciding = strictest([...(decision !== undefined ? [decision] : []), ...floor])
     if (deciding === undefined || deciding.tier === 'allow') continue
-    findings.push(deciding)
+    findings.push(part !== undefined ? { ...deciding, part, cwd } : deciding)
     if (SCRIPT_RULES.test(deciding.ruleId) && subject.part !== undefined) {
       scriptPaths.push(...pathWordsOf(subject.part).filter(word => /[./]/.test(word)))
     }

@@ -6,14 +6,14 @@ import { redact } from './redact.js'
  * reasons are redacted and cut.
  */
 
-export type Decision = 'allow-once' | 'keep-blocked' | 'instruction' | 'dismissed' | 'chat' | 'unavailable'
+export type Decision = 'allow-once' | 'allowlist' | 'keep-blocked' | 'instruction' | 'dismissed' | 'chat' | 'unavailable'
 
 export type AuditRecord = {
   ts: string
   tool: string
   /** SHA-256 of the tool and its whitespace-collapsed arguments, cut to 16 hex digits. */
   fingerprint: string
-  /** The operation key, from stage 2. */
+  /** The operation key: what the call attempts, so rephrased retries share it. */
   opKey: string | null
   tier: string
   ruleId: string | null
@@ -26,8 +26,14 @@ export type AuditRecord = {
   bypass: boolean
   /** The user's answer, when the call was escalated. */
   decision: Decision | null
-  /** What happened to the call: it ran, ran and errored, or was refused. */
-  outcome: 'ran' | 'error' | 'refused'
+  /**
+   * What happened to the call: it ran, ran and errored, was refused by the
+   * council, was refused by the person at Claude Code's own permission
+   * prompt, or was denied by that check with nobody asked.
+   */
+  outcome: 'ran' | 'error' | 'refused' | 'refused-by-user' | 'denied-by-permission'
+  /** An identical call was approved earlier this prompt, so no reviewer ran. */
+  cached?: true
   latencyMs: number
   tokens: number
   /** Present for a subagent's call. */
