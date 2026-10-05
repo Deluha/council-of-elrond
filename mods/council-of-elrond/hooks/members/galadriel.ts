@@ -65,17 +65,31 @@ function pushInspections(rest: readonly string[]): Inspection[] {
   ]
 }
 
+/** Recent history, decorated so the reviewer sees which commits a remote branch already holds. */
 const HISTORY: readonly Inspection[] = [
-  { kind: 'git', label: 'recent commits', argv: ['git', 'log', '--oneline', '-n', '20', '--'] },
+  { kind: 'git', label: 'recent commits', argv: ['git', 'log', '--oneline', '--decorate=short', '-n', '20', '--'] },
   { kind: 'git', label: 'uncommitted changes', argv: ['git', 'status', '--porcelain'] },
 ]
+
+/** A merge shows the current branch and the commits it would bring in. */
+function mergeInspections(rest: readonly string[]): Inspection[] {
+  const valued = new Set(['-m', '-F', '-s', '-X', '--file', '--strategy', '--strategy-option', '--cleanup', '--into-name'])
+  const ref = positionals(rest.filter((word, i) => !valued.has(rest[i - 1] ?? ''))).find(word => SAFE_REF.test(word))
+  return [
+    { kind: 'git', label: 'current branch', argv: ['git', 'rev-parse', '--abbrev-ref', 'HEAD'] },
+    ...(ref !== undefined
+      ? [{ kind: 'git' as const, label: `commits it would bring in (HEAD..${ref})`, argv: ['git', 'log', '--oneline', '-n', '30', `HEAD..${ref}`, '--'] }]
+      : []),
+  ]
+}
 
 export type PlanContext = { root: string; cwd: string; home?: string }
 
 /**
  * The inspections for a gated call, from the table alone: deletes list their
  * targets, a push shows the branch, remote and commits it would send, a
- * reset or rebase shows recent history, a file write shows the file's diff
+ * merge the commits it would bring in, a reset, rebase or amend shows recent
+ * history (decorated with remote branches), a file write shows the file's diff
  * and whether git tracks it. Anything else has no preview.
  */
 export function planPreview(call: Call, classification: Classification, context: PlanContext): Inspection[] {
@@ -113,7 +127,8 @@ export function planPreview(call: Call, classification: Classification, context:
       const git = gitArgs(part)
       if (git === undefined) continue
       if (git.sub === 'push') plan.push(...pushInspections(git.rest))
-      else if (['reset', 'rebase'].includes(git.sub)) plan.push(...HISTORY)
+      else if (git.sub === 'merge') plan.push(...mergeInspections(git.rest))
+      else if (['reset', 'rebase'].includes(git.sub) || (git.sub === 'commit' && git.rest.includes('--amend'))) plan.push(...HISTORY)
     }
     if (plan.length >= MAX_INSPECTIONS) break
   }

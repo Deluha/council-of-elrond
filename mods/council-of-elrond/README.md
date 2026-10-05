@@ -7,10 +7,11 @@ Calls that need a second opinion go to a model reviewer, and anything uncertain 
 > catch what a pattern misses, but they never widen what the rules allow. This is not a sandbox or a
 > security product (see [What it does not protect against](#what-it-does-not-protect-against)).
 
-Status: **Stage 2 of 6.** Available now: the rules, the destructive-operations reviewer, the
-secrets scan, read-only previews, review rounds and lockout, the approve cache, escalation to you,
-`/council`, shadow mode and bypass, fail-closed handling and the audit log, all in plain mode. The
-diff, git and database reviewers, the full council and the theme follow in later stages.
+Status: **Stage 3 of 6.** Available now: the rules; three model reviewers (destructive operations,
+diffs, and git and databases) with routing between them; the secrets scan, read-only previews,
+review rounds and lockout, the approve cache, escalation to you, `/council`, shadow mode and bypass,
+fail-closed handling and the audit log, all in plain mode. The full council and the theme follow in
+later stages.
 See [ROADMAP.md](./ROADMAP.md) for what's left, [SPEC.md](./SPEC.md) for the original spec and
 [DESIGN.md](./DESIGN.md) for how it works.
 
@@ -66,6 +67,24 @@ Shipped defaults:
 
 **Approve never pre-approves.** An approved call still goes through Claude Code's normal permission
 check and prompt. The mod never takes part in the permission decision.
+
+## Reviewers
+
+A review-tier call goes to exactly one model reviewer, the one its rule names (`member` and
+`profile` in a rule). Each has a short checklist of its own and sees only what that checklist needs.
+
+| Reviewer | Takes | Sees | Checks |
+| :- | :- | :- | :- |
+| Destructive operations (Gandalf, `gandalf`) | deletes, moves, overwrites, scripts, infrastructure, anything no rule names | the call, the preview, scripts Claude wrote this session | reversibility, width, reach, backups, intent |
+| Diffs (Legolas, `legolas`) | Write, Edit, NotebookEdit | a diff built from the call against the file as it stands (cut to the diff line limit), the file's git status | matches the request, scope creep, weakened tests, disabled checks, dependency/CI/config changes, obvious breakage. No style review. |
+| Git (Aragorn, `aragorn`, profile `git`) | push, merge, rebase, reset, tag, amend and other history changes | the command, the branch, remote and commits it would send or bring in, recent history with remote branches marked, your protected branches | protected target, force, rewriting pushed history, unrelated commits |
+| Database (Aragorn, `aragorn`, profile `database`) | SQL clients, migrations, `.sql` files | the command, SQL from `-c`/`-e`/heredocs, `.sql` files it names inside the project, or a SQL file's diff; which production patterns match | rollback path, destructive DDL, UPDATE/DELETE without WHERE, production-looking target, transactions, long locks |
+
+**Gandalf is the fallback.** A call goes to Gandalf when its rule names nobody, when the named
+reviewer is switched off, when a compound command's parts name different reviewers (one specialist
+would judge only its own part), or when a rule names the diff reviewer for something with no file.
+If Gandalf is off too, the call comes to you. `/council test "<command>"` shows who would review and
+why.
 
 ## Editing rules
 
@@ -126,15 +145,15 @@ The overrides file is itself a protected path, so Claude can't edit it without a
 | Reviewer | Built-in default |
 | :- | :- |
 | Destructive operations (Gandalf) | `sonnet` |
-| Diffs (Legolas, Stage 3) | `sonnet` |
-| Git and database (Aragorn, Stage 3) | `opus` |
+| Diffs (Legolas) | `sonnet` |
+| Git and database (Aragorn, both profiles) | `opus` |
 | Full council (Stage 4) | `opus` |
 
 Aliases resolve to the newest model of that family your Claude Code build knows. A reviewer's model
 comes from the first of these that sets one:
 
 1. A session switch (`/council model gandalf opus`). Each switch is checked with one tiny request first.
-2. Its row in `/config` ("Gandalf model": `default`, `sonnet`, `opus`, `fable` or `haiku`).
+2. Its row in `/config` ("Gandalf model", "Legolas model", "Aragorn model": `default`, `sonnet`, `opus`, `fable` or `haiku`). The full council gets its row in Stage 4.
 3. `models` in the project rules file, which also takes full model IDs.
 4. The built-in default.
 
@@ -145,8 +164,12 @@ overrides the deadline.
 
 | Option | Default |
 | :- | :- |
-| Gandalf enabled | on (off: its reviews come to you) |
+| Gandalf enabled | on (off: calls only it would review come to you) |
 | Gandalf model | `default` |
+| Legolas enabled | on (off: its reviews go to Gandalf) |
+| Legolas model | `default` |
+| Aragorn enabled | on (off: its reviews go to Gandalf) |
+| Aragorn model | `default` |
 | Review deadline (seconds) | 0 (from the model) |
 | Session token budget | 1,500,000 (spent: reviews come to you) |
 | Audit log path | `.claude/council-of-elrond/audit/audit.jsonl` |
@@ -155,6 +178,7 @@ overrides the deadline.
 | Secrets scan enabled | on |
 | Read-only preview enabled | on |
 | Preview line limit | 80 |
+| Diff line limit | 200 |
 | Tool errors count as failed attempts | on |
 
 ## Commands
@@ -165,12 +189,12 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 
 | Command | What it does |
 | :- | :- |
-| `/council` | Status: mode, members and their models, verdict counts, failed attempts since your last prompt, tokens spent, median review time. |
+| `/council` | Status: mode, each member with its state, model and verdict counts, failed attempts since your last prompt, tokens spent, median review time. |
 | `/council off`, `/council on` | Bypass for this session: gated calls pass unreviewed and are logged. Never persisted. The label `council: bypass` shows by the prompt. |
 | `/council shadow on`, `/council shadow off` | Shadow mode for this session, over the `/config` setting. |
 | `/council log [n]` | The last *n* gated calls (default 10) from the audit log. |
 | `/council rules` | Every effective rule with its source (`shipped` or `project`), and the lists. |
-| `/council test "<command>"` | Which tier, rule, reviewer and operation key a shell command would get. Runs nothing. |
+| `/council test "<command>"` | Which tier, rule, reviewer (and profile, and why it fell back to Gandalf if it did) and operation key a shell command would get. Runs nothing. |
 | `/council model [<member> <model> [--save]]` | Lists each slot's model and where it came from, or switches one for this session (`default` clears the switch). `--save` also writes the `/config` row when the model is one of its picker values. |
 | `/council reload` | Reads `rules.json` again. |
 
@@ -207,7 +231,8 @@ data, and the proposed command never runs.
 
 - **Deletes** (`rm`, `find -delete`): what each target is, and a folder's entries (no process).
 - **`git push`:** the current branch, the remote's URL (redacted) and the commits it would send.
-- **`git reset`, `git rebase`:** recent commits and uncommitted changes.
+- **`git merge`:** the current branch and the commits it would bring in.
+- **`git reset`, `git rebase`, `git commit --amend`:** recent commits, marked with the remote branches that point at them, and uncommitted changes.
 - **Write, Edit:** the file's diff stat against `HEAD`, and whether git tracks it.
 
 Each inspection has 5 seconds. No preview is never a reason to allow or block.
@@ -246,9 +271,12 @@ call itself appears only as a hash. A `.gitignore` beside it keeps it out of git
 
 ## Expected token cost
 
-A review sends roughly 1,000–4,000 input tokens (checklist, the call cut to 200 lines, your latest
-prompt) and receives roughly 100–300 output tokens, plus thinking on Sonnet, Opus and Fable at low
-effort. Allowed calls cost nothing. Check current prices for the models you choose.
+A review sends roughly 1,000–4,000 input tokens (checklist, the call or diff cut to its line limit,
+the preview, your latest prompt) and receives roughly 100–300 output tokens, plus thinking on
+Sonnet, Opus and Fable at low effort. In a live check, small reviews took about 1,000 tokens each:
+a one-line file write (diffs, Sonnet) in 1.6 s, a `git tag` (git, Opus) in 2.8 s and a `psql -c`
+(database, Opus) in 2.4 s. Allowed calls cost nothing. Check current prices for the models you
+choose.
 
 ## Known gaps in shell parsing
 
@@ -266,6 +294,8 @@ Parsing is best effort, by pattern, and not a shell.
 
 - Anything outside tool calls: what Claude says, files it reads, network requests other tools make.
 - A mod that fails to load, a disabled mod, `disableAllHooks`, `--safe-mode` or `--bare`: then nothing is gated.
+- **Diffs are built from the call, not from git.** The diff reviewer sees the change the call describes against the file as it stands when the hook runs; a file over 4 MiB, or one it can't read, is shown as the call's own text only, and the prompt says so.
+- **The database reviewer sees only the SQL it can find**: inline `-c`/`-e`, heredocs, and `.sql` files named in the command and inside the project. A migration tool's own migration files (`prisma migrate deploy`) are not looked up.
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.
 - Rules you loosen, and calls you allow.
 - **Secrets in allowed calls.** The secrets scan reads gated calls only: it sits after the allow step, as the spec orders it. A `curl` GET with a key in a header, or a `git commit`, is not scanned.

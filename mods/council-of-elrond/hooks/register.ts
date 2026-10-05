@@ -8,7 +8,7 @@ import { OVERRIDES_PATH } from './config/defaults.js'
 import { loadConfig, MODEL_ID } from './config/schema.js'
 import type { LoadedConfig } from './config/schema.js'
 import { MODEL_SLOTS } from './config/types.js'
-import type { ModelSlot } from './config/types.js'
+import type { MemberName, ModelSlot } from './config/types.js'
 import { withAllowlistEntry } from './config/write.js'
 import type { FileEdit } from './config/write.js'
 import { isSlot, logOutput, modelsOutput, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
@@ -33,11 +33,18 @@ import {
 import type { WipePolicy } from './elrond/operations.js'
 import { refusalText } from './elrond/refusal.js'
 import type { Refusal } from './elrond/refusal.js'
+import { route } from './elrond/routing.js'
+import type { Enabled, Seat } from './elrond/routing.js'
+import { ARAGORN_LIMITS, productionHits, sqlOf } from './members/aragorn.js'
+import type { SqlPiece } from './members/aragorn.js'
+import { requestOf, whoOf } from './members/brief.js'
+import type { Brief } from './members/brief.js'
 import { formatPreview, INSPECTION_TIMEOUT_MS, MAX_LISTED, planPreview } from './members/galadriel.js'
 import type { Inspection, InspectionResult } from './members/galadriel.js'
-import { GANDALF_LIMITS, gandalfPrompt, gandalfSystem } from './members/gandalf.js'
-import type { GandalfContext } from './members/gandalf.js'
+import { GANDALF_LIMITS } from './members/gandalf.js'
 import { patternsWith, scanCall } from './members/gollum.js'
+import { callDiff } from './members/legolas.js'
+import type { CallDiff, Current } from './members/legolas.js'
 import type { GollumFinding } from './members/gollum.js'
 import { newNonce, parseVerdict, truncate } from './members/shared.js'
 import type { Verdict } from './members/shared.js'
@@ -45,7 +52,7 @@ import { redact } from './redact.js'
 import type { SecretPattern } from './redact.js'
 import { classify, FILE_PATH_FIELDS, SHELL_TOOLS } from './rules/classify.js'
 import type { Call, Classification } from './rules/classify.js'
-import { isInside, resolve } from './rules/paths.js'
+import { isInside, relativeTo, resolve } from './rules/paths.js'
 import {
   addReviewTime,
   addTokens,
@@ -60,6 +67,7 @@ import {
   withSessionModel,
   withShadow,
 } from './state.js'
+import type { CouncilSession } from '../types'
 import { text } from './strings.js'
 import type { StringKey } from './strings.js'
 
@@ -90,7 +98,11 @@ const COMMAND = 'council'
 const PANE_ID = 'council'
 
 /** The `/config` row a `--save` writes, per slot that has one. */
-const CONFIG_ROWS: Readonly<Partial<Record<ModelSlot, string>>> = { gandalf: 'council-of-elrond.gandalfModel' }
+const CONFIG_ROWS: Readonly<Partial<Record<ModelSlot, string>>> = {
+  gandalf: 'council-of-elrond.gandalfModel',
+  legolas: 'council-of-elrond.legolasModel',
+  aragorn: 'council-of-elrond.aragornModel',
+}
 
 /** What the `/config` model picker offers; anything else is session-only. */
 const PICKER_OPTIONS: readonly string[] = ['default', 'sonnet', 'opus', 'fable', 'haiku']
@@ -103,6 +115,11 @@ const PROBE_TIMEOUT_MS = 20_000
 type Settings = {
   gandalfEnabled: boolean
   gandalfModel: string
+  legolasEnabled: boolean
+  legolasModel: string
+  aragornEnabled: boolean
+  aragornModel: string
+  diffLines: number
   reviewDeadlineSeconds: number
   tokenBudget: number
   auditLogPath: string
@@ -114,9 +131,16 @@ type Settings = {
   galadrielEnabled: boolean
 }
 
+const modelSetting = (value: unknown): string => (typeof value === 'string' ? value : 'default')
+
 const settingsOf = (options: PluginOptions): Settings => ({
   gandalfEnabled: options.gandalfEnabled !== false,
-  gandalfModel: typeof options.gandalfModel === 'string' ? options.gandalfModel : 'default',
+  gandalfModel: modelSetting(options.gandalfModel),
+  legolasEnabled: options.legolasEnabled !== false,
+  legolasModel: modelSetting(options.legolasModel),
+  aragornEnabled: options.aragornEnabled !== false,
+  aragornModel: modelSetting(options.aragornModel),
+  diffLines: typeof options.diffLines === 'number' ? options.diffLines : 200,
   reviewDeadlineSeconds: typeof options.reviewDeadlineSeconds === 'number' ? options.reviewDeadlineSeconds : 0,
   tokenBudget: typeof options.tokenBudget === 'number' ? options.tokenBudget : 1_500_000,
   auditLogPath:
@@ -153,6 +177,16 @@ let isGitignoreChecked = false
 const warned = new Set<string>()
 
 const wipePolicy = (): WipePolicy => ({ toolErrors: settings.toolErrorsAreWipes })
+
+const enabledMembers = (): Enabled => ({
+  gandalf: settings.gandalfEnabled,
+  legolas: settings.legolasEnabled,
+  aragorn: settings.aragornEnabled,
+})
+
+/** The /config row's model for a slot; the full council has none yet. */
+const settingsModel = (slot: ModelSlot): string | undefined =>
+  slot === 'gandalf' ? settings.gandalfModel : slot === 'legolas' ? settings.legolasModel : slot === 'aragorn' ? settings.aragornModel : undefined
 
 function warnOnce($: EngineInterface, key: string, line: string, toast?: string): void {
   if (warned.has(key)) return
@@ -277,23 +311,106 @@ async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: C
   return preview === undefined ? undefined : redact(preview, ctx.patterns)
 }
 
-async function reviewByGandalf(
+/**
+ * What a file tool would change, as a diff against the file as it stands,
+ * redacted. Reading the file is the only I/O; nothing runs.
+ */
+async function fileDiffOf($: EngineInterface, call: Call, cwd: string, realPath: string | undefined, ctx: Context): Promise<{ path: string; diff: CallDiff } | undefined> {
+  const field = FILE_PATH_FIELDS[call.tool]
+  const given = field === undefined ? undefined : call.input[field]
+  if (field === undefined) return undefined
+  if (typeof given !== 'string') return { path: '(no path)', diff: callDiff(call, '(no path)', { state: 'unreadable' }, settings.diffLines) }
+  const absolute = realPath ?? resolve(given, cwd, ctx.home)
+  const path = relativeTo(absolute, ctx.root) || absolute
+  let current: Current
+  if (!(await $.fs.exists(absolute).catch(() => true))) {
+    current = { state: 'missing' }
+  } else {
+    const content = await $.fs.read(absolute).catch(() => undefined)
+    current = typeof content === 'string' ? { state: 'text', text: content } : { state: 'unreadable' }
+  }
+  const diff = callDiff(call, path, current, settings.diffLines)
+  return { path, diff: { ...diff, diff: redact(diff.diff, ctx.patterns) } }
+}
+
+/** The `.sql` files a database call names, read when they sit inside the project, redacted and cut. */
+async function sqlFilesOf($: EngineInterface, files: readonly { word: string; cwd?: string }[], cwd: string, ctx: Context): Promise<SqlPiece[]> {
+  const pieces: SqlPiece[] = []
+  for (const file of files) {
+    const path = resolve(file.word.replace(/^['"]|['"]$/g, ''), file.cwd ?? cwd, ctx.home)
+    if (!isInside(path, ctx.root)) continue
+    // Inside by name is not enough: a link may land outside the project.
+    const real = (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath
+    if (real === undefined || !isInside(real, ctx.realRoot)) continue
+    const content = await $.fs.read(real).catch(() => undefined)
+    if (typeof content === 'string') {
+      pieces.push({ label: relativeTo(path, ctx.root) ?? path, text: redact(truncate(content, ARAGORN_LIMITS.sqlLines, ARAGORN_LIMITS.sqlChars), ctx.patterns) })
+    }
+  }
+  return pieces
+}
+
+/** What the seated member is given: the context its profile asks for, and nothing else. */
+async function briefOf(
   $: EngineInterface,
-  gandalf: GandalfContext,
-  model: string,
-  deadlineMs: number,
-  signal: AbortSignal,
-): Promise<Review> {
+  seat: Seat,
+  call: Call,
+  classification: Classification,
+  cwd: string,
+  realPath: string | undefined,
+  state: CouncilSession,
+  preview: string | undefined,
+  ctx: Context,
+): Promise<Brief> {
+  const ruleReasons = [...new Set(classification.findings.map(finding => finding.reason))]
+  const shown = callText(call, ctx.patterns)
+  const latestPrompt = state.latestPrompt
+  const withPreview = preview !== undefined ? { preview } : {}
+  // Routing seats the diff reviewer on file tools only, which always have a diff.
+  const file = seat.member === 'gandalf' || seat.profile === 'git' ? undefined : await fileDiffOf($, call, cwd, realPath, ctx)
+  if (seat.member === 'legolas' && file !== undefined) {
+    return { member: 'legolas', context: { tool: call.tool, path: file.path, diff: file.diff, ruleReasons, latestPrompt, ...withPreview } }
+  }
+  if (seat.member === 'aragorn' && seat.profile === 'git') {
+    return {
+      member: 'aragorn',
+      profile: 'git',
+      context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, protectedBranches: ctx.loaded.compiled.config.protectedBranches, ...withPreview },
+    }
+  }
+  if (seat.member === 'aragorn') {
+    const found = sqlOf(classification)
+    const inline = found.inline.map(piece => ({ label: piece.label, text: redact(piece.text, ctx.patterns) }))
+    const sql = [...inline, ...(await sqlFilesOf($, found.files, cwd, ctx))]
+    const production = productionHits([shown, ...sql.map(piece => piece.text)].join('\n'), ctx.loaded.compiled.production)
+    return {
+      member: 'aragorn',
+      profile: 'database',
+      context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, sql, production, ...(file !== undefined && { diff: file.diff }) },
+    }
+  }
+  const scripts = await scriptsOf($, classification, cwd, state.written, ctx)
+  return { member: 'gandalf', context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, scripts, ...withPreview } }
+}
+
+/**
+ * One model review, for any member: its own system prompt and prompt, the
+ * model's request settings, a deadline passed as the call's own timeout,
+ * and the strict verdict parse. Every failure is a review without a verdict.
+ */
+async function review($: EngineInterface, brief: Brief, model: string, deadlineMs: number, signal: AbortSignal): Promise<Review> {
   const nonce = newNonce()
-  const profile = profileOf(model)
+  const request = requestOf(brief, nonce)
+  const limits = profileOf(model)
+  const who = text(whoOf(brief.member, brief.profile))
   try {
     const reply = await $.model.complete(
       {
         model,
-        system: gandalfSystem(nonce),
-        prompt: gandalfPrompt(gandalf, nonce),
-        maxTokens: profile.maxTokens,
-        ...(profile.effort !== undefined && { effort: profile.effort }),
+        system: request.system,
+        prompt: request.prompt,
+        maxTokens: limits.maxTokens,
+        ...(limits.effort !== undefined && { effort: limits.effort }),
         timeoutMs: deadlineMs,
       },
       { signal },
@@ -309,7 +426,7 @@ async function reviewByGandalf(
             ? `the API answered with an error (${reply.error})`
             : 'it gave an empty reply'
       if (reply.reason === 'api-error' && ['model_not_found', 'invalid_request', 'authentication_failed'].includes(reply.error)) {
-        warnOnce($, `model:${model}`, text('notice.modelFailed', { who: text('who.gandalf'), model, problem }))
+        warnOnce($, `model:${model}`, text('notice.modelFailed', { who, model, problem }))
       }
       return { ok: false, problem, model, tokens }
     }
@@ -319,7 +436,7 @@ async function reviewByGandalf(
       : { ok: false, problem: `malformed verdict: ${parsed.problem}`, model, tokens }
   } catch (error) {
     const problem = `the request was refused: ${error instanceof Error ? error.message : String(error)}`
-    warnOnce($, `model:${model}`, text('notice.modelFailed', { who: text('who.gandalf'), model, problem }))
+    warnOnce($, `model:${model}`, text('notice.modelFailed', { who, model, problem }))
     return { ok: false, problem, model, tokens: 0 }
   }
 }
@@ -435,8 +552,9 @@ async function probeModel($: EngineInterface, model: string): Promise<{ ok: true
 function modelChoice(slot: ModelSlot, ctx: Context, sessionModels: Readonly<Partial<Record<ModelSlot, string>>>): ModelChoice {
   const project = ctx.loaded.compiled.config.models[slot]
   const sessionModel = sessionModels[slot]
+  const row = settingsModel(slot)
   return resolveModel(slot, {
-    ...(slot === 'gandalf' && { settings: settings.gandalfModel }),
+    ...(row !== undefined && { settings: row }),
     ...(project !== undefined && { project }),
     ...(sessionModel !== undefined && { session: sessionModel }),
   })
@@ -490,7 +608,11 @@ async function councilOutput($: EngineInterface, command: CouncilCommand): Promi
       return statusOutput({
         session: state,
         mode,
-        gandalf: { enabled: settings.gandalfEnabled, choice: modelChoice('gandalf', ctx, state.models) },
+        members: {
+          gandalf: { enabled: settings.gandalfEnabled, choice: modelChoice('gandalf', ctx, state.models) },
+          legolas: { enabled: settings.legolasEnabled, choice: modelChoice('legolas', ctx, state.models) },
+          aragorn: { enabled: settings.aragornEnabled, choice: modelChoice('aragorn', ctx, state.models) },
+        },
         gollumEnabled: settings.gollumEnabled,
         galadrielEnabled: settings.galadrielEnabled,
         tokenBudget: settings.tokenBudget,
@@ -527,7 +649,12 @@ async function councilOutput($: EngineInterface, command: CouncilCommand): Promi
       const classification = classify(call, ctx.loaded.compiled, where)
       const operation = classification.tier === 'allow' ? undefined : operationOf(call, classification, where)
       const state = sessionOf(await read($, session))
-      return testOutput(redact(command.command, ctx.patterns), classification, operation, modelChoice('gandalf', ctx, state.models))
+      const seated = classification.tier === 'review' ? route(call, classification, enabledMembers()) : undefined
+      const reviewer =
+        seated === undefined
+          ? undefined
+          : { route: seated, ...(seated.kind === 'member' && { choice: modelChoice(seated.member, ctx, state.models) }) }
+      return testOutput(redact(command.command, ctx.patterns), classification, operation, reviewer)
     }
     case 'models': {
       const ctx = await contextOf($)
@@ -564,12 +691,6 @@ function callText(call: Call, patterns: readonly SecretPattern[]): string {
 function callOf(e: Readonly<Record<string, unknown>>): Call {
   const { tool, tool_use_id: _id, agentId: _agent, consent: _consent, ...input } = e
   return { tool: String(tool), input }
-}
-
-const MEMBER_WHO: Readonly<Record<string, StringKey>> = {
-  gandalf: 'who.gandalf',
-  legolas: 'who.legolas',
-  aragorn: 'who.aragorn',
 }
 
 export const register: Register = (on, options) => {
@@ -660,7 +781,11 @@ export const register: Register = (on, options) => {
     const decided = classification.decided
     const shadow = isShadow(state, settings.shadowMode)
     const shownCall = `${call.tool}: ${callText(call, ctx.patterns)}`
-    let member: string | null = classification.tier === 'review' ? 'gandalf' : null
+    // Who reviews a review-tier call: the rule's member, or the fallback (pure).
+    const seated = classification.tier === 'review' ? route(call, classification, enabledMembers()) : undefined
+    const routedMember: MemberName | null = seated === undefined ? null : seated.kind === 'member' ? seated.member : seated.wanted.member
+    let member: string | null = routedMember
+    let profile: string | null = seated === undefined ? null : ((seated.kind === 'member' ? seated.profile : seated.wanted.profile) ?? null)
     let model: string | null = null
     let tokens = 0
     let verdictText: string | null = null
@@ -681,7 +806,7 @@ export const register: Register = (on, options) => {
         tier: classification.tier,
         ruleId: decided?.ruleId ?? null,
         member,
-        profile: decided?.profile ?? null,
+        profile,
         model,
         verdict: verdictText,
         reason: reasonText,
@@ -834,7 +959,7 @@ export const register: Register = (on, options) => {
         const answer = await putToUser('escalate.secretLow', [], scan.low)
         if (answer !== 'allowed') return answer
         isAllowedByUser = true
-        member = classification.tier === 'review' ? 'gandalf' : null
+        member = routedMember
       }
     }
 
@@ -855,48 +980,39 @@ export const register: Register = (on, options) => {
     // 8. The read-only preview, for the reviewer and the user.
     if (settings.galadrielEnabled) preview = await previewOf($, planPreview(call, classification, where), ctx)
 
-    // 9-10. Stage 2 seats Gandalf alone: every review goes to him.
+    // 9. Route: the rule's member, else the fallback; nobody on means the user decides.
     if (isOutOfRounds(state, operation.key) && !shadow) return askUser('escalate.rounds', [])
-    if (!settings.gandalfEnabled) return shadow ? passInShadow() : askUser('escalate.memberOff', [])
+    if (seated === undefined || seated.kind === 'none') return shadow ? passInShadow() : askUser('escalate.memberOff', [])
     if (state.tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
 
-    const choice = modelChoice('gandalf', ctx, state.models)
+    // 10. Review, and act on the verdict.
+    const brief = await briefOf($, seated, call, classification, cwd, realPath, state, preview, ctx)
+    const who = whoOf(brief.member, brief.profile)
+    member = brief.member
+    profile = brief.profile ?? null
+    const choice = modelChoice(brief.member, ctx, state.models)
     model = choice.model
-    const scripts = await scriptsOf($, classification, cwd, state.written, ctx)
     const reviewStarted = Date.now()
-    const review = await reviewByGandalf(
-      $,
-      {
-        tool: call.tool,
-        call: callText(call, ctx.patterns),
-        ruleReasons: [...new Set(classification.findings.map(finding => finding.reason))],
-        latestPrompt: state.latestPrompt,
-        scripts,
-        ...(preview !== undefined && { preview }),
-      },
-      choice.model,
-      deadlineFor(choice.model, settings.reviewDeadlineSeconds),
-      next.signal,
-    )
+    const verdict = await review($, brief, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), next.signal)
     const reviewMs = Date.now() - reviewStarted
-    tokens = review.tokens
+    tokens = verdict.tokens
     isShadowed = shadow
     await update($, session, value => {
-      const spent = addReviewTime(addTokens(sessionOf(value), review.tokens), reviewMs)
-      const counted = count(spent, 'gandalf', review.ok ? review.verdict.verdict : 'failed')
+      const spent = addReviewTime(addTokens(sessionOf(value), verdict.tokens), reviewMs)
+      const counted = count(spent, brief.member, verdict.ok ? verdict.verdict.verdict : 'failed')
       // A round is a verdict that enforces: in shadow, verdicts only log.
-      return review.ok && !shadow ? noteRound(counted, operation.key, review.verdict.verdict === 'approve') : counted
+      return verdict.ok && !shadow ? noteRound(counted, operation.key, verdict.verdict.verdict === 'approve') : counted
     })
 
-    if (!review.ok) {
+    if (!verdict.ok) {
       verdictText = 'failed'
-      reasonText = review.problem
-      return shadow ? passInShadow() : askUser('escalate.failed', [{ who: 'who.gandalf', problem: review.problem }])
+      reasonText = verdict.problem
+      return shadow ? passInShadow() : askUser('escalate.failed', [{ who, problem: verdict.problem }])
     }
 
-    verdictText = review.verdict.verdict
-    reasonText = review.verdict.reason
-    if (review.verdict.verdict === 'approve') {
+    verdictText = verdict.verdict.verdict
+    reasonText = verdict.verdict.reason
+    if (verdict.verdict.verdict === 'approve') {
       await update($, session, value => {
         const current = sessionOf(value)
         return { ...current, cache: cacheApprove(current.cache, fingerprint) }
@@ -904,18 +1020,10 @@ export const register: Register = (on, options) => {
       return finish(await proceed())
     }
     if (shadow) {
-      $.ui.log(text('notice.shadowVerdict', { who: text('who.gandalf'), verdict: review.verdict.verdict, tool: call.tool }), { to: 'debug' })
+      $.ui.log(text('notice.shadowVerdict', { who: text(who), verdict: verdict.verdict.verdict, tool: call.tool }), { to: 'debug' })
       return passInShadow()
     }
-    return refuse(
-      {
-        who: MEMBER_WHO.gandalf ?? 'who.gandalf',
-        verdict: review.verdict.verdict,
-        reason: review.verdict.reason,
-        alternative: review.verdict.safer_alternative,
-      },
-      true,
-    )
+    return refuse({ who, verdict: verdict.verdict.verdict, reason: verdict.verdict.reason, alternative: verdict.verdict.safer_alternative }, true)
   }).catch(($, e, next) =>
     // A failure after the call ran replays its result; one before it refuses.
     next.called

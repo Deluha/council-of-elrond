@@ -1,7 +1,8 @@
 import type { CouncilSession } from '../../types'
 import type { CompiledConfig } from '../config/schema.js'
-import { MODEL_SLOTS, TIERS } from '../config/types.js'
-import type { ModelSlot } from '../config/types.js'
+import { MEMBERS, MODEL_SLOTS, TIERS } from '../config/types.js'
+import type { MemberName, ModelSlot } from '../config/types.js'
+import { whoOf } from '../members/brief.js'
 import type { Classification } from '../rules/classify.js'
 import { median } from '../state.js'
 import { text } from '../strings.js'
@@ -9,6 +10,7 @@ import type { StringKey } from '../strings.js'
 import type { ModelChoice } from './models.js'
 import type { Operation } from './operations.js'
 import { KEY_WIPE_CAP } from './operations.js'
+import type { Route, Seat } from './routing.js'
 
 /**
  * `/council`: one command, its subcommands parsed from the raw argument
@@ -98,7 +100,7 @@ export const WHO_OF_SLOT: Readonly<Record<ModelSlot, StringKey>> = {
 export type StatusInput = {
   session: CouncilSession
   mode: 'enforcing' | 'shadow' | 'bypass'
-  gandalf: { enabled: boolean; choice: ModelChoice }
+  members: Readonly<Record<MemberName, { enabled: boolean; choice: ModelChoice }>>
   gollumEnabled: boolean
   galadrielEnabled: boolean
   tokenBudget: number
@@ -108,7 +110,6 @@ const ZERO_COUNTS = { approved: 0, revised: 0, blocked: 0, failed: 0 }
 
 export function statusOutput(input: StatusInput): Output {
   const { session } = input
-  const counts = session.counts.gandalf ?? ZERO_COUNTS
   const ops = Object.values(session.ops)
   const wipes = Object.values(session.verbWipes).reduce((sum, n) => sum + n, 0)
   const typical = median(session.reviewMs)
@@ -118,16 +119,16 @@ export function statusOutput(input: StatusInput): Output {
     lines: [
       text('cmd.mode', { mode: text(`cmd.mode.${input.mode}`) }),
       text('cmd.members'),
-      text('cmd.member', {
-        who: text('who.gandalf'),
-        id: 'gandalf',
-        state: onOff(input.gandalf.enabled),
-        model: input.gandalf.choice.model,
-        source: input.gandalf.choice.source,
-        ...counts,
-      }),
-      text('cmd.memberLater', { who: text('who.legolas'), id: 'legolas' }),
-      text('cmd.memberLater', { who: text('who.aragorn'), id: 'aragorn' }),
+      ...MEMBERS.map(member =>
+        text('cmd.member', {
+          who: text(whoOf(member)),
+          id: member,
+          state: onOff(input.members[member].enabled),
+          model: input.members[member].choice.model,
+          source: input.members[member].choice.source,
+          ...(session.counts[member] ?? ZERO_COUNTS),
+        }),
+      ),
       text('cmd.memberCode', { who: text('who.gollum'), state: onOff(input.gollumEnabled) }),
       text('cmd.memberCode', { who: text('who.galadriel'), state: onOff(input.galadrielEnabled) }),
       text('cmd.attempts', { count: wipes, ops: ops.length, locked: ops.filter(op => op.wipes >= KEY_WIPE_CAP).length }),
@@ -189,7 +190,13 @@ export function rulesOutput(compiled: CompiledConfig, origin: string, errors: re
   }
 }
 
-export function testOutput(command: string, classification: Classification, operation: Operation | undefined, reviewer: ModelChoice | undefined): Output {
+/** A seat as typed in config: `aragorn/git`, `gandalf`. */
+const seatId = (seat: Seat): string => (seat.profile !== undefined ? `${seat.member}/${seat.profile}` : seat.member)
+
+/** Who would review, for `/council test`: the route, and the model of the member it seats. */
+export type Reviewer = { route: Route; choice?: ModelChoice }
+
+export function testOutput(command: string, classification: Classification, operation: Operation | undefined, reviewer: Reviewer | undefined): Output {
   const decided = classification.decided
   const lines = [text('cmd.testTier', { tier: classification.tier })]
   if (decided === undefined) {
@@ -199,9 +206,22 @@ export function testOutput(command: string, classification: Classification, oper
       lines.push(text('cmd.testFinding', { subject: finding.subject, tier: finding.tier, rule: finding.ruleId, source: finding.source, reason: finding.reason }))
     }
     if (classification.tier === 'review' && reviewer !== undefined) {
-      // Stage 2 seats the destructive-operations reviewer alone; the rule's own choice is shown beside it.
-      const asked = decided.member !== undefined && decided.member !== 'gandalf' ? ` (rule names ${decided.member}${decided.profile !== undefined ? `/${decided.profile}` : ''})` : ''
-      lines.push(text('cmd.testReviewer', { who: text('who.gandalf'), id: 'gandalf', profile: asked, model: reviewer.model, source: reviewer.source }))
+      const { route } = reviewer
+      const wanted = route.wanted !== undefined ? `${text(whoOf(route.wanted.member, route.wanted.profile))} [${seatId(route.wanted)}]` : ''
+      if (route.kind === 'none') {
+        lines.push(text('cmd.testNoReviewer', { wanted }))
+      } else {
+        lines.push(
+          text('cmd.testReviewer', {
+            who: text(whoOf(route.member, route.profile)),
+            id: route.member,
+            profile: route.profile !== undefined ? `/${route.profile}` : '',
+            model: reviewer.choice?.model ?? '-',
+            source: reviewer.choice?.source ?? '-',
+          }),
+        )
+        if (route.fallback !== undefined) lines.push(text('cmd.testFallback', { wanted, why: text(`route.${route.fallback}`) }))
+      }
     }
     if (operation !== undefined) lines.push(text('cmd.testOperation', { key: operation.key }))
   }
