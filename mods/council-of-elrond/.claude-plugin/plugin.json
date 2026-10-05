@@ -1,0 +1,60 @@
+{
+  "name": "council-of-elrond",
+  "version": "0.1.0",
+  "description": "A council of specialist reviewers that gates risky tool calls before they run. Rules decide the tier; model members give a second opinion; anything uncertain comes to you.",
+  "author": {
+    "name": "council-of-elrond"
+  },
+  "keywords": ["safety", "review", "gate", "tool-call"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "gandalfEnabled": {
+      "type": "boolean",
+      "title": "Gandalf (destructive operations) enabled",
+      "description": "Off: calls Gandalf would review go straight to you instead.",
+      "required": false,
+      "default": true
+    },
+    "gandalfModel": {
+      "type": "string",
+      "title": "Gandalf model",
+      "description": "\"default\" uses the project rules file's choice, else the built-in default (sonnet).",
+      "required": false,
+      "default": "default",
+      "options": ["default", "sonnet", "opus", "fable", "haiku"]
+    },
+    "reviewDeadlineSeconds": {
+      "type": "number",
+      "title": "Review deadline (seconds)",
+      "description": "How long one model review may take before it counts as a block and comes to you. 0 picks a deadline from the model (sonnet 30, opus 45, fable 90).",
+      "required": false,
+      "default": 0,
+      "min": 0,
+      "max": 600
+    },
+    "tokenBudget": {
+      "type": "number",
+      "title": "Session token budget",
+      "description": "Tokens all reviewers may spend in one session. Once spent, gated calls come to you.",
+      "required": false,
+      "default": 1500000,
+      "min": 0
+    },
+    "auditLogPath": {
+      "type": "string",
+      "title": "Audit log path",
+      "description": "JSONL audit log, relative to the project root unless absolute.",
+      "required": false,
+      "default": ".claude/council-of-elrond/audit/audit.jsonl"
+    },
+    "auditMaxKb": {
+      "type": "number",
+      "title": "Audit log size before rotation (KB)",
+      "description": "The log rotates past this size; three files are kept.",
+      "required": false,
+      "default": 1024,
+      "min": 16,
+      "max": 3072
+    }
+  }
+}
