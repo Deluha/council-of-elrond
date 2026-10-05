@@ -2,7 +2,7 @@
 
 A Claude Code mod: a council of specialist reviewers that gates risky tool calls before they run.
 
-- The mod: [`mods/council-of-elrond`](mods/council-of-elrond) ([README](mods/council-of-elrond/README.md), [design](mods/council-of-elrond/DESIGN.md))
+- The mod: [`mods/council-of-elrond`](mods/council-of-elrond) ([README](mods/council-of-elrond/README.md), [design](mods/council-of-elrond/DESIGN.md), [roadmap](mods/council-of-elrond/ROADMAP.md), [spec](mods/council-of-elrond/SPEC.md))
 - Claude Code's generated API types for the build it targets: `mods/types/claude-code.d.ts`
 
 ```

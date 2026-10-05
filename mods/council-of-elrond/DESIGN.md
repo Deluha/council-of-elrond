@@ -1,6 +1,7 @@
 # council-of-elrond: design
 
 Status: **Stage 1** (Elrond, rules, Gandalf, escalation, fail-closed paths, audit log; plain mode).
+What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
 Built and checked against Claude Code **2.1.289**; its generated API types are vendored at
 `mods/types/claude-code.d.ts` and are the source of truth over docs, samples and the spec.
 

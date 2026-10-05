@@ -9,8 +9,9 @@ Calls that need a second opinion go to a model reviewer, and anything uncertain 
 
 Status: **Stage 1 of 6.** Available now: the rules, the destructive-operations reviewer, escalation
 to you, fail-closed handling and the audit log, all in plain mode. Commands, the secrets scanner,
-previews, rounds, shadow mode, the other reviewers and the theme follow in later stages
-([DESIGN.md](./DESIGN.md)).
+previews, rounds, shadow mode, the other reviewers and the theme follow in later stages.
+See [ROADMAP.md](./ROADMAP.md) for what's left, [SPEC.md](./SPEC.md) for the original spec and
+[DESIGN.md](./DESIGN.md) for how it works.
 
 ## Loading it
 
