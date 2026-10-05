@@ -2,7 +2,6 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   isOutOfRounds,
-  isPermissionDenial,
   isWipeOutcome,
   lockoutOf,
   noteRound,
@@ -109,22 +108,25 @@ describe('rounds and failed attempts', () => {
 })
 
 describe('outcomes', () => {
-  test('a permission-prompt refusal is told apart from a tool error', () => {
+  const USER = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed."
+  const AUTO = "rm in '/work/build' needs approval. The path is inside the working directories for this session ('/work'), and Claude Code asks before a shell command creates, changes or removes files there."
+
+  test('the person refusing at the prompt is told apart from an automatic denial and a tool error', () => {
     expect(outcomeOf({ result: 'x' } as never)).toBe('ran')
     expect(outcomeOf({ deny: 'no' })).toBe('refused')
     expect(outcomeOf({ isError: true, text: 'exit code 1' })).toBe('error')
-    expect(outcomeOf({ isError: true, text: "Claude requested permissions to use Bash, but you haven't granted it yet." })).toBe(
-      'denied-by-permission',
-    )
-    expect(isPermissionDenial("The user doesn't want to proceed with this tool use.")).toBe(true)
+    expect(outcomeOf({ isError: true, text: USER })).toBe('refused-by-user')
+    expect(outcomeOf({ isError: true, text: "The user doesn't want to take this action right now. STOP what you are doing." })).toBe('refused-by-user')
+    expect(outcomeOf({ isError: true, text: AUTO })).toBe('denied-by-permission')
+    expect(outcomeOf({ isError: true, text: 'Permission to use Bash has been denied.' })).toBe('denied-by-permission')
   })
 
-  test('which outcomes count follows the policy', () => {
-    const policy = { toolErrors: true, permissionDenials: false }
-    expect(isWipeOutcome('error', policy)).toBe(true)
-    expect(isWipeOutcome('denied-by-permission', policy)).toBe(false)
-    expect(isWipeOutcome('error', { ...policy, toolErrors: false })).toBe(false)
-    expect(isWipeOutcome('denied-by-permission', { ...policy, permissionDenials: true })).toBe(true)
-    expect(isWipeOutcome('ran', policy)).toBe(false)
+  test('the person refusing counts; an automatic denial never does', () => {
+    for (const toolErrors of [true, false]) {
+      expect(isWipeOutcome('refused-by-user', { toolErrors })).toBe(true)
+      expect(isWipeOutcome('denied-by-permission', { toolErrors })).toBe(false)
+      expect(isWipeOutcome('ran', { toolErrors })).toBe(false)
+      expect(isWipeOutcome('error', { toolErrors })).toBe(toolErrors)
+    }
   })
 })

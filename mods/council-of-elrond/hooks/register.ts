@@ -100,13 +100,6 @@ const GIT_ENV: Record<string, string> = { GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_
 
 const PROBE_TIMEOUT_MS = 20_000
 
-/**
- * Whether a refusal at Claude Code's own permission prompt, after the
- * council let the call through, counts as a failed attempt. Pending the
- * user's decision (ROADMAP open question); off until then.
- */
-const PERMISSION_DENIALS_ARE_WIPES = false
-
 type Settings = {
   gandalfEnabled: boolean
   gandalfModel: string
@@ -159,7 +152,7 @@ let auditQueue: Promise<void> = Promise.resolve()
 let isGitignoreChecked = false
 const warned = new Set<string>()
 
-const wipePolicy = (): WipePolicy => ({ toolErrors: settings.toolErrorsAreWipes, permissionDenials: PERMISSION_DENIALS_ARE_WIPES })
+const wipePolicy = (): WipePolicy => ({ toolErrors: settings.toolErrorsAreWipes })
 
 function warnOnce($: EngineInterface, key: string, line: string, toast?: string): void {
   if (warned.has(key)) return

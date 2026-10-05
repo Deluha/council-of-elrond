@@ -10,7 +10,7 @@ How to finish the mod from where it stands, written so a new dev session can pic
 | :- | :- | :- |
 | 0 | Research, plan | ✅ Done ([DESIGN.md §1](./DESIGN.md)) |
 | 1 | Elrond, rules, Gandalf, escalation, fail-closed paths, audit log (plain mode) | ✅ Done: [Deluha/council-of-elrond#1](https://github.com/Deluha/council-of-elrond/pull/1) |
-| 2 | Gollum, Galadriel, operation keys, rounds, wipes, cache, commands, shadow mode | ✅ Done (one switch pending the open question below) |
+| 2 | Gollum, Galadriel, operation keys, rounds, wipes, cache, commands, shadow mode | ✅ Done: [Deluha/council-of-elrond#2](https://github.com/Deluha/council-of-elrond/pull/2) |
 | 3 | Legolas, Aragorn (git and database profiles), routing | ⬜ Next |
 | 4 | Full council with Gimli | ⬜ |
 | 5 | Rule and allowlist suggestions, `/council report` | ⬜ |
@@ -68,7 +68,7 @@ claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: l
 10. **`--plugin-dir` writes generated files into the mod folder.** It writes `.claude-plugin/types/` and `tsconfig.json`, both gitignored.
 11. **Drawing from register.ts without JSX:** call the global `h(Element, props, ...children)` with elements from `$.ui.resolve(e)` and cast the result to `RenderElement`; the file stays `.ts`.
 12. **Test kit specifics (stage 2):** a `tool.call` bottom answer must carry `result` (an error is `{ result, isError: true, text }`); `$.session.start` needs `{ cwd, surface, isInteractive }` and a bottom hook returning `{ cwd }`; a `ui.render` hook that calls `next(e)` (SessionMode) needs a bottom `ui.render` hook in the test; `$.command.run` resolves `{ text: undefined, ref: undefined }` for a hook's `{}`.
-13. **Claude Code's own denial wording (verified in `-p`):** "`rm in '<path>' needs approval. … Claude Code asks before a shell command creates, changes or removes files there.`", returned as `isError: true`.
+13. **Claude Code's own denial wording.** Automatic (verified in `-p`): "`rm in '<path>' needs approval. … Claude Code asks before a shell command creates, changes or removes files there.`" The person refusing at the prompt (from the binary): "The user doesn't want to proceed with this tool use. …", optionally ending "To tell you how to proceed, the user said: …", or "The user doesn't want to take this action right now. …". All come back from `next(e)` as `isError: true`.
 
 ### Conventions in this codebase
 
@@ -118,12 +118,7 @@ From the Step 0 review and the model discussion. These are binding unless the us
 
 Stage 2's own decisions (the ones the spec didn't cover) are in [DESIGN.md §6](./DESIGN.md).
 
-### Open question for the user (asked at the start of stage 2, not yet answered)
-
-- **Does a refusal at Claude Code's own permission prompt, after the council approved, count as a wipe?**
-  - Built: such results are recorded as `outcome: "denied-by-permission"` (`isPermissionDenial` in `elrond/operations.ts`), apart from ordinary tool errors. The automatic `-p` wording is verified live; the interactive refusal wording is not.
-  - Today they **don't** count (`PERMISSION_DENIALS_ARE_WIPES = false` in register.ts, fed to `WipePolicy.permissionDenials`).
-  - Proposal: count the user's own refusal at the prompt (same as "keep blocked"); don't count an automatic denial where nobody could be asked. Building it means splitting `isPermissionDenial` into the two wordings and verifying the interactive one in a terminal.
+12. **Refusals at Claude Code's own permission prompt** (answered in stage 2). The person's own refusal there, after the council let the call through, counts as a failed attempt (as "keep blocked"); an automatic denial with nobody asked (`-p`, a deny rule) does not. Recorded as `outcome: "refused-by-user"` and `"denied-by-permission"` (`outcomeOf` in `elrond/operations.ts`). *(Done.)*
 
 ---
 
@@ -161,7 +156,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 
   Bump `v` to 2 (`sessionOf` resets an old shape).
 - [x] **Rounds:** each review verdict on a key is one round. After 2 non-approve rounds, escalate, with no model call until the user answers. A typed instruction resets that key's rounds.
-- [x] **Wipes:** block, revise, keep blocked (including dismiss and nobody-to-ask, per decision 4), and a gated call that ran and errored (`toolErrorsAreWipes` userConfig, default on). Permission-check denials: see the open question. At 3 wipes on a key, lock out: refuse, and tell Claude to stop retrying, summarise what failed and propose another approach. A successful approved call resets its own key. `resetForPrompt` clears rounds, wipes, lockouts and the cache.
+- [x] **Wipes:** block, revise, keep blocked (including dismiss and nobody-to-ask, per decision 4), a gated call that ran and errored (`toolErrorsAreWipes` userConfig, default on), and the person's refusal at Claude Code's own prompt (decision 12). At 3 wipes on a key, lock out: refuse, and tell Claude to stop retrying, summarise what failed and propose another approach. A successful approved call resets its own key. `resetForPrompt` clears rounds, wipes, lockouts and the cache.
 - [x] **Cache:** an approve for an identical fingerprint is reused within the same turn (key on `turn.start`'s `turnId`, or `promptEpoch` if subagent turns complicate it). Never cache block or revise.
 - [x] Refusals now include **rounds left** (`Refusal.roundsLeft` already exists) and the lockout message. Audit lines carry `opKey`.
 - [x] Tests (§19 Rounds, Wipes, Cache): 2-round cap and escalation, including a **rephrased retry** (different fingerprint, same key); wipe counting; lockout; reset on a new prompt; reset on success; approve reused; block not reused.
@@ -265,7 +260,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 ## Known follow-ups
 
 From stage 2:
-- **The open question above** decides `PERMISSION_DENIALS_ARE_WIPES` (and whether to split user refusals from automatic denials).
+- **Verify the prompt-refusal wording live** in a terminal. The patterns come from the 2.1.289 binary ("The user doesn't want to proceed with this tool use", "…take this action right now"); after a Claude Code update, re-check them (`grep -a` the binary) or a refusal reads as an ordinary tool error.
 - **Live UI check in a terminal (user):** the `/council` pane, the `council: shadow` / `council: bypass` label, the "Council: you allowed this once" line under the permission dialog, the secrets dialog with three options and the allowlist confirm.
 - **Scan allowed calls too?** The secrets scan follows SPEC §4 and reads gated calls only (DESIGN §6.1). Scanning every call is cheap; it needs the user's say-so since it changes the pipeline order.
 - **Plain-mode identifiers.** `/council` prints member ids such as `gandalf` where you type them (DESIGN §6.16); stage 6's plain-mode test should decide whether ids count as theme text.

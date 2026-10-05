@@ -28,9 +28,10 @@ export type AuditRecord = {
   decision: Decision | null
   /**
    * What happened to the call: it ran, ran and errored, was refused by the
-   * council, or was stopped at Claude Code's own permission check.
+   * council, was refused by the person at Claude Code's own permission
+   * prompt, or was denied by that check with nobody asked.
    */
-  outcome: 'ran' | 'error' | 'refused' | 'denied-by-permission'
+  outcome: 'ran' | 'error' | 'refused' | 'refused-by-user' | 'denied-by-permission'
   /** An identical call was approved earlier this prompt, so no reviewer ran. */
   cached?: true
   latencyMs: number

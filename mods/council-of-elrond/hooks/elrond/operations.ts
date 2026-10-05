@@ -223,40 +223,52 @@ export function resetOperation<T extends OpsState>(state: T, key: string): T {
 
 // ── What happened to the call, and whether it counts as a failed attempt ────
 
-export type Outcome = 'ran' | 'error' | 'refused' | 'denied-by-permission'
+export type Outcome = 'ran' | 'error' | 'refused' | 'refused-by-user' | 'denied-by-permission'
 
 /**
- * Wording Claude Code uses when its own permission check stops a call the
- * council let through: the person refusing at the prompt, or nobody there
- * to ask. Matched loosely; a miss reads as an ordinary tool error.
+ * Claude Code's words when the person refuses a call at its own permission
+ * prompt (with or without feedback). Read from the 2.1.289 binary.
  */
-const PERMISSION_DENIAL: readonly RegExp[] = [
-  /requested permissions? to (use|write|edit|read|run)/i,
-  /haven'?t granted it yet/i,
-  /doesn'?t want to (proceed|take this action)/i,
-  /tool use was rejected/i,
-  /permission to use .+ has been denied/i,
-  /needs? (your )?approval/i,
+const USER_REFUSAL: readonly RegExp[] = [
+  /the user doesn'?t want to proceed with this tool use/i,
+  /the user doesn'?t want to take this action/i,
 ]
 
-export const isPermissionDenial = (text: string): boolean => PERMISSION_DENIAL.some(re => re.test(text))
+/**
+ * Claude Code's words when its permission check stops a call with nobody
+ * asked: no one to ask (`-p`), or a deny rule. The first is verified live.
+ */
+const AUTOMATIC_DENIAL: readonly RegExp[] = [
+  /needs? approval/i,
+  /requested permissions? to (use|write|edit|read|run)/i,
+  /haven'?t granted it yet/i,
+  /permission to use .+ has been denied/i,
+]
+
+export const isUserRefusal = (text: string): boolean => USER_REFUSAL.some(re => re.test(text))
+
+export const isAutomaticDenial = (text: string): boolean => AUTOMATIC_DENIAL.some(re => re.test(text))
 
 export function outcomeOf(result: { deny?: string; isError?: boolean; text?: string }): Outcome {
   if (result.deny !== undefined) return 'refused'
   if (result.isError !== true) return 'ran'
-  return isPermissionDenial(result.text ?? '') ? 'denied-by-permission' : 'error'
+  const text = result.text ?? ''
+  if (isUserRefusal(text)) return 'refused-by-user'
+  return isAutomaticDenial(text) ? 'denied-by-permission' : 'error'
 }
 
 export type WipePolicy = {
   /** A gated call that ran and errored counts (userConfig `toolErrorsAreWipes`). */
   toolErrors: boolean
-  /** A refusal at Claude Code's own permission prompt counts. */
-  permissionDenials: boolean
 }
 
-/** Whether a call that went through `next(e)` counts as a failed attempt. */
+/**
+ * Whether a call that went through `next(e)` counts as a failed attempt. The
+ * person refusing at Claude Code's prompt always does, like "keep blocked";
+ * an automatic denial never does, since nobody chose it.
+ */
 export const isWipeOutcome = (outcome: Outcome, policy: WipePolicy): boolean =>
-  outcome === 'error' ? policy.toolErrors : outcome === 'denied-by-permission' ? policy.permissionDenials : false
+  outcome === 'refused-by-user' || (outcome === 'error' && policy.toolErrors)
 
 // ── Cache ───────────────────────────────────────────────────────────────────
 

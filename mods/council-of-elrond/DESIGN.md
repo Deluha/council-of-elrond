@@ -72,7 +72,8 @@ tool.call ─► classify (pure, rules only)
              │                              (shadow: logged, next(e))
              │              error / timeout / malformed ─► escalate (shadow: pass)
              │ after next(e): ran ─► clears its operation; error ─► failed attempt (setting);
-             │                denied by Claude Code's permission check ─► recorded apart (pending)
+             │                you refuse at Claude Code's prompt ─► failed attempt;
+             │                automatic denial (nobody asked) ─► recorded, not counted
              └─ any throw before next ─► .catch ─► refuse
 /council ─► parse (pure) ─► output lines ─► pane (where a surface draws) or ui.log; never Claude
 ```
@@ -130,7 +131,7 @@ tool.call ─► classify (pure, rules only)
 11. **`/council model`.** A one-request probe (16 tokens) checks the model first. `--save` writes only the `gandalf` row (the only `/config` model row so far) and only picker values; anything else stays session-only and says so.
 12. **`/council` output** is drawn in a pane (`$.ui.open` from the command, so it seats at any width) where a surface draws, else as `ui.log` lines. Verified live: a plain `claude -p "/council …"` prints nothing, and in stream-json the lines arrive as `system/ui_log` messages; the command's result carries no text.
 13. **The mode label** is added to `SessionMode` (terminal and desktop). `$.ui.status` carries it only when a surface without that site (VS Code, mobile) is attached, so the terminal doesn't show it twice.
-14. **Permission-check denials** are recorded as `outcome: "denied-by-permission"`, by wording: Claude Code's automatic denial in `-p` reads "… needs approval. … Claude Code asks before …" (verified live); the interactive refusal patterns are the classic "doesn't want to proceed" wording, not yet verified. Whether they count as failed attempts is the open question (ROADMAP); until it is answered they don't.
+14. **Permission-check outcomes, told apart by wording** (ROADMAP decision 12). Your refusal at Claude Code's own prompt ("The user doesn't want to proceed with this tool use…", "…take this action right now", read from the 2.1.289 binary) is `refused-by-user` and counts as a failed attempt, whatever `toolErrorsAreWipes` says. An automatic denial ("… needs approval …", verified live in `-p`; deny-rule wording) is `denied-by-permission` and never counts. Text matching neither is an ordinary tool error. The user-refusal wording is checked first.
 15. **Redaction fixes.** The assignment pattern now matches JSON-escaped quotes (`\"hunter2\"`), which Stage 1 missed in file-tool call text, and leaves an already-redacted value alone, so redacting twice is stable.
 16. **Identifiers stay as written.** Plain-mode output names member ids where you type them (`/council model gandalf …`, `[gandalf]` in the status), since they are config keys. The string table itself holds no theme text (tested).
 

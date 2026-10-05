@@ -88,11 +88,18 @@ describe('failed attempts and lockout', () => {
     expect(w.ran).toHaveLength(4)
   })
 
-  test('a refusal at the permission prompt is recorded apart from a tool error', async ($, on) => {
+  test('the person refusing at the permission prompt counts; an automatic denial does not', { options: { toolErrorsAreWipes: false } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE] })
-    w.toolResult = { result: 'failed', isError: true, text: "Claude requested permissions to use Bash, but you haven't granted it yet." }
-    await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+    w.toolResult = { result: 'denied', isError: true, text: "rm in '/work/build' needs approval. Claude Code asks before a shell command removes files there." }
+    for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(auditLines(w)[0]).toMatchObject({ outcome: 'denied-by-permission' })
+    expect(w.ran).toHaveLength(3)
+
+    w.toolResult = { result: 'refused', isError: true, text: "The user doesn't want to proceed with this tool use. The tool use was rejected." }
+    for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+    expect(auditLines(w)[3]).toMatchObject({ outcome: 'refused-by-user' })
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('locked out')
+    expect(w.ran).toHaveLength(6)
   })
 
   test('a dismissed question is a failed attempt', async ($, on) => {
