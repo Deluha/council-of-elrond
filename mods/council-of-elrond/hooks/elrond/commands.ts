@@ -4,6 +4,8 @@ import { MEMBERS, MODEL_SLOTS, TIERS } from '../config/types.js'
 import type { MemberName, ModelSlot } from '../config/types.js'
 import { whoOf } from '../members/brief.js'
 import type { Classification } from '../rules/classify.js'
+import type { Big, CouncilSeat } from './council.js'
+import { councilSeatId } from './council.js'
 import { median } from '../state.js'
 import { text } from '../strings.js'
 import type { StringKey } from '../strings.js'
@@ -101,6 +103,8 @@ export type StatusInput = {
   session: CouncilSession
   mode: 'enforcing' | 'shadow' | 'bypass'
   members: Readonly<Record<MemberName, { enabled: boolean; choice: ModelChoice }>>
+  council: { enabled: boolean; choice: ModelChoice; sequential: boolean }
+  gimli: { enabled: boolean; commands: number }
   gollumEnabled: boolean
   galadrielEnabled: boolean
   tokenBudget: number
@@ -129,6 +133,20 @@ export function statusOutput(input: StatusInput): Output {
           ...(session.counts[member] ?? ZERO_COUNTS),
         }),
       ),
+      text('cmd.council', {
+        who: text('who.fullCouncil'),
+        state: onOff(input.council.enabled),
+        model: input.council.choice.model,
+        source: input.council.choice.source,
+        order: text(input.council.sequential ? 'cmd.council.sequential' : 'cmd.council.parallel'),
+        ...(session.counts.council ?? ZERO_COUNTS),
+      }),
+      text('cmd.gimli', {
+        who: text('who.gimli'),
+        state: onOff(input.gimli.enabled),
+        count: input.gimli.commands,
+        ...(session.counts.gimli ?? ZERO_COUNTS),
+      }),
       text('cmd.memberCode', { who: text('who.gollum'), state: onOff(input.gollumEnabled) }),
       text('cmd.memberCode', { who: text('who.galadriel'), state: onOff(input.galadrielEnabled) }),
       text('cmd.attempts', { count: wipes, ops: ops.length, locked: ops.filter(op => op.wipes >= KEY_WIPE_CAP).length }),
@@ -196,7 +214,41 @@ const seatId = (seat: Seat): string => (seat.profile !== undefined ? `${seat.mem
 /** Who would review, for `/council test`: the route, and the model of the member it seats. */
 export type Reviewer = { route: Route; choice?: ModelChoice }
 
-export function testOutput(command: string, classification: Classification, operation: Operation | undefined, reviewer: Reviewer | undefined): Output {
+/** A big operation, for `/council test`: who would sit, on which model, and the checks that would run. */
+export type CouncilPreview = {
+  big: Big
+  enabled: boolean
+  seats: readonly CouncilSeat[]
+  choice: ModelChoice
+  checks: readonly string[]
+  /** A merge counted as big without the current branch being checked. */
+  isBranchAssumed: boolean
+}
+
+const seatLine = (seat: CouncilSeat): string =>
+  seat.member === 'legolas' && seat.range !== undefined
+    ? text('cmd.seatRange', { who: text(whoOf(seat.member)), id: seat.member, kind: seat.range })
+    : text('cmd.seat', { who: text(whoOf(seat.member, seat.member === 'aragorn' ? seat.profile : undefined)), id: councilSeatId(seat) })
+
+function councilLines(council: CouncilPreview): string[] {
+  const who = text('who.fullCouncil')
+  if (council.seats.length === 0) return [text('cmd.testCouncilNobody', { entry: council.big.entry, who })]
+  return [
+    text('cmd.testCouncil', { who, entry: council.big.entry, model: council.choice.model, source: council.choice.source, seats: council.seats.map(seatLine).join('; ') }),
+    council.checks.length > 0
+      ? text('cmd.testCouncilChecks', { who: text('who.gimli'), names: council.checks.map(name => `"${name}"`).join(', ') })
+      : text('cmd.testCouncilNoChecks'),
+    ...(council.isBranchAssumed ? [text('cmd.testCouncilBranch', { who })] : []),
+  ]
+}
+
+export function testOutput(
+  command: string,
+  classification: Classification,
+  operation: Operation | undefined,
+  reviewer: Reviewer | undefined,
+  council?: CouncilPreview,
+): Output {
   const decided = classification.decided
   const lines = [text('cmd.testTier', { tier: classification.tier })]
   if (decided === undefined) {
@@ -205,7 +257,9 @@ export function testOutput(command: string, classification: Classification, oper
     for (const finding of classification.findings) {
       lines.push(text('cmd.testFinding', { subject: finding.subject, tier: finding.tier, rule: finding.ruleId, source: finding.source, reason: finding.reason }))
     }
-    if (classification.tier === 'review' && reviewer !== undefined) {
+    if (council?.enabled === true) {
+      lines.push(...councilLines(council))
+    } else if (classification.tier === 'review' && reviewer !== undefined) {
       const { route } = reviewer
       const wanted = route.wanted !== undefined ? `${text(whoOf(route.wanted.member, route.wanted.profile))} [${seatId(route.wanted)}]` : ''
       if (route.kind === 'none') {
@@ -222,6 +276,7 @@ export function testOutput(command: string, classification: Classification, oper
         )
         if (route.fallback !== undefined) lines.push(text('cmd.testFallback', { wanted, why: text(`route.${route.fallback}`) }))
       }
+      if (council !== undefined) lines.push(text('cmd.testCouncilOff', { entry: council.big.entry, who: text('who.fullCouncil') }))
     }
     if (operation !== undefined) lines.push(text('cmd.testOperation', { key: operation.key }))
   }

@@ -69,6 +69,31 @@ export type Config = {
   models: Readonly<Partial<Record<ModelSlot, string>>>
   /** The secrets scan's extra patterns and its allowlist. */
   gollum: GollumConfig
+  /**
+   * What goes to the full council instead of one member: a rule id, a command
+   * regex written `/source/flags` (matched against each shell part), or a
+   * named check (BIG_CHECKS).
+   */
+  bigOperations: readonly string[]
+  /** The project's own checks the full council runs (tests, lint, typecheck). */
+  gimli: GimliConfig
+}
+
+/** Big-operation entries decided in code: a merge whose target is a protected branch. */
+export const BIG_CHECKS = ['merge-to-protected'] as const
+export type BigCheck = (typeof BIG_CHECKS)[number]
+
+export type GimliCommand = {
+  /** Shown to the user and to Claude (`tests`, `lint`). */
+  name: string
+  /** The command by its argument vector: no shell. */
+  argv: readonly string[]
+  /** How long it may run, in milliseconds (default 120 s, at most 600 s). */
+  timeoutMs: number
+}
+
+export type GimliConfig = {
+  commands: readonly GimliCommand[]
 }
 
 export const SECRET_LEVELS = ['high', 'low'] as const
@@ -89,7 +114,11 @@ export type GollumConfig = {
 }
 
 /** What the project overrides file may hold: every field optional. */
-export type Overrides = Partial<Omit<Config, 'schemaVersion' | 'gollum'>> & { schemaVersion: 1; gollum?: Partial<GollumConfig> }
+export type Overrides = Partial<Omit<Config, 'schemaVersion' | 'gollum' | 'gimli'>> & {
+  schemaVersion: 1
+  gollum?: Partial<GollumConfig>
+  gimli?: Partial<GimliConfig>
+}
 
 export type RuleSource = 'shipped' | 'project'
 

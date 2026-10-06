@@ -267,6 +267,9 @@ export const SHIPPED: Config = {
   ],
   models: {},
   gollum: { patterns: [], allowlist: [] },
+  // A push, a merge into a protected branch, a migration: the full council.
+  bigOperations: [String.raw`/^git\s+push(\s|$)/`, 'merge-to-protected', 'database-migration'],
+  gimli: { commands: [] },
 }
 
 /**

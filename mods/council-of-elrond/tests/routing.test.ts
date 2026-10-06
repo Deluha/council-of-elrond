@@ -97,7 +97,7 @@ describe('in the pipeline', () => {
   const cases = [
     { name: 'Gandalf', call: { tool: 'Bash', command: 'rm -rf build' }, member: 'gandalf', profile: null, who: 'the destructive-operations reviewer', model: 'sonnet' },
     { name: 'Legolas', call: { tool: 'Edit', file_path: `${ROOT}/src/app.ts`, old_string: '1', new_string: '2' }, member: 'legolas', profile: null, who: 'the diff reviewer', model: 'sonnet' },
-    { name: 'Aragorn (git)', call: { tool: 'Bash', command: 'git push origin feature' }, member: 'aragorn', profile: 'git', who: 'the git reviewer', model: 'opus' },
+    { name: 'Aragorn (git)', call: { tool: 'Bash', command: 'git rebase main' }, member: 'aragorn', profile: 'git', who: 'the git reviewer', model: 'opus' },
     { name: 'Aragorn (database)', call: { tool: 'Bash', command: 'psql -c "DELETE FROM users WHERE id = 1"' }, member: 'aragorn', profile: 'database', who: 'the database reviewer', model: 'opus' },
   ] as const
 
@@ -143,7 +143,7 @@ describe('in the pipeline', () => {
 
   test('with the member and Gandalf off, the call comes to the user', { options: { aragornEnabled: false, gandalfEnabled: false } }, async ($, on) => {
     const w = world(on, { answer: 'Keep blocked' })
-    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'git push origin feature' }))).toContain('(keep blocked)')
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'git rebase main' }))).toContain('(keep blocked)')
     expect(w.modelRequests).toEqual([])
     expect(w.asked[0]?.question).toContain('Its reviewer is switched off.')
   })
@@ -151,7 +151,7 @@ describe('in the pipeline', () => {
   test("each member's model follows its own /config row", { options: { legolasModel: 'opus', aragornModel: 'fable' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE] })
     await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/new.ts`, content: 'x' })
-    await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })
+    await $.tool.call({ tool: 'Bash', command: 'git rebase main' })
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(w.modelRequests.map(request => request.model)).toEqual(['opus', 'fable', 'sonnet'])
     expect(w.modelRequests[1]).toMatchObject({ timeoutMs: 90000 })
@@ -159,7 +159,7 @@ describe('in the pipeline', () => {
 
   test('a failed review names the member in the question', async ($, on) => {
     const w = world(on, { replies: [{ isAnswered: true, text: 'nope', usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }], answer: 'Keep blocked' })
-    await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })
+    await $.tool.call({ tool: 'Bash', command: 'git rebase main' })
     expect(w.asked[0]?.question).toContain('the git reviewer: no verdict (malformed verdict')
   })
 })

@@ -1,6 +1,7 @@
-import { globToRegExp, toolMatcher } from '../rules/globs.js'
+import { globToRegExp, slashRegex, toolMatcher } from '../rules/globs.js'
 import { SHIPPED } from './defaults.js'
 import {
+  BIG_CHECKS,
   CHECKS,
   MEMBERS,
   MODEL_SLOTS,
@@ -9,8 +10,10 @@ import {
   TIERS,
 } from './types.js'
 import type {
+  BigCheck,
   CheckName,
   Config,
+  GimliCommand,
   GollumPattern,
   MemberName,
   ModelSlot,
@@ -31,6 +34,12 @@ export type CompiledRule = Rule & {
   inputRe?: RegExp
 }
 
+/** A big-operation entry, compiled: which rule, which command pattern, or which check. */
+export type BigOperation =
+  | { kind: 'rule'; entry: string; ruleId: string }
+  | { kind: 'command'; entry: string; re: RegExp }
+  | { kind: 'check'; entry: string; check: BigCheck }
+
 export type CompiledConfig = {
   config: Config
   /** Project rules first, in file order, then the enabled shipped rules. */
@@ -38,6 +47,7 @@ export type CompiledConfig = {
   protectedPaths: readonly { glob: string; re: RegExp }[]
   protectedBranches: readonly RegExp[]
   production: readonly RegExp[]
+  bigOperations: readonly BigOperation[]
 }
 
 export type LoadedConfig = {
@@ -57,7 +67,17 @@ const TOP_KEYS = [
   'productionPatterns',
   'models',
   'gollum',
+  'bigOperations',
+  'gimli',
 ] as const
+
+const GIMLI_KEYS = ['commands'] as const
+const GIMLI_COMMAND_KEYS = ['name', 'argv', 'timeoutMs'] as const
+
+/** A check command's timeout: 120 s unless set, between 1 s and 10 minutes (the most a process may run). */
+export const GIMLI_TIMEOUT = { default: 120_000, min: 1_000, max: 600_000 } as const
+
+const MAX_GIMLI_COMMANDS = 8
 
 const GOLLUM_KEYS = ['patterns', 'allowlist'] as const
 const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label'] as const
@@ -226,6 +246,74 @@ function validateGollum(raw: unknown, errors: string[]): Overrides['gollum'] {
   return out
 }
 
+function validateGimli(raw: unknown, errors: string[]): Overrides['gimli'] {
+  if (!isObject(raw)) {
+    errors.push('gimli: must be an object')
+    return undefined
+  }
+  for (const key of Object.keys(raw)) {
+    if (!includes(GIMLI_KEYS, key)) errors.push(`gimli.${key}: unknown field`)
+  }
+  if (raw.commands === undefined) return {}
+  if (!Array.isArray(raw.commands)) {
+    errors.push('gimli.commands: must be a list')
+    return undefined
+  }
+  if (raw.commands.length > MAX_GIMLI_COMMANDS) errors.push(`gimli.commands: at most ${MAX_GIMLI_COMMANDS} commands`)
+  const seen = new Set<string>()
+  const commands: GimliCommand[] = []
+  raw.commands.forEach((item, index) => {
+    const field = `gimli.commands[${index}]`
+    if (!isObject(item)) {
+      errors.push(`${field}: must be an object`)
+      return
+    }
+    const before = errors.length
+    for (const key of Object.keys(item)) {
+      if (!includes(GIMLI_COMMAND_KEYS, key)) errors.push(`${field}.${key}: unknown field`)
+    }
+    if (typeof item.name !== 'string' || item.name.trim() === '') errors.push(`${field}.name: required string`)
+    else if (seen.has(item.name.trim())) errors.push(`${field}.name: "${item.name.trim()}" is used twice`)
+    if (!Array.isArray(item.argv) || item.argv.length === 0) {
+      errors.push(`${field}.argv: a non-empty list of strings (the command and its arguments; no shell)`)
+    } else {
+      item.argv.forEach((word, i) => {
+        if (typeof word !== 'string' || (i === 0 && word.trim() === '')) errors.push(`${field}.argv[${i}]: must be a${i === 0 ? ' non-empty' : ''} string`)
+      })
+    }
+    const timeout = item.timeoutMs
+    if (timeout !== undefined && (typeof timeout !== 'number' || !Number.isInteger(timeout) || timeout < GIMLI_TIMEOUT.min || timeout > GIMLI_TIMEOUT.max)) {
+      errors.push(`${field}.timeoutMs: a whole number of milliseconds from ${GIMLI_TIMEOUT.min} to ${GIMLI_TIMEOUT.max}`)
+    }
+    if (errors.length > before) return
+    const name = (item.name as string).trim()
+    seen.add(name)
+    commands.push({ name, argv: [...(item.argv as string[])], timeoutMs: (timeout as number | undefined) ?? GIMLI_TIMEOUT.default })
+  })
+  return { commands }
+}
+
+/**
+ * A big-operation entry: `/regex/flags`, a named check, or a rule id the
+ * merged config holds (shipped, or the file's own).
+ */
+function validateBigOperations(raw: unknown, ruleIds: ReadonlySet<string>, errors: string[]): string[] {
+  const entries = stringList(raw, 'bigOperations', errors)
+  entries.forEach((entry, index) => {
+    const field = `bigOperations[${index}]`
+    if (entry.startsWith('/')) {
+      try {
+        if (slashRegex(entry) === undefined) errors.push(`${field}: a regex is written /source/flags`)
+      } catch (error) {
+        errors.push(`${field}: invalid regex: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    } else if (!includes(BIG_CHECKS, entry) && !ruleIds.has(entry)) {
+      errors.push(`${field}: "${entry}" is not a rule id, a /regex/ or one of ${BIG_CHECKS.join(', ')}`)
+    }
+  })
+  return entries
+}
+
 /**
  * Validates the parsed overrides file against this build's schema, reporting
  * every problem by field. Any problem means the whole file is ignored.
@@ -263,6 +351,7 @@ export function validateOverrides(
         const rule = validateRule(item, `rules[${index}]`, errors)
         if (rule === undefined) return
         if (seen.has(rule.id)) errors.push(`rules[${index}].id: "${rule.id}" is used twice`)
+        if (includes(BIG_CHECKS, rule.id)) errors.push(`rules[${index}].id: "${rule.id}" is the name of a big-operation check`)
         if (shippedIds.has(rule.id)) {
           errors.push(
             `rules[${index}].id: "${rule.id}" is a shipped rule's id; disable it with disableRules and give yours another id`,
@@ -326,6 +415,16 @@ export function validateOverrides(
     if (gollum !== undefined) overrides.gollum = gollum
   }
 
+  if (raw.bigOperations !== undefined) {
+    const ruleIds = new Set([...shippedIds.keys(), ...(overrides.rules ?? []).map(rule => rule.id)])
+    overrides.bigOperations = validateBigOperations(raw.bigOperations, ruleIds, errors)
+  }
+
+  if (raw.gimli !== undefined) {
+    const gimli = validateGimli(raw.gimli, errors)
+    if (gimli !== undefined) overrides.gimli = gimli
+  }
+
   return errors.length > 0
     ? { overrides: undefined, errors }
     : { overrides, errors: [] }
@@ -357,7 +456,15 @@ export function mergeConfig(shipped: Config, overrides: Overrides): Config {
       patterns: [...shipped.gollum.patterns, ...(overrides.gollum?.patterns ?? [])],
       allowlist: union(shipped.gollum.allowlist, overrides.gollum?.allowlist),
     },
+    bigOperations: union(shipped.bigOperations, overrides.bigOperations),
+    gimli: { commands: [...shipped.gimli.commands, ...(overrides.gimli?.commands ?? [])] },
   }
+}
+
+function compileBigOperation(entry: string): BigOperation {
+  const re = slashRegex(entry)
+  if (re !== undefined) return { kind: 'command', entry, re }
+  return includes(BIG_CHECKS, entry) ? { kind: 'check', entry, check: entry } : { kind: 'rule', entry, ruleId: entry }
 }
 
 const branchToRegExp = (branch: string): RegExp => globToRegExp(branch)
@@ -380,6 +487,7 @@ export function compileConfig(config: Config, projectRuleIds: ReadonlySet<string
     protectedPaths: config.protectedPaths.map(glob => ({ glob, re: globToRegExp(glob) })),
     protectedBranches: config.protectedBranches.map(branchToRegExp),
     production: config.productionPatterns.map(pattern => new RegExp(pattern, 'i')),
+    bigOperations: config.bigOperations.map(compileBigOperation),
   }
 }
 

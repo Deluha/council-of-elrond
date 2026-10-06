@@ -126,7 +126,8 @@ describe('in the pipeline', () => {
     const w = world(on, { replies: [APPROVE] })
     w.processReply = argv => (argv[1] === 'log' ? { exitCode: 0, stdout: 'abc123 Unrelated tweak\n' } : { exitCode: 0, stdout: 'feature\n' })
     await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })
-    const prompt = String(w.modelRequests[0]?.prompt)
+    // A push sits the full council; the git reviewer's request is the one with its checklist.
+    const prompt = String(w.modelRequests.find(request => String(request.system).includes('Published history'))?.prompt)
     expect(prompt).toContain('commits it would send (origin/feature..HEAD)')
     expect(prompt).toContain('abc123 Unrelated tweak')
     expect(prompt).toContain('Protected branches: main, master')
