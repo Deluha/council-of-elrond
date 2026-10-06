@@ -8,7 +8,22 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  hygiene:
+    name: Hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      # No generated files, no plugin-root CLAUDE.md, no session links or local paths,
+      # markdown links resolve. The same script runs in the pre-commit hook.
+      - name: Hygiene checks
+        run: bash scripts/check-hygiene.sh
+
   checks:
     name: Test, typecheck, validate
     runs-on: ubuntu-latest

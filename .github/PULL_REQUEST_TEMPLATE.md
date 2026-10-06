@@ -2,6 +2,8 @@
 
 <!-- One paragraph. Link the issue or the roadmap item. -->
 
+Type: <!-- fix / rules / reviewer / pipeline / ui / docs / ci --> · Stage: <!-- 6, hardening, n/a -->
+
 ## Checks
 
 - [ ] `claude plugin test mods/council-of-elrond` passes
@@ -12,6 +14,8 @@
 - [ ] Any decision the spec or roadmap didn't cover is recorded in `DESIGN.md`
 - [ ] No new text in logic: strings are in `hooks/strings.ts`
 - [ ] Only `hooks/register.ts` touches `$`
+- [ ] Hooks installed (`scripts/setup.sh`) and the pre-commit hook passed, or the same checks were run by hand
+- [ ] If this touches `hooks/rules/`, `config/defaults.ts`, `redact.ts` or `register.ts`: labelled `security` or `rules`, and no bypass input is quoted in the title or description
 
 ## Safety
 

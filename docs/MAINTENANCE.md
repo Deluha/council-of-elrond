@@ -58,8 +58,9 @@ Versions are the `version` field in `mods/council-of-elrond/.claude-plugin/plugi
    claude plugin tag mods/council-of-elrond --dry-run
    claude plugin tag mods/council-of-elrond -m "council-of-elrond %s" --push
    ```
-   It creates a `council-of-elrond--v0.5.0` tag. A GitHub release with the changelog section as
-   its body is enough; nothing is built.
+   It creates a `council-of-elrond--v0.5.0` tag. Pushing it runs `.github/workflows/release.yml`,
+   which checks the tag against `plugin.json` and `CHANGELOG.md`, re-runs the gates and publishes
+   the GitHub release with that version's changelog section as its body. Nothing is built.
 5. Users on the marketplace get it with `claude plugin marketplace update` and
    `claude plugin update`.
 

@@ -17,7 +17,8 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   stopped then allowed, shadow verdicts, cost and median review time per reviewer); the
   `reviewMs` audit field; one shared, validating writer for `rules.json`.
 - Project documentation for contributors and maintainers: `CONTRIBUTING.md`, `SECURITY.md`,
-  `CODE_OF_CONDUCT.md`, this changelog, issue and pull request templates, CI, `docs/`.
+  `CODE_OF_CONDUCT.md`, `SUPPORT.md`, this changelog, issue and pull request templates, CI and a
+  release workflow, git hooks, CODEOWNERS, a marketplace manifest, `docs/`.
 
 ### Changed
 - Nothing yet.

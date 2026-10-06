@@ -43,9 +43,9 @@ Full instructions, configuration, updating and removal: [docs/INSTALL.md](docs/I
 | :- | :- |
 | Users | [User manual](mods/council-of-elrond/README.md): tiers, reviewers, the full council, rules, models, options, commands, the secrets scan, escalation, the audit log, limits. [Installing and using](docs/INSTALL.md). |
 | Contributors | [CONTRIBUTING.md](CONTRIBUTING.md), [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (layout, conventions, tests, live checks, recipes), [ROADMAP.md](mods/council-of-elrond/ROADMAP.md) (status, next tasks, decisions, API facts). |
-| Maintainers | [docs/MAINTENANCE.md](docs/MAINTENANCE.md) (Claude Code updates, releases, review, triage), [docs/REVIEW-2026-10.md](docs/REVIEW-2026-10.md) (the Stage 5 review: findings and proposed amendments). |
+| Maintainers | [docs/MAINTENANCE.md](docs/MAINTENANCE.md) (Claude Code updates, releases, review, triage), [docs/GITHUB.md](docs/GITHUB.md) (workflows, hooks, repository settings), [docs/REVIEW-2026-10.md](docs/REVIEW-2026-10.md) (the Stage 5 review: findings and proposed amendments). |
 | Design | [DESIGN.md](mods/council-of-elrond/DESIGN.md) (how it works, failure modes, every decision), [SPEC.md](mods/council-of-elrond/SPEC.md) (the original spec). |
-| Security | [SECURITY.md](SECURITY.md): what counts as a bypass and how to report one privately. |
+| Security | [SECURITY.md](SECURITY.md): what counts as a bypass and how to report one privately. [SUPPORT.md](SUPPORT.md) for everything else. |
 
 ## Repository layout
 
@@ -55,7 +55,8 @@ mods/types/               Claude Code's generated API types for the build it tar
 docs/                     install, development, maintenance guides and reviews
 .claude-plugin/           marketplace manifest, so `claude plugin install` works from this repo
 .claude/skills/           skills for Claude Code sessions working on this repo
-.github/                  CI, issue and pull request templates
+.github/                  CI, release workflow, issue and pull request templates, CODEOWNERS
+.githooks/ scripts/       pre-commit and commit-msg hooks, setup and hygiene scripts
 ```
 
 ```sh

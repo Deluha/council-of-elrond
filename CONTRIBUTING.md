@@ -23,12 +23,22 @@ dependencies and no `node_modules`.
 ```sh
 git clone https://github.com/Deluha/council-of-elrond
 cd council-of-elrond
-claude plugin test mods/council-of-elrond       # the test suite
-tsc -p mods                                    # strict typecheck
-claude plugin validate mods/council-of-elrond  # manifest, hooks and the calls the module makes
+scripts/setup.sh                               # checks the tools, installs the git hooks, runs the gates once
 ```
 
-All three must pass before every commit. They run in CI too.
+The three gates, which `setup.sh` runs and the pre-commit hook runs again on every commit that
+touches the mod:
+
+```sh
+claude plugin test mods/council-of-elrond       # the test suite
+tsc -p mods                                    # strict typecheck
+claude plugin validate --strict mods/council-of-elrond  # manifest, hooks and the calls the module makes
+```
+
+All three must pass before every commit. They run in CI too, along with `scripts/check-hygiene.sh`
+(no generated files committed, no personal data, links resolve). The hooks live in `.githooks/`;
+`setup.sh` points `core.hooksPath` at them. `git commit --no-verify` skips them when you must, and
+CI catches what you skipped.
 
 **Never load the mod into the Claude Code session you develop it in.** It would gate your own
 tool calls. Run live checks headless instead, in a throwaway folder (see
@@ -69,7 +79,11 @@ The full conventions, with the reasons behind them, are in
    section in `DESIGN.md` and mention it in the pull request.
 4. Update the user manual for any user-visible change, and `CHANGELOG.md` under "Unreleased".
 5. Fill in the pull request template. Say what you verified live, if anything, and what you did
-   not.
+   not. Label it (`rules`, `reviewers`, `pipeline`, `ui`, `docs`, `bug`, `ci`); the labels feed the
+   release notes.
+6. A change under `hooks/rules/`, `config/defaults.ts`, `redact.ts` or `register.ts` needs the
+   code owner's review (CODEOWNERS). If it fixes a bypass, keep the triggering input out of the
+   title and description; put it in a test with a neutral name.
 
 Commit messages: an imperative summary line under 72 characters, then why the change was made.
 No model names, session links or personal paths in code, comments or docs.
