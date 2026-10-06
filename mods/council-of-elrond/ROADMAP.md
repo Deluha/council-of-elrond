@@ -13,7 +13,7 @@ How to finish the mod from where it stands, written so a new dev session can pic
 | 2 | Gollum, Galadriel, operation keys, rounds, wipes, cache, commands, shadow mode | ✅ Done: [Deluha/council-of-elrond#2](https://github.com/Deluha/council-of-elrond/pull/2) |
 | 3 | Legolas, Aragorn (git and database profiles), routing | ✅ Done: [Deluha/council-of-elrond#3](https://github.com/Deluha/council-of-elrond/pull/3) |
 | 4 | Full council with Gimli | ✅ Done: [Deluha/council-of-elrond#4](https://github.com/Deluha/council-of-elrond/pull/4) |
-| 5 | Rule and allowlist suggestions, `/council report` | ✅ Done (pull request pending) |
+| 5 | Rule and allowlist suggestions, `/council report` | ✅ Done: [Deluha/council-of-elrond#5](https://github.com/Deluha/council-of-elrond/pull/5) |
 | 6 | Theme strings, then UI features in order | ⬜ Next |
 
 **Stop at every checkpoint (SPEC §20).** At each one: tests pass, `tsc` passes, `claude plugin validate`
