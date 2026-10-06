@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Test, typecheck, validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The mod's tests run under Claude Code's own test kit. `claude plugin test`
+      # needs no sign-in and no network: the tests stub the model, the user and
+      # every process. Pin the version DESIGN.md names when a newer one breaks
+      # the generated types (see docs/MAINTENANCE.md).
+      - name: Install Claude Code and TypeScript
+        run: npm install -g @anthropic-ai/claude-code typescript
+
+      - name: Versions
+        run: |
+          claude --version
+          tsc --version
+
+      - name: Tests
+        run: claude plugin test mods/council-of-elrond
+
+      - name: Typecheck
+        run: tsc -p mods
+
+      - name: Validate the plugin
+        run: claude plugin validate --strict mods/council-of-elrond
+
+      - name: Validate the marketplace manifest
+        run: claude plugin validate --strict .
+
+      # The mod must never take part in the permission decision (SPEC §7, §22).
+      - name: No tool.check hook
+        run: |
+          out=$(claude plugin validate mods/council-of-elrond)
+          echo "$out" | grep -q 'tool.check' && { echo 'register.ts registers tool.check'; exit 1; } || echo 'no tool.check hook'

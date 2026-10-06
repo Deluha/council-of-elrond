@@ -410,6 +410,45 @@ Parsing is best effort, by pattern, and not a shell.
 - **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb.
 - A hook that overruns its time limit. The engine may run the call; Elrond refuses rather than pass with its budget nearly spent, but it can't act once it has run out.
 
+## Adding a member
+
+The council is three model reviewers (destructive operations, diffs, git and databases) and three
+code members (the secrets scan, the read-only preview, the project checks). The spec caps the
+model members at three, so adding one means replacing one, or adding a code member. The steps,
+file by file, are in the developer guide:
+[docs/DEVELOPMENT.md, "Add a member"](../../docs/DEVELOPMENT.md#add-a-member). In short: a member
+supplies only its checklist (`system(nonce)`) and its prompt (`prompt(context, nonce)`); the
+request, the deadline, token accounting and the strict verdict parse are shared, and every piece
+of session content it sees is wrapped as untrusted data.
+
+## Glossary
+
+The mod's output is in plain words. The names below are the project's own vocabulary, used in the
+code, the design documents and (from Stage 6) the themed mode.
+
+| Name | Plain meaning |
+| :- | :- |
+| The council | The mod as a whole: the gate on tool calls. |
+| Elrond | The chair: the code that classifies, routes, combines verdicts, escalates and logs. Not a reviewer. |
+| Boromir | The proposer: the Claude session whose tool calls are gated. Not part of the mod. |
+| Gandalf | The destructive-operations reviewer, and the fallback for anything no other reviewer takes. |
+| Legolas | The diff reviewer, for file writes and edits. |
+| Aragorn | The git reviewer and the database reviewer: one member with two profiles. |
+| Gimli | The project checks: your tests, lint and typecheck, run alongside the full council. |
+| Gollum | The secrets scan. |
+| Galadriel | The read-only preview ("the mirror") of what a call would touch. |
+| Full council | Every enabled reviewer at once, for a big operation. |
+| Ready check, council check | The full council's per-member tick or cross (Stage 6 UI). |
+| Round | One proposal and one verdict on the same operation. Two refusals, and the call comes to you. |
+| Wipe | A failed attempt: a refusal, your "keep blocked", a call that ran and errored. |
+| Lockout | Three failed attempts on one operation, or five on one kind: Claude is told to stop retrying. |
+| Loot roll | The escalation question (allow once, keep blocked, type an instruction) in themed mode. |
+| Leeroy mode | Session bypass (`/council off`). |
+| Shadow mode | Reviewers log their verdicts but never refuse. |
+| Threat meter | Blocks per reviewer (Stage 6 UI). |
+| Epic drop | The "Legendary commit acquired" banner after a push or merge passes the full council (Stage 6 UI). |
+| Plain mode | Every string in its plain variant; no theme names anywhere. Behaviour is identical. |
+
 ## Tests
 
 ```
@@ -417,3 +456,6 @@ claude plugin test ./mods/council-of-elrond
 claude plugin validate ./mods/council-of-elrond
 tsc -p ./mods
 ```
+
+Contributor setup, conventions and recipes: [docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md).
+Installing, configuring and removing: [docs/INSTALL.md](../../docs/INSTALL.md).

@@ -16,6 +16,11 @@ How to finish the mod from where it stands, written so a new dev session can pic
 | 5 | Rule and allowlist suggestions, `/council report` | ✅ Done: [Deluha/council-of-elrond#5](https://github.com/Deluha/council-of-elrond/pull/5) |
 | 6 | Theme strings, then UI features in order | ⬜ Next |
 
+**Review at the end of Stage 5:** [docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md) holds the
+findings (a 0.5.x hardening list) and proposed amendments to Stage 6 and the definition of done,
+pending the user's decision. Project documentation for users, contributors and maintainers lives in
+[docs/](../../docs/) and the repository root.
+
 **Stop at every checkpoint (SPEC §20).** At each one: tests pass, `tsc` passes, `claude plugin validate`
 passes, and the user gets a short summary of what changed, the decisions the spec didn't cover, and
 the known limits. Then wait for the go-ahead.

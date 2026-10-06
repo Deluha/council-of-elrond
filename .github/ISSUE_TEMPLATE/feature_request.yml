@@ -1,0 +1,44 @@
+name: Feature request
+description: A new reviewer check, preview, command, option or UI element.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check `mods/council-of-elrond/ROADMAP.md` first: Stage 6 (theme and UI) and the
+        "Known follow-ups" list may already cover it. Some limits are deliberate (SPEC §23:
+        no debate between members, no automatic fixing of calls, three model members at most).
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were doing and what got in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Rules and classification
+        - A reviewer's checklist or context
+        - Secrets scan
+        - Read-only preview
+        - Full council / project checks
+        - Escalation dialog
+        - Commands (/council)
+        - Config and rules.json
+        - Audit log and report
+        - Theme and UI
+        - Docs
+  - type: textarea
+    id: cost
+    attributes:
+      label: Cost and safety
+      description: Does it add model calls, run anything new, or change what the rules allow?

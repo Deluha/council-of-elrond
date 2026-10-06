@@ -1,0 +1,63 @@
+name: Bug report
+description: The mod did something wrong (a crash, a wrong refusal, a hang, a broken command).
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a command that **passed the gate when it should not have**, please use private
+        vulnerability reporting (see SECURITY.md) instead of this form.
+  - type: input
+    id: version
+    attributes:
+      label: Claude Code version
+      description: Output of `claude --version`.
+      placeholder: 2.1.291
+    validations:
+      required: true
+  - type: input
+    id: mod-version
+    attributes:
+      label: Mod version or commit
+      description: The `version` in `.claude-plugin/plugin.json`, or the commit hash.
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: Where it ran
+      options:
+        - Terminal
+        - Desktop app
+        - VS Code / JetBrains
+        - claude -p (headless)
+        - Agent SDK
+        - Cloud session
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what the mod did, and what you expected. Paste the refusal or question text if there was one.
+    validations:
+      required: true
+  - type: textarea
+    id: call
+    attributes:
+      label: The tool call
+      description: The command or call that triggered it, with secrets removed. `/council test "<command>"` prints the classification, reviewer and operation key; paste that too.
+      render: text
+  - type: textarea
+    id: audit
+    attributes:
+      label: Audit log line
+      description: The matching line from `.claude/council-of-elrond/audit/audit.jsonl` (`/council log` prints the last ones). It holds no file contents or secrets.
+      render: json
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Your `.claude/council-of-elrond/rules.json` (secrets and allowlist entries removed) and any `/config` options you changed.
+      render: json

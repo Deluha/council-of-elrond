@@ -1,0 +1,39 @@
+name: Rule gap or false positive
+description: The shipped rules gate too much (a harmless call is reviewed, asked or blocked) or too little in a way that is not a security bypass.
+labels: [rules]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A destructive command classified as **allow**, or a way past a block rule or a protected
+        path, is a security report: please use private vulnerability reporting (see SECURITY.md).
+        This form is for over-gating, wrong reviewer routing, and gaps that only lower a tier
+        from block to review.
+  - type: textarea
+    id: command
+    attributes:
+      label: The call
+      description: The exact command or tool call, secrets removed.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: got
+    attributes:
+      label: What `/council test` prints
+      description: Tier, rule, reviewer, operation key.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and why
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Project rule you used meanwhile, if any
+      description: The `rules.json` entry that fixed it for you. It may become the shipped default.
+      render: json

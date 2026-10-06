@@ -3,8 +3,12 @@
   "version": "0.4.0",
   "description": "A council of specialist reviewers that gates risky tool calls before they run. Rules decide the tier; model members give a second opinion; anything uncertain comes to you.",
   "author": {
-    "name": "council-of-elrond"
+    "name": "Deluhathol",
+    "url": "https://github.com/Deluha"
   },
+  "homepage": "https://github.com/Deluha/council-of-elrond",
+  "repository": "https://github.com/Deluha/council-of-elrond",
+  "license": "MIT",
   "keywords": [
     "safety",
     "review",
