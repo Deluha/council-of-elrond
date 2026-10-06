@@ -4,7 +4,7 @@
  */
 export type CouncilSession = {
   /** Shape version; a value of another version reads as a fresh session. */
-  v: 2
+  v: 3
   /** The user's latest prompt, redacted and cut, for reviewer context. */
   latestPrompt: string
   /** Bumped on every prompt the user sends. */
@@ -29,6 +29,8 @@ export type CouncilSession = {
   verbWipes: Readonly<Record<string, number>>
   /** Fingerprints a reviewer approved this prompt: an identical call is not reviewed again. */
   cache: readonly string[]
+  /** Allow-rule patterns the user declined after "allow once": not offered again this session. */
+  declinedRules: readonly string[]
 }
 
 export type CouncilOp = { rounds: number; wipes: number }

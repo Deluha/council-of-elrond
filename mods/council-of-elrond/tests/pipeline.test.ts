@@ -197,7 +197,9 @@ describe('escalation', () => {
   test("the mod's own question does not re-enter the gate", async ($, on) => {
     const w = world(on, { answer: 'Allow once' })
     await $.tool.call({ tool: 'Bash', command: 'sudo ls' })
-    expect(w.asked).toHaveLength(1)
+    // The escalation, then the allow-rule offer: neither is gated itself.
+    expect(w.asked).toHaveLength(2)
+    expect(w.asked[1]?.options).toEqual(['Add the rule', 'Not now'])
     expect(auditLines(w)).toHaveLength(1)
   })
 })

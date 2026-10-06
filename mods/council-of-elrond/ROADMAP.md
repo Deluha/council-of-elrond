@@ -13,8 +13,8 @@ How to finish the mod from where it stands, written so a new dev session can pic
 | 2 | Gollum, Galadriel, operation keys, rounds, wipes, cache, commands, shadow mode | ✅ Done: [Deluha/council-of-elrond#2](https://github.com/Deluha/council-of-elrond/pull/2) |
 | 3 | Legolas, Aragorn (git and database profiles), routing | ✅ Done: [Deluha/council-of-elrond#3](https://github.com/Deluha/council-of-elrond/pull/3) |
 | 4 | Full council with Gimli | ✅ Done: [Deluha/council-of-elrond#4](https://github.com/Deluha/council-of-elrond/pull/4) |
-| 5 | Rule and allowlist suggestions, `/council report` | ⬜ Next |
-| 6 | Theme strings, then UI features in order | ⬜ |
+| 5 | Rule and allowlist suggestions, `/council report` | ✅ Done (pull request pending) |
+| 6 | Theme strings, then UI features in order | ⬜ Next |
 
 **Stop at every checkpoint (SPEC §20).** At each one: tests pass, `tsc` passes, `claude plugin validate`
 passes, and the user gets a short summary of what changed, the decisions the spec didn't cover, and
@@ -27,12 +27,12 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (207 at the end of stage 4)
+cd mods/council-of-elrond && claude plugin test .     # all tests (242 at the end of stage 5)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
 
-- **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289**. If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts`), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
+- **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289** and checked on **2.1.291** from stage 5 (types regenerated then; the drift was additive, DESIGN.md header). If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts` under the skill's folder and names the path; don't write a mod folder, which would ask to hot-reload it into your session), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
 - **Keep the mod out of the session building it.** Don't load it into your own dev session (the skill's hot-reload folder, or `--plugin-dir` on the session you work in): it would gate your own tool calls.
 - **Live checks run headless.** Use `claude -p --plugin-dir ./mods/council-of-elrond "<prompt>"` with harmless commands, ideally in a throwaway `git init` folder, then clean it up along with the generated `.claude-plugin/types/` and `tsconfig.json` in the mod folder. `/council` output only shows with `--output-format stream-json --verbose` (as `system/ui_log`).
 
@@ -122,7 +122,7 @@ From the Step 0 review and the model discussion. These are binding unless the us
     - So `rm -rf ./build` and `rm -r build/` share a key.
     - A coarser per-verb counter (e.g. `git push`, any target) locks out at 5 wipes, to catch retries that change the target.
 
-Stage 2's own decisions (the ones the spec didn't cover) are in [DESIGN.md §6](./DESIGN.md), Stage 3's in [§7](./DESIGN.md), Stage 4's in [§8](./DESIGN.md).
+Stage 2's own decisions (the ones the spec didn't cover) are in [DESIGN.md §6](./DESIGN.md), Stage 3's in [§7](./DESIGN.md), Stage 4's in [§8](./DESIGN.md), Stage 5's in [§9](./DESIGN.md).
 
 12. **Refusals at Claude Code's own permission prompt** (answered in stage 2). The person's own refusal there, after the council let the call through, counts as a failed attempt (as "keep blocked"); an automatic denial with nobody asked (`-p`, a deny rule) does not. Recorded as `outcome: "refused-by-user"` and `"denied-by-permission"` (`outcomeOf` in `elrond/operations.ts`). *(Done.)*
 
@@ -222,17 +222,15 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 - [x] Tests (§19 Full council, Gimli) in `tests/council.test.ts`: strictest wins, one member failing, Gimli failing, shared deadline (`mock.clock`, parallel and sequential), only configured commands run, Gimli timeout, a block stopping a running check.
 - [x] Live headless check (`claude -p --plugin-dir`, throwaway repo): a push with a failing check was refused by the checks with its tail (2 Opus members approving, 1,860 tokens, 1.8 s; the diff reviewer sat out, as the branch was new); a push to an existing remote branch was approved by all three in about 2 s (3,042 tokens) and ran.
 
-## Stage 5: suggestions and `/council report`
+## Stage 5: suggestions and `/council report` ✅
 
-- [ ] **After "allow once"**, offer an allow rule for that pattern (`hooks/elrond/suggest.ts`, pure: propose a minimal anchored regex from the part's core plus the tool). Show the exact JSON rule; write it to `rules.json` only on confirm, then reload config. **Never** offer one for block-tier matches, protected paths (`classification.isProtected`) or high-confidence Gollum findings.
-- [ ] Allowlist suggestions for low Gollum findings follow the same confirm-then-write path (if not finished in stage 2).
-- [ ] Writing `rules.json` safely: read, parse, validate the merged result with `validateOverrides`, write back pretty-printed, and keep the user's key order where possible.
-- [ ] **`/council report`** (`hooks/elrond/report.ts`, pure over audit lines, including rotated files):
-  - most-blocked rules and patterns;
-  - blocks the user overrode with "allow once" (false-positive candidates);
-  - shadow verdicts that would have blocked;
-  - cost per member (tokens) and median latency.
-- [ ] Tests (§19 Escalation, Commands): the rule suggestion is written only on confirm; never offered for block, protected or high Gollum; the report reads the log correctly.
+- [x] **After "allow once"**, once the call ran, offer an allow rule for it (`hooks/elrond/suggest.ts`, pure; `offerRule` in register.ts). The dialog shows the exact JSON; "Add the rule" writes it to `rules.json` and reloads; "Not now" or dismissing declines it for the session (`declinedRules`, session shape v3). **Never** for block-tier matches, protected paths, any secrets finding, scripts, expanding words, multi-line or long commands (DESIGN §9.1–4).
+  - The rule is as narrow as the call: `command` anchors the gated part's core, and `input` pins the whole command text, so `sudo`, redirects and chained commands can't ride on it. It is offered only if classifying the call again with it in place gives `allow`.
+- [x] Allowlist suggestions for low secrets: already confirm-then-write since stage 2; they now share the writer (DESIGN §9.7).
+- [x] Writing `rules.json` safely: `editOverrides` in `config/write.ts` (read fresh, validate before and after with `validateOverrides`, pretty-print, key order kept, a broken file never rewritten).
+- [x] **`/council report`** (`hooks/elrond/report.ts`, pure over `audit.jsonl.2`, `.1` and the current file): most-refused rules and operations, with who refused; calls stopped then allowed by you; shadow verdicts that would have refused; tokens per reviewer (full councils by `council.voices[].tokens`) and median review time (the new `reviewMs` audit field).
+- [x] Tests (`tests/suggest.test.ts`, `tests/report.test.ts`): written only on "Add the rule" (with the exact JSON shown), declined not re-offered, never for block, protected or secrets findings, nothing rides on the rule (sudo, redirect, chained, other targets), a broken file left alone; the report over rotated files, council lines, shadow lines, unparseable lines, an unreadable file, and what the mod itself logs. Mutation-checked: removing the command pin or the confirm fails tests.
+- [x] Live headless check: a reviewed `rm -r build` logged `reviewMs` (1.2 s, 840 tokens), and `/council report` read it back as `ui_log` lines only.
 
 ## Stage 6: theme, then UI (SPEC §17, in this order; drop what the API can't do)
 
@@ -267,6 +265,14 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 - [ ] Live interactive check by the user in a terminal: the dialog, the pane, the band, the indicator.
 
 ## Known follow-ups
+
+From stage 5:
+- **Live UI check (user):** the allow-rule offer after "allow once" (it can't show in `-p`: nobody to ask), "Add the rule" then the same call passing silently, "Not now" not re-offered, and `/council report` in the pane, in a terminal.
+- **The offer comes after every "allow once"** for a new pattern. "Not now" lasts the session only. If it's noisy, a persistent "never offer for this rule" list, or a `/config` switch for the offer, would be small additions.
+- **An allow rule pins the command text, not the folder.** `rm -r build` added from the project root is also allowed after a `cd` in an earlier, separate call. A `cd x && …` in the same command is part of the pinned text.
+- **Rules can't express "exact command" directly**, hence the `input` pattern over the call's JSON. A dedicated `exact` field in the rule schema would read better in `rules.json`; it's a schema change, so it waits for the user's say-so.
+- **Review time per council member** isn't recorded (the sitting's time is); the report shows each member's median from its single reviews only.
+- **The report reads at most three 1 MiB files** in the hook's own time (fine: tens of milliseconds). An `auditMaxKb` above 4,096 would pass `$.fs.read`'s 4 MiB cap; the appender would fail first, as it reads the current file too.
 
 From stage 4:
 - **A push of a branch the remote doesn't have yet** has no range: the diff reviewer sits out, and Galadriel shows no commits. Diffing against `<remote>/HEAD` (the remote's default branch) when it exists would cover the common case.

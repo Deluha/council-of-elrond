@@ -43,7 +43,12 @@ export type AuditRecord = {
     voices: readonly { member: string; profile: string | null; verdict: string; tokens: number }[]
     checks: readonly { name: string; status: string; ms: number }[]
   }
+  /** The whole call, from the hook's start to the result: tool run and the user's answers included. */
   latencyMs: number
+  /** The model review alone (one member, or the full council), when one ran. */
+  reviewMs?: number
+  /** The id of the allow rule the user added for this call after allowing it once. */
+  ruleAdded?: string
   tokens: number
   /** Present for a subagent's call. */
   agentId?: string
