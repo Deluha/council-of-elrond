@@ -7,12 +7,12 @@ Calls that need a second opinion go to a model reviewer, and anything uncertain 
 > catch what a pattern misses, but they never widen what the rules allow. This is not a sandbox or a
 > security product (see [What it does not protect against](#what-it-does-not-protect-against)).
 
-Status: **Stage 4 of 6.** Available now: the rules; three model reviewers (destructive operations,
+Status: **Stage 5 of 6.** Available now: the rules; three model reviewers (destructive operations,
 diffs, and git and databases) with routing between them; the full council with your project's own
 checks for big operations; the secrets scan, read-only previews, review rounds and lockout, the
-approve cache, escalation to you, `/council`, shadow mode and bypass, fail-closed handling and the
-audit log, all in plain mode. Rule suggestions, `/council report` and the theme follow in later
-stages.
+approve cache, escalation to you, allow rules offered after "allow once", `/council` and
+`/council report`, shadow mode and bypass, fail-closed handling and the audit log, all in plain
+mode. The theme and its UI follow in the last stage.
 See [ROADMAP.md](./ROADMAP.md) for what's left, [SPEC.md](./SPEC.md) for the original spec and
 [DESIGN.md](./DESIGN.md) for how it works.
 
@@ -249,8 +249,18 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | `/council test "<command>"` | Which tier, rule, reviewer (and profile, and why it fell back to Gandalf if it did) and operation key a shell command would get. For a big operation it shows the full council's seats, model and checks. Runs nothing, so a merge is assumed to land on a protected branch. |
 | `/council model [<member> <model> [--save]]` | Lists each slot's model and where it came from, or switches one for this session (`default` clears the switch). `--save` also writes the `/config` row when the model is one of its picker values. |
 | `/council reload` | Reads `rules.json` again. |
+| `/council report` | A summary of the audit log, rotated files included (see below). |
 
-`/council report` arrives in Stage 5.
+### `/council report`
+
+Read the report after a few days in shadow mode to tune the rules. It has four parts:
+
+- **Most refused:** the rules behind the most refusals, each with who refused (the rules, a reviewer, you, the secrets scan, a lockout), and the operations refused most.
+- **Stopped, then allowed by you:** calls the council stopped and you then allowed once (or allowlisted), by rule, with examples. These are the false-positive candidates. It also lists the allow rules you added that way.
+- **Shadow verdicts that would have refused:** per reviewer, how many blocks and revises it logged in shadow mode, and under which rules.
+- **Cost per reviewer:** tokens per reviewer, with its share of full councils (taken from each member's own tokens in the council), the full council's sittings, and the median review time. Review times are logged from Stage 5 on; older lines count for tokens only.
+
+A line that doesn't parse is skipped and counted; a log file that can't be read is named and left out.
 
 ## Secrets scan
 
@@ -313,10 +323,48 @@ the read-only preview when there is one, and each reviewer's verdict. You can:
 Dismissing the question refuses the call. Where nobody can be asked (`claude -p`, nothing
 attached), the call is refused with the reason.
 
+### Allow rules after "allow once"
+
+Once a call you allowed once has run, a second question offers an allow rule for it, showing the
+exact JSON. It is written to `rules.json` (after your own rules, keeping your file's key order)
+only if you choose **Add the rule**, and the rules are then reloaded. **Not now**, or dismissing
+the question, writes nothing, and the same rule isn't offered again this session. For
+`sudo apt update`:
+
+```json
+{
+  "id": "allow-apt-update",
+  "tier": "allow",
+  "tools": ["Bash"],
+  "command": "^apt update$",
+  "input": "\"command\":\" *sudo +apt +update *\"",
+  "reason": "You allowed this exact call after the council stopped it, and added this rule."
+}
+```
+
+The rule is as narrow as the call. `command` names the part that was gated, and `input` pins the
+whole command, so `sudo`, a redirect (`> file`) or another command chained on can't ride along.
+Only the same command passes (spacing may differ). A file edit gets that tool on that path; an MCP
+tool gets that tool by name. Before offering it, the council checks that the rule would really let
+this call through. If one of your own rules would still decide first, nothing is offered.
+
+No rule is offered for:
+
+- a call the rules block, or one touching a protected path;
+- a call the secrets scan flagged at any level (an allow rule would skip the scan);
+- a script or inline code (what runs isn't in the command);
+- a command whose words expand when it runs (`$VAR`, `$(…)`, backticks), one over several lines, or one over 300 characters;
+- a call you then refused at Claude Code's own prompt, or one that didn't run.
+
+A broken `rules.json` is never rewritten: the rule isn't written, and a transcript line says why.
+Secrets get their own confirm-then-write path, the allowlist (see [Secrets scan](#secrets-scan)).
+
 ## Audit log
 
 One JSONL line per gated call: time, tool, fingerprint, operation key, tier, rule, member, model,
-verdict, reason, shadow and bypass flags, your decision, outcome, latency and tokens. A full council
+verdict, reason, shadow and bypass flags, your decision, outcome, latency (the whole call), the
+review's own time (`reviewMs`), tokens, and the id of an allow rule you added for it (`ruleAdded`).
+A full council
 adds what made the call big, each member's own verdict and tokens, and each check's result and time. The outcome
 tells apart a call you refused at Claude Code's permission prompt (`refused-by-user`), one that
 check denied with nobody asked (`denied-by-permission`), and one that ran and errored (`error`). It never holds file contents, diffs or secrets: the
@@ -356,7 +404,7 @@ Parsing is best effort, by pattern, and not a shell.
 - **A push of a branch the remote doesn't have yet** has no range to diff: the diff reviewer sits out of that council, and the preview shows no commits.
 - **The database reviewer sees only the SQL it can find**: inline `-c`/`-e`, heredocs, and `.sql` files named in the command and inside the project. A migration tool's own migration files (`prisma migrate deploy`) are not looked up.
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.
-- Rules you loosen, and calls you allow.
+- Rules you loosen, and calls you allow. An allow rule you add skips review, the ask tier and the secrets scan for that exact command; it does not follow a `cd` earlier in another command, so `rm -r build` is allowed in whichever folder Claude runs it.
 - **Secrets in allowed calls.** The secrets scan reads gated calls only: it sits after the allow step, as the spec orders it. A `curl` GET with a key in a header, or a `git commit`, is not scanned.
 - **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`) and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through.
 - **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb.

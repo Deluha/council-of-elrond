@@ -1,10 +1,13 @@
 # council-of-elrond: design
 
-Status: **Stage 4** (Stage 3 plus the full council for big operations, with the project's own
-checks; plain mode).
+Status: **Stage 5** (Stage 4 plus allow rules offered after "allow once", and `/council report`;
+plain mode).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
-Built and checked against Claude Code **2.1.289**; its generated API types are vendored at
-`mods/types/claude-code.d.ts` and are the source of truth over docs, samples and the spec.
+Built against Claude Code **2.1.289**, and checked against **2.1.291** from Stage 5. The generated API types are
+vendored at `mods/types/claude-code.d.ts` (now 2.1.291's) and are the source of truth over docs,
+samples and the spec. The 2.1.289 → 2.1.291 drift is additive and touches nothing the mod calls: a
+new `prompt.mention` event, a `Color` type (theme keys or raw colours) for paint props, a `ceiling`
+on tool-check inputs, teammate record fields, and doc wording.
 
 ## 1. Step 0 findings
 
@@ -37,12 +40,12 @@ hooks: session.start, prompt.submit, command.run{command=council},
 calls: $.clock.after (via runCheck), $.clock.now (via convene, runCheck), $.command.register,
        $.config.set (via councilModel), $.env.get (via loadContext), $.fs.exists,
        $.fs.list (via previewOf), $.fs.read (via appendAudit, councilOutput, fileDiffOf, loadContext,
-       scriptsOf, sqlFilesOf, writeAllowlist), $.fs.stat (via loadContext, previewOf, realPathOf,
-       sqlFilesOf), $.fs.write (via appendAudit, writeAllowlist), $.model.complete (via probeModel,
-       review), $.process.run (via currentBranchOf, previewOf, rangeDiffOf),
-       $.process.spawn (via runCheck), $.session.cwd, $.session.root (via loadContext),
-       $.session.surfaces (via escalate, show, syncIndicator), $.state.get, $.state.set,
-       $.ui.ask (via confirmAllowlist, escalate), $.ui.log, $.ui.notice, $.ui.open (via show),
+       reportFrom, scriptsOf, sqlFilesOf, writeOverrides), $.fs.stat (via loadContext, previewOf,
+       realPathOf, sqlFilesOf), $.fs.write (via appendAudit, writeOverrides),
+       $.model.complete (via probeModel, review), $.process.run (via currentBranchOf, previewOf,
+       rangeDiffOf), $.process.spawn (via runCheck), $.session.cwd, $.session.root (via loadContext),
+       $.session.surfaces (via escalate, offerRule, show, syncIndicator), $.state.get, $.state.set,
+       $.ui.ask (via confirmAllowlist, escalate, offerRule), $.ui.log, $.ui.notice, $.ui.open (via show),
        $.ui.resolve, $.ui.status (via syncIndicator), $.ui.toast (via warnOnce)
 env reads: HOME
 state: council-of-elrond.session, council-of-elrond.panel
@@ -63,7 +66,8 @@ tool.call ─► classify (pure, rules only)
              │ locked out (3 on the key / 5 on the verb) ─► refuse, "stop retrying"
              │ Gollum: high ─► refuse ("remove the secret")              failed attempt
              │         low ──► ask ─► allow once / allowlist (confirm, write, reload) ─► continue
-             │ ask ─────► escalate ─► allow once ──► notice, next(e)
+             │ ask ─────► escalate ─► allow once ──► notice, next(e) ─► ran? offer an allow rule (pure,
+             │                     │                 checked by classify) ─► add: write, reload
              │                     └► keep blocked / dismissed / nobody ─► refuse   failed attempt
              │                     └► instruction ─► refuse, rounds reset; chat ─► refuse
              │ review ─► cached approve this prompt? ─► next(e)
@@ -92,11 +96,12 @@ tool.call ─► classify (pure, rules only)
              │                automatic denial (nobody asked) ─► recorded, not counted
              └─ any throw before next ─► .catch ─► refuse
 /council ─► parse (pure) ─► output lines ─► pane (where a surface draws) or ui.log; never Claude
+/council report ─► audit.jsonl.2, .1, current (read) ─► report (pure) ─► the same
 ```
 
-- **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`: one file per member, `brief.ts` pairing each member and profile with its prompts, `gimli.ts` the checks' outcomes), routing, the full council's seats (`elrond/council.ts`) and its verdict (`elrond/combine.ts`), escalation, refusal and model choice (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
-- **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 2), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt you send (composer, bridge or SDK origin): it clears rounds, failed attempts, lockouts and the cache.
-- **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load, after the mod's own allowlist write, and on `/council reload` (never by watching the file).
+- **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`: one file per member, `brief.ts` pairing each member and profile with its prompts, `gimli.ts` the checks' outcomes), routing, the full council's seats (`elrond/council.ts`) and its verdict (`elrond/combine.ts`), escalation, refusal, model choice, the allow rule offered after "allow once" (`elrond/suggest.ts`) and the report (`elrond/report.ts`) (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
+- **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 3), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt you send (composer, bridge or SDK origin): it clears rounds, failed attempts, lockouts and the cache.
+- **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load, after the mod's own writes (an allowlist entry, an allow rule), and on `/council reload` (never by watching the file). Both writes go through `editOverrides` (`config/write.ts`).
 
 ## 4. Failure modes
 
@@ -115,6 +120,9 @@ tool.call ─► classify (pure, rules only)
 | Audit write fails | Logged to the debug log; never changes a decision. |
 | A preview inspection fails or times out (5 s) | That inspection is left out; no preview is never a reason to allow or block. |
 | Writing the allowlist fails, or `rules.json` is broken | Nothing is written (a broken file is never rewritten); the call stays blocked, with a transcript line. |
+| Writing an allow rule fails, `rules.json` is broken, or the rule's id was taken since it was offered | Nothing is written; a transcript line says why. The call already ran: it was allowed once. |
+| The rule offer is dismissed, or its question fails | Declined for the session; nothing is written. |
+| An audit file can't be read for `/council report` | Named in the report and left out; the other files are reported. Unparseable lines are counted and skipped. |
 | `/council` registration refused (32-command cap) | A transcript line; the gate is unaffected. |
 | `/council` handler throws | The usage line is logged; the command returns no text. |
 | A council member errors, times out or answers malformed | Counts as that member's block. With no real objection and every check passed, the call comes to you; beside a real block, Claude is refused. |
@@ -206,4 +214,25 @@ tool.call ─► classify (pure, rules only)
 8. **Shadow mode** shadows the council too, the project checks included: they run, their result is logged, and the call goes on. Only the rules, protected paths, the ask tier, the secrets scan and lockouts enforce in shadow.
 9. **Mixed compound commands** (the Stage 3 follow-up). A mixed call that contains a big operation (`git push && psql …`) now goes to the full council, where each specialist reviews it with its own checklist and Aragorn sits once per profile. Other mixed calls (`git rebase && rm -rf build`) stay with Gandalf: sending every mixed call to the council would run the project checks, minutes long, for a cleanup command.
 10. **`/config` rows.** "Full council model" (the same picker as the others) joins `CONFIG_ROWS`, so `/council model council … --save` writes it. Also new: "Full council for big operations", "Full council one at a time" and "Project checks enabled".
+
+## 9. Decisions the spec did not cover (Stage 5)
+
+1. **When the rule is offered.** After "allow once", once the call has run (outcome `ran`), as a second question (`offerRule` in register.ts). A call you then refused at Claude Code's own prompt, or one that errored, gets no offer. One question both shows the exact JSON and confirms it ("Add the rule" / "Not now"): the spec's "show the exact rule, write only if I confirm" needs no second step, unlike the allowlist, whose first dialog had three choices. Dismissing, or "Not now", declines that pattern for the session (`declinedRules` in state, shape version 3); it is never re-offered until a new session. Claude waits for this answer before reading the call's result.
+2. **The rule is as narrow as the call** (`elrond/suggest.ts`). A part's core alone would be too wide: a project rule decides a part before shipped rules, and the core drops wrappers and redirects, so `^rm -r build$` alone would later allow `sudo rm -r build` (no ask tier) and `rm -r build > file`. So a shell rule has two patterns:
+   - `command`: each gated part's core, escaped and anchored (an alternation when several parts were gated). It names what was gated, as `/council rules` shows it.
+   - `input`: the whole command, word by word, as it appears in the call's JSON (`"command":" *rm +-r +build *"`), so nothing else can ride on it. Only spacing may differ.
+   - A file tool gets that tool and its project-relative path, anchored. Any other tool (MCP) gets that tool by its exact name: nothing narrower is meaningful for an arbitrary input.
+3. **Offered only if it works.** The call is classified again with the rule in place (last among the project's rules, where it is written). If it wouldn't be `allow`, nothing is offered: for example, when your own earlier project rule still decides, or a floor (block rule, protected path) applies.
+4. **Never offered** for a block-tier match, a protected path (`classification.isProtected`), any secrets-scan finding (high or low: an allow rule skips the scan, so the low finding you allowed once would pass unseen from then on), a script or inline code (`script-*` rules: what runs isn't in the text), a command whose words expand at run time (`$`, backticks), a multi-line command or one over 300 characters, or a command the parser didn't follow (`command-too-long`, `command-too-complex`).
+5. **Where it goes in `rules.json`.** Appended after the file's own rules, so rules you wrote keep deciding first. The id is `allow-<the core, slugged>`, numbered past ids in use. The reason says it was added after "allow once".
+6. **One way to write `rules.json`** (`editOverrides` in `config/write.ts`), for the allowlist and for rules. Read fresh at write time, parse, validate the file as it is (a broken or invalid file is never rewritten), apply the change, validate the result with `validateOverrides`, write it back pretty-printed (2 spaces). Spreading the parsed object keeps your key order; new keys go last. Comments or custom spacing in the file are not kept (JSON has no comments; the file is rewritten whole). Then the config reloads (decision 9).
+7. **The allowlist path** (Stage 2) needed no change in behaviour: it already asked a second question with the exact entry, wrote only on "Add it" and reloaded. It now shares the writer above.
+8. **The report** (`elrond/report.ts`) reads `audit.jsonl.2`, `.1`, then the current file. A line missing `ts`, `tool` or `outcome` is skipped and counted, as are lines that don't parse.
+   - *Most refused*: outcome `refused`, by rule id and by operation key, each rule saying who refused (rules, a reviewer, you, nobody to ask, a lockout, the secrets scan).
+   - *Stopped, then allowed by you*: decision `allow-once` or `allowlist`, by rule, with example operations, plus the rules added that way (`ruleAdded`).
+   - *Shadow verdicts that would have refused*: `shadow` with verdict `block` or `revise`, per reviewer and profile.
+   - *Cost*: a model review ran when the line has a model and isn't a cached approve. A single review's tokens go to its member (Aragorn per profile). A full council's tokens go to each member from `council.voices[].tokens`, and the council row counts its sittings and total.
+   - Top 5 per list.
+9. **Review time in the audit line.** `latencyMs` covers the whole call (the tool's run and your answers included), so it can't give a reviewer's latency. Lines now carry `reviewMs`, the model review alone (the single member, or the whole council sitting), and the report's medians use it. Lines from before Stage 5 have none and count for tokens only. A council sitting's time isn't split per member.
+10. **`/council report` output** follows decision 1, like every subcommand: pane or `ui.log`, never Claude. Verified live: in `-p` with stream-json it arrives as `system/ui_log` lines, and the result carries no text and no model usage.
 

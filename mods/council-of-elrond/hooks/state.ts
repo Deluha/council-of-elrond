@@ -7,7 +7,7 @@ import type { CouncilCounts, CouncilSession } from '../types'
  */
 
 export const INITIAL_SESSION: CouncilSession = {
-  v: 2,
+  v: 3,
   latestPrompt: '',
   promptEpoch: 0,
   tokensSpent: 0,
@@ -20,6 +20,7 @@ export const INITIAL_SESSION: CouncilSession = {
   ops: {},
   verbWipes: {},
   cache: [],
+  declinedRules: [],
 }
 
 const MAX_WRITTEN = 100
@@ -30,7 +31,7 @@ const MAX_REVIEW_TIMES = 200
 
 /** A value of another shape version reads as a fresh session. */
 export const sessionOf = (value: CouncilSession | undefined): CouncilSession =>
-  value !== undefined && value.v === 2 ? value : INITIAL_SESSION
+  value !== undefined && value.v === 3 ? value : INITIAL_SESSION
 
 /**
  * A new prompt from the user: what resets per prompt resets here. Rounds,
@@ -86,6 +87,14 @@ export const clearCache = (session: CouncilSession): CouncilSession => ({ ...ses
 export const noteWritten = (session: CouncilSession, path: string): CouncilSession => ({
   ...session,
   written: [...session.written.filter(known => known !== path), path].slice(-MAX_WRITTEN),
+})
+
+const MAX_DECLINED = 50
+
+/** A suggested allow rule the user turned down: not offered again this session. */
+export const declineRule = (session: CouncilSession, key: string): CouncilSession => ({
+  ...session,
+  declinedRules: [...session.declinedRules.filter(known => known !== key), key].slice(-MAX_DECLINED),
 })
 
 /** The median of the recorded review times, or undefined with none. */

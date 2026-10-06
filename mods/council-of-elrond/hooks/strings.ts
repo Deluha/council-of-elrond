@@ -87,6 +87,11 @@ const TABLE = {
   },
   'ask.confirmAdd': { plain: 'Add it' },
   'ask.confirmCancel': { plain: 'Cancel' },
+  'ask.suggestRule': {
+    plain: 'You allowed this call once. Add an allow rule to {path}, so the same call passes from now on without review or a question? Block rules, protected paths and the secrets scan of other calls are unaffected. The exact rule:\n{json}',
+  },
+  'ask.suggestAdd': { plain: 'Add the rule' },
+  'ask.suggestDecline': { plain: 'Not now' },
 
   // Why a call went to the user
   'escalate.askTier': { plain: 'A rule sends this call straight to you.' },
@@ -107,6 +112,8 @@ const TABLE = {
   'notice.modelFailed': { plain: 'Council: {who} could not use model "{model}" ({problem}); set its model in /config' },
   'notice.allowedOnce': { plain: 'Council: you allowed this once' },
   'notice.allowlistWritten': { plain: 'Council: added {entry} to the allowlist in {path}' },
+  'notice.ruleWritten': { plain: 'Council: added the allow rule {id} to {path}; rules reloaded' },
+  'notice.ruleFailed': { plain: 'Council: the allow rule was not written ({problem})' },
   'notice.allowlistFailed': { plain: 'Council: the allowlist entry was not written ({problem}); the call stays blocked' },
   'notice.shadowVerdict': { plain: 'Council (shadow): {who} said {verdict} on {tool}; it ran anyway' },
   'notice.shadowSuggest': {
@@ -121,7 +128,7 @@ const TABLE = {
   // /council output (shown to the user, never to Claude)
   'cmd.title': { plain: 'Council' },
   'cmd.help': {
-    plain: 'Usage: /council [on | off | shadow on|off | log [n] | rules | test "<command>" | model [<member> <model> [--save]] | reload]',
+    plain: 'Usage: /council [on | off | shadow on|off | log [n] | rules | test "<command>" | model [<member> <model> [--save]] | reload | report]',
   },
   'cmd.unknown': { plain: 'Unknown subcommand "{sub}".' },
   'cmd.mode': { plain: 'Mode: {mode}' },
@@ -195,7 +202,36 @@ const TABLE = {
   'cmd.modelNoRow': { plain: '{id} has no /config row yet' },
   'cmd.modelNotOption': { plain: '/config offers only {options} for it' },
   'cmd.reloaded': { plain: 'Rules reloaded: {count} rules ({origin}).' },
-  'cmd.reportLater': { plain: '/council report arrives in a later version.' },
+
+  // The allow rule offered after "allow once" (its reason, as written to the rules file)
+  'suggest.reason': { plain: 'You allowed this exact call after the council stopped it, and added this rule.' },
+
+  // /council report (shown to the user, never to Claude)
+  'report.title': { plain: 'Council report (the audit log, rotated files included)' },
+  'report.empty': { plain: 'No gated calls are logged yet.' },
+  'report.unreadable': { plain: 'Left out: {problem}' },
+  'report.span': { plain: '{count} gated calls from {from} to {to}, over {files} log files' },
+  'report.skipped': { plain: '{count} lines could not be read and were skipped.' },
+  'report.none': { plain: '  none' },
+  'report.refusedTitle': { plain: 'Most refused, by rule ({count} refusals in all):' },
+  'report.refusedRule': { plain: '  {rule}: {count} ({by})' },
+  'report.refusedOpsTitle': { plain: 'Most refused operations:' },
+  'report.refusedOp': { plain: '  {op}: {count}' },
+  'report.by.rules': { plain: 'by the rules' },
+  'report.by.reviewer': { plain: 'by a reviewer' },
+  'report.by.user': { plain: 'by you' },
+  'report.by.nobody': { plain: 'nobody to ask' },
+  'report.by.lockout': { plain: 'locked out' },
+  'report.by.secrets': { plain: 'by the secrets scan' },
+  'report.overriddenTitle': { plain: 'Stopped, then allowed by you (false-positive candidates; {count} in all):' },
+  'report.overriddenRule': { plain: '  {rule}: {count}; e.g. {ops}' },
+  'report.rulesAdded': { plain: '  Allow rules you added after allowing once: {count} ({ids})' },
+  'report.shadowTitle': { plain: 'Shadow verdicts that would have refused ({count} in all):' },
+  'report.shadowLine': { plain: '  {who}: {count} ({blocks} block, {revises} revise); rules: {rules}' },
+  'report.costTitle': { plain: 'Cost per reviewer ({tokens} tokens in all):' },
+  'report.costMember': { plain: '  {who}: {reviews} reviews alone, {tokens} tokens ({inCouncil} of them in the full council), median {time}' },
+  'report.costCouncil': { plain: '  {who}: {sittings} sittings, {tokens} tokens, median {time}' },
+  'report.noTimes': { plain: '  (Review times are logged from this version on; older lines have none.)' },
 } as const satisfies Record<string, Entry>
 
 export type StringKey = keyof typeof TABLE

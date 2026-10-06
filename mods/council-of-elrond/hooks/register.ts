@@ -9,7 +9,7 @@ import { loadConfig, MODEL_ID } from './config/schema.js'
 import type { LoadedConfig } from './config/schema.js'
 import { MODEL_SLOTS } from './config/types.js'
 import type { GimliCommand, MemberName, ModelSlot } from './config/types.js'
-import { withAllowlistEntry } from './config/write.js'
+import { withAllowlistEntry, withRule } from './config/write.js'
 import type { FileEdit } from './config/write.js'
 import { isSlot, logOutput, modelsOutput, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
 import { combine, hasRealBlock } from './elrond/combine.js'
@@ -36,6 +36,8 @@ import {
 } from './elrond/operations.js'
 import type { WipePolicy } from './elrond/operations.js'
 import { refusalText } from './elrond/refusal.js'
+import { reportOutput } from './elrond/report.js'
+import { ruleJson, suggestRule } from './elrond/suggest.js'
 import type { Refusal } from './elrond/refusal.js'
 import { route } from './elrond/routing.js'
 import type { Enabled, Seat } from './elrond/routing.js'
@@ -57,13 +59,14 @@ import type { Verdict } from './members/shared.js'
 import { redact } from './redact.js'
 import type { SecretPattern } from './redact.js'
 import { classify, FILE_PATH_FIELDS, SHELL_TOOLS } from './rules/classify.js'
-import type { Call, Classification } from './rules/classify.js'
+import type { Call, Classification, ClassifyContext } from './rules/classify.js'
 import { isInside, relativeTo, resolve } from './rules/paths.js'
 import {
   addReviewTime,
   addTokens,
   clearCache,
   count,
+  declineRule,
   INITIAL_SESSION,
   isShadow,
   noteWritten,
@@ -631,17 +634,50 @@ async function confirmAllowlist($: EngineInterface, finding: GollumFinding): Pro
   }
 }
 
-/** Adds an allowlist entry to the project rules file; a broken file is left alone. */
-async function writeAllowlist($: EngineInterface, root: string, entry: string): Promise<FileEdit> {
+/**
+ * Rewrites the project rules file with one confirmed change, read fresh: a
+ * broken file is left alone, and a result that doesn't validate isn't written.
+ */
+async function writeOverrides($: EngineInterface, root: string, change: (current: string | undefined) => FileEdit): Promise<FileEdit> {
   const path = `${root}/${OVERRIDES_PATH}`
   try {
     const current = (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
-    const edit = withAllowlistEntry(current, entry)
+    const edit = change(current)
     if (edit.ok) await $.fs.write(path, edit.text)
     return edit
   } catch (error) {
     return { ok: false, problem: error instanceof Error ? error.message : String(error) }
   }
+}
+
+/**
+ * After "allow once" and a call that ran: offers the allow rule for it, showing
+ * the exact JSON, and writes it only on "Add the rule" (then reloads, decision
+ * 9). Any other answer, or dismissing, declines it for the session. Returns the
+ * id of the rule written.
+ */
+async function offerRule($: EngineInterface, call: Call, classification: Classification, where: ClassifyContext, ctx: Context, hadSecret: boolean): Promise<string | undefined> {
+  const state = sessionOf(await read($, session))
+  const suggested = suggestRule(call, classification, ctx.loaded.compiled, where, { hadSecret, declined: state.declinedRules })
+  if (suggested.kind === 'none') return undefined
+  const { rule, key } = suggested.suggestion
+  if ((await $.session.surfaces().catch(() => [])).length === 0) return undefined
+  const question = text('ask.suggestRule', { path: OVERRIDES_PATH, json: ruleJson(rule) })
+  const answer = await $.ui
+    .ask(question, { options: [text('ask.suggestAdd'), text('ask.suggestDecline')], header: text('ask.header') })
+    .catch(() => undefined)
+  if (answer !== text('ask.suggestAdd')) {
+    await update($, session, value => declineRule(sessionOf(value), key))
+    return undefined
+  }
+  const written = await writeOverrides($, ctx.root, current => withRule(current, rule))
+  if (!written.ok) {
+    $.ui.log(text('notice.ruleFailed', { problem: written.problem }))
+    return undefined
+  }
+  await reloadContext($)
+  $.ui.log(text('notice.ruleWritten', { id: rule.id, path: OVERRIDES_PATH }))
+  return rule.id
 }
 
 async function appendAudit($: EngineInterface, record: AuditRecord, root: string): Promise<void> {
@@ -700,6 +736,20 @@ async function show($: EngineInterface, output: Output): Promise<void> {
   }
   $.ui.log(output.title)
   for (const line of output.lines) $.ui.log(line)
+}
+
+/** `/council report`: the rotated files (oldest first), then the current one; an unreadable file is named and left out. */
+async function reportFrom($: EngineInterface, path: string): Promise<Output> {
+  const files: string[] = []
+  const unreadable: string[] = []
+  for (const file of [...Array.from({ length: ROTATED_FILES - 1 }, (_, i) => `${path}.${ROTATED_FILES - 1 - i}`), path]) {
+    try {
+      if (await $.fs.exists(file)) files.push(await $.fs.read(file))
+    } catch (error) {
+      unreadable.push(`${file}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  return reportOutput(files, unreadable)
 }
 
 /** A one-request check that a model answers: an API error is a no, a timeout unsure. */
@@ -851,8 +901,10 @@ async function councilOutput($: EngineInterface, command: CouncilCommand): Promi
       if (ctx.loaded.errors.length > 0) lines.push(text('cmd.configErrors', { errors: ctx.loaded.errors.join('; ') }))
       return { title, lines }
     }
-    case 'report':
-      return { title, lines: [text('cmd.reportLater')] }
+    case 'report': {
+      const ctx = await contextOf($)
+      return reportFrom($, resolve(settings.auditLogPath, ctx.root))
+    }
     case 'usage':
       return { title, lines: [text(command.key, command.params ?? {}), ...(command.key === 'cmd.unknown' ? [text('cmd.help')] : [])] }
   }
@@ -882,8 +934,8 @@ export const register: Register = (on, options) => {
     await $.command
       .register({
         name: COMMAND,
-        description: 'The council: status, bypass, shadow mode, log, rules, test a command, models, reload',
-        argumentHint: '[on|off|shadow on|off|log [n]|rules|test "<cmd>"|model [<member> <model> [--save]]|reload]',
+        description: 'The council: status, bypass, shadow mode, log, rules, test a command, models, reload, report',
+        argumentHint: '[on|off|shadow on|off|log [n]|rules|test "<cmd>"|model [<member> <model> [--save]]|reload|report]',
       })
       .catch((error: unknown) => {
         $.ui.log(text('notice.commandFailed', { problem: error instanceof Error ? error.message : String(error) }))
@@ -976,6 +1028,10 @@ export const register: Register = (on, options) => {
     let isShadowed = false
     let preview: string | undefined
     let councilRecord: AuditRecord['council']
+    let reviewMs: number | undefined
+    let ruleAdded: string | undefined
+    // An allow rule would skip the secrets scan: none is offered for a call it flagged.
+    let hadSecret = false
 
     /** Audits the call, then counts it: a failed attempt, or a success that clears its operation. */
     const finish = async (result: ToolCallResult, isWipe = false): Promise<ToolCallResult> => {
@@ -997,6 +1053,8 @@ export const register: Register = (on, options) => {
         decision,
         outcome,
         latencyMs: Date.now() - started,
+        ...(reviewMs !== undefined && { reviewMs }),
+        ...(ruleAdded !== undefined && { ruleAdded }),
         tokens,
         ...(isCached && { cached: true as const }),
         ...(councilRecord !== undefined && { council: councilRecord }),
@@ -1017,14 +1075,21 @@ export const register: Register = (on, options) => {
       return finish({ deny: refusalText({ ...refusal, roundsLeft: left }) }, isWipe)
     }
 
-    /** Lets the call through after the user allowed it, labelling Claude Code's own dialog (decision 10). */
+    /**
+     * Lets the call through after the user allowed it, labelling Claude Code's
+     * own dialog (decision 10). Once it has run, offers an allow rule for it.
+     */
     const allowOnce = async (): Promise<ToolCallResult> => {
       try {
         $.ui.notice(e.tool_use_id, text('notice.allowedOnce'))
       } catch {
         // No dialog to label: nothing lost.
       }
-      return finish(await proceed())
+      const result = await proceed()
+      if (outcomeOf(result) === 'ran') {
+        ruleAdded = await offerRule($, call, classification, where, ctx, hadSecret).catch(() => undefined)
+      }
+      return finish(result)
     }
 
     /**
@@ -1065,7 +1130,7 @@ export const register: Register = (on, options) => {
       if (answer.kind === 'allowlist') {
         const finding = secrets[0]
         if (finding !== undefined && (await confirmAllowlist($, finding))) {
-          const written = await writeAllowlist($, ctx.root, finding.fingerprint)
+          const written = await writeOverrides($, ctx.root, current => withAllowlistEntry(current, finding.fingerprint))
           if (written.ok) {
             decision = 'allowlist'
             $.ui.log(text('notice.allowlistWritten', { entry: finding.fingerprint, path: OVERRIDES_PATH }))
@@ -1136,6 +1201,7 @@ export const register: Register = (on, options) => {
         return refuse({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') }, true)
       }
       if (scan.low.length > 0) {
+        hadSecret = true
         member = 'gollum'
         verdictText = 'ask'
         reasonText = scan.low.map(finding => finding.label).join(', ')
@@ -1206,7 +1272,8 @@ export const register: Register = (on, options) => {
       const held = await convene($, sittings, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), settings.councilSequential, checks, ctx.root, next.signal)
       const runs = held.runs.map(run => ({ ...run, tail: redact(run.tail, ctx.patterns) }))
       const combined = combine(held.voices, runs)
-      const reviewMs = Date.now() - reviewStarted
+      const councilMs = Date.now() - reviewStarted
+      reviewMs = councilMs
       tokens = held.tokens.reduce((sum, n) => sum + n, 0)
       isShadowed = shadow
       const isVerdict = combined.reviewed > 0 && !combined.isFailureOnly
@@ -1224,7 +1291,7 @@ export const register: Register = (on, options) => {
         checks: runs.map(run => ({ name: run.name, status: run.status, ms: run.ms })),
       }
       await update($, session, value => {
-        let counted = addReviewTime(addTokens(sessionOf(value), tokens), reviewMs)
+        let counted = addReviewTime(addTokens(sessionOf(value), tokens), councilMs)
         for (const voice of held.voices) {
           if (voice.kind !== 'skipped') counted = count(counted, voice.member, voice.kind === 'verdict' ? voice.verdict.verdict : 'failed')
         }
@@ -1269,11 +1336,12 @@ export const register: Register = (on, options) => {
     model = choice.model
     const reviewStarted = Date.now()
     const verdict = await review($, brief, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), next.signal)
-    const reviewMs = Date.now() - reviewStarted
+    const memberMs = Date.now() - reviewStarted
+    reviewMs = memberMs
     tokens = verdict.tokens
     isShadowed = shadow
     await update($, session, value => {
-      const spent = addReviewTime(addTokens(sessionOf(value), verdict.tokens), reviewMs)
+      const spent = addReviewTime(addTokens(sessionOf(value), verdict.tokens), memberMs)
       const counted = count(spent, brief.member, verdict.ok ? verdict.verdict.verdict : 'failed')
       // A round is a verdict that enforces: in shadow, verdicts only log.
       return verdict.ok && !shadow ? noteRound(counted, operation.key, verdict.verdict.verdict === 'approve') : counted
