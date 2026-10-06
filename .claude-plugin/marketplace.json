@@ -1,0 +1,19 @@
+{
+  "name": "council-of-elrond",
+  "owner": {
+    "name": "Deluhathol",
+    "url": "https://github.com/Deluha"
+  },
+  "metadata": {
+    "description": "A council of specialist reviewers that gates risky Claude Code tool calls before they run."
+  },
+  "plugins": [
+    {
+      "name": "council-of-elrond",
+      "source": "./mods/council-of-elrond",
+      "description": "Gates risky tool calls: rules decide the tier, model reviewers give a second opinion, anything uncertain comes to you.",
+      "category": "safety",
+      "keywords": ["safety", "review", "gate", "tool-call", "mod"]
+    }
+  ]
+}

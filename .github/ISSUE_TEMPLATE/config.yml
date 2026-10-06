@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a bypass (security)
+    url: https://github.com/Deluha/council-of-elrond/security/advisories/new
+    about: A command that passes the gate when it should not. Please report it privately, not as an issue.
+  - name: Claude Code itself
+    url: https://github.com/anthropics/claude-code/issues
+    about: Problems with Claude Code, mods in general or the plugin runtime belong upstream.

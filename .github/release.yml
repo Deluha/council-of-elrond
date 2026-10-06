@@ -1,0 +1,20 @@
+# Categories for GitHub's generated release notes, by pull request label.
+changelog:
+  exclude:
+    labels: [skip-changelog]
+    authors: [dependabot]
+  categories:
+    - title: Security
+      labels: [security]
+    - title: Rules and classification
+      labels: [rules]
+    - title: Reviewers and pipeline
+      labels: [reviewers, pipeline]
+    - title: UI and theme
+      labels: [ui]
+    - title: Fixes
+      labels: [bug]
+    - title: Documentation
+      labels: [docs]
+    - title: Other
+      labels: ["*"]

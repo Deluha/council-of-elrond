@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Commit message: an imperative summary under 72 characters, a blank line, then why.
+# Merge and revert messages, and fixups, are left alone.
+
+msg_file=$1
+summary=$(grep -vE '^#' "$msg_file" | sed -n '1p')
+
+case "$summary" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *|'') exit 0 ;;
+esac
+
+status=0
+if [ ${#summary} -gt 72 ]; then
+  echo "commit-msg: summary is ${#summary} characters; keep it under 72" >&2; status=1
+fi
+case "$summary" in
+  *.) echo "commit-msg: no full stop at the end of the summary" >&2; status=1 ;;
+esac
+second=$(grep -vE '^#' "$msg_file" | sed -n '2p')
+if [ -n "$second" ]; then
+  echo "commit-msg: leave a blank line after the summary" >&2; status=1
+fi
+if grep -qiE '^(fix|fixed|fixes|added|adds|updated|updates|changed|changes|removed|removes) ' <<<"$summary"; then
+  echo "commit-msg: use the imperative (\"Add\", \"Fix\", \"Remove\"), not \"$(cut -d' ' -f1 <<<"$summary")\"" >&2; status=1
+fi
+exit $status

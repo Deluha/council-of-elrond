@@ -1,0 +1,39 @@
+# Labels the templates, release notes and CODEOWNERS rely on. GitHub has no
+# file-driven label sync built in; create them once with the commands in
+# docs/GITHUB.md (or paste into a label-sync action if you add one).
+- name: bug
+  color: d73a4a
+  description: The mod did something wrong
+- name: rules
+  color: 0e8a16
+  description: The rules tier, parser, shipped rules, protected paths
+- name: security
+  color: b60205
+  description: A bypass or a secrets issue (fixed; reports go through private reporting)
+- name: reviewers
+  color: 1d76db
+  description: A model member's checklist, context or routing
+- name: pipeline
+  color: 5319e7
+  description: register.ts, state, audit, escalation, operations
+- name: ui
+  color: fbca04
+  description: Theme, pane, band, dialog, commands output
+- name: docs
+  color: 0075ca
+  description: Documentation only
+- name: enhancement
+  color: a2eeef
+  description: A new capability
+- name: ci
+  color: ededed
+  description: Workflows, hooks, templates
+- name: good first issue
+  color: 7057ff
+  description: Small and self-contained
+- name: needs-decision
+  color: e4e669
+  description: Waiting on the maintainer's call (roadmap, spec)
+- name: skip-changelog
+  color: ffffff
+  description: Left out of the generated release notes

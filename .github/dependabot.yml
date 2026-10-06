@@ -1,0 +1,11 @@
+# The project has no package dependencies. Dependabot keeps the GitHub Actions
+# used by the workflows current.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [ci]
+    commit-message:
+      prefix: "ci"

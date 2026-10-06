@@ -1,0 +1,20 @@
+# Review routing. With branch protection's "require review from code owners" on,
+# a pull request touching these paths needs the owner's approval.
+
+# Everything, by default.
+*                                               @Deluha
+
+# The safety boundary: the parser, the classifier, the shipped rules, and the
+# only file that touches the engine. Changes here are security-sensitive.
+/mods/council-of-elrond/hooks/rules/            @Deluha
+/mods/council-of-elrond/hooks/config/defaults.ts @Deluha
+/mods/council-of-elrond/hooks/register.ts       @Deluha
+/mods/council-of-elrond/hooks/redact.ts         @Deluha
+/mods/council-of-elrond/hooks/members/gollum.ts @Deluha
+/mods/council-of-elrond/hooks/members/galadriel.ts @Deluha
+
+# Policy and automation.
+/.github/                                       @Deluha
+/.githooks/                                     @Deluha
+/SECURITY.md                                    @Deluha
+/LICENSE                                        @Deluha

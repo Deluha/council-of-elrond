@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Pre-commit: the three gates the project requires before every commit, plus hygiene.
+# Install once with scripts/setup.sh (it sets core.hooksPath to .githooks).
+# Skip deliberately with `git commit --no-verify`; CI runs the same checks.
+
+set -u
+cd "$(git rev-parse --show-toplevel)" || exit 2
+
+staged=$(git diff --cached --name-only --diff-filter=ACMRD)
+[ -z "$staged" ] && exit 0
+
+red()   { printf '\033[31m%s\033[0m\n' "$*"; }
+green() { printf '\033[32m%s\033[0m\n' "$*"; }
+
+# Hygiene runs on every commit (fast).
+if ! scripts/check-hygiene.sh --staged; then
+  red "pre-commit: hygiene checks failed"
+  exit 1
+fi
+
+# The gates run only when something that can change the mod's behaviour is staged.
+if echo "$staged" | grep -qE '^mods/(council-of-elrond/(hooks|tests|types|\.claude-plugin)/|tsconfig\.json|types/)'; then
+  for tool in claude tsc; do
+    command -v "$tool" >/dev/null || { red "pre-commit: $tool not found on PATH (see CONTRIBUTING.md)"; exit 1; }
+  done
+  echo "pre-commit: tests"
+  claude plugin test mods/council-of-elrond || { red "pre-commit: tests failed"; exit 1; }
+  echo "pre-commit: typecheck"
+  tsc -p mods || { red "pre-commit: tsc failed"; exit 1; }
+  echo "pre-commit: validate"
+  out=$(claude plugin validate --strict mods/council-of-elrond 2>&1) || { echo "$out"; red "pre-commit: validate failed"; exit 1; }
+  if echo "$out" | grep -q 'tool.check'; then
+    red "pre-commit: register.ts registers a tool.check hook; the mod must never take part in the permission decision"
+    exit 1
+  fi
+fi
+
+# The marketplace manifest, when it changes.
+if echo "$staged" | grep -qx '.claude-plugin/marketplace.json'; then
+  claude plugin validate --strict . >/dev/null || { red "pre-commit: marketplace.json is invalid"; exit 1; }
+fi
+
+green "pre-commit: ok"

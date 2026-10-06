@@ -1,0 +1,71 @@
+name: Release
+
+# Runs when `claude plugin tag mods/council-of-elrond --push` pushes a tag such as
+# council-of-elrond--v0.5.0 (docs/MAINTENANCE.md, "Releasing"). It checks that the
+# tag, plugin.json and CHANGELOG agree, re-runs the gates on the tagged commit, and
+# publishes a GitHub release whose body is that version's changelog section.
+# Nothing is built: users install from the repository through the marketplace.
+
+on:
+  push:
+    tags: ["council-of-elrond--v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Code and TypeScript
+        run: npm install -g @anthropic-ai/claude-code typescript
+
+      - name: Check the tag against plugin.json and CHANGELOG.md
+        id: version
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#council-of-elrond--v}"
+          manifest=$(node -p "require('./mods/council-of-elrond/.claude-plugin/plugin.json').version")
+          if [ "$version" != "$manifest" ]; then
+            echo "tag says $version, plugin.json says $manifest" >&2; exit 1
+          fi
+          if ! grep -qE "^## \[$version\]" CHANGELOG.md; then
+            echo "CHANGELOG.md has no '## [$version]' section" >&2; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Gates
+        run: |
+          claude plugin test mods/council-of-elrond
+          tsc -p mods
+          claude plugin validate --strict mods/council-of-elrond
+          claude plugin validate --strict .
+
+      - name: Extract the changelog section
+        run: |
+          set -eu
+          v="${{ steps.version.outputs.version }}"
+          awk -v v="$v" '
+            $0 ~ "^## \\[" v "\\]" { on=1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > /tmp/notes.md
+          printf '\n---\nInstall or update:\n\n```sh\nclaude plugin marketplace add Deluha/council-of-elrond\nclaude plugin install council-of-elrond@council-of-elrond\n```\n' >> /tmp/notes.md
+          cat /tmp/notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "council-of-elrond ${{ steps.version.outputs.version }}" \
+            --notes-file /tmp/notes.md \
+            --verify-tag
