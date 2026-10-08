@@ -51,7 +51,7 @@ Full instructions, configuration, updating and removal: [docs/INSTALL.md](docs/I
 
 ```
 mods/council-of-elrond/   the mod: manifest, hooks, tests, user manual, design, roadmap, spec
-mods/types/               Claude Code's generated API types for the build it targets (2.1.291)
+mods/types/               Claude Code's generated API types for the build it targets (2.1.294)
 docs/                     install, development, maintenance guides and reviews
 .claude-plugin/           marketplace manifest, so `claude plugin install` works from this repo
 .claude/skills/           skills for Claude Code sessions working on this repo

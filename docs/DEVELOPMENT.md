@@ -25,7 +25,7 @@ claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ ca
 ```
 mods/
   tsconfig.json              strict typecheck for every mod under mods/
-  types/claude-code.d.ts     Claude Code's generated API types (2.1.291), vendored
+  types/claude-code.d.ts     Claude Code's generated API types (2.1.294), vendored
   council-of-elrond/
     .claude-plugin/plugin.json   manifest: name, version, userConfig (the /config rows)
     hooks/hooks.json             "modules": ["./register.ts"]

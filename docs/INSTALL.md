@@ -6,7 +6,7 @@ options) is in the [user manual](../mods/council-of-elrond/README.md).
 
 ## Requirements
 
-- Claude Code **2.1.287 or later**. The mod was built on 2.1.289 and checked on 2.1.291; see the
+- Claude Code **2.1.287 or later**. The mod was built on 2.1.289 and checked on 2.1.294; see the
   top of [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for the version it currently targets.
   Mods ("function hooks") are on by default; nothing has to be enabled.
 - `git` on the PATH, for the read-only previews. Without it, previews are left out and nothing
