@@ -48,6 +48,8 @@ describe('the suggested rule', () => {
     }
     // The same core with sudo stays on the ask tier.
     expect(tierWith(rule, bash('sudo rm -r build'))).toBe('ask')
+    // The same command with the sandbox disabled is still reviewed, not allowed.
+    expect(classify({ tool: 'Bash', input: { command: 'rm -r build', dangerouslyDisableSandbox: true } }, withProject(rule), CONTEXT).tier).toBe('review')
   })
 
   test('a gated part inside a compound command: the command is pinned whole', () => {
