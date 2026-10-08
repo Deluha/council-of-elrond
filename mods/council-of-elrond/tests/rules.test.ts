@@ -90,6 +90,57 @@ describe('the program name cannot be split or disguised', () => {
   })
 })
 
+describe('wrappers and runners do not hide the command they run', () => {
+  test('package-manager runners reveal the inner command', () => {
+    for (const command of ['npm exec -- rm -rf /', 'npm exec rm -rf /', 'pnpm exec rm -rf /', 'yarn exec rm -rf /', 'poetry run rm -rf /', 'pipenv run rm -rf /', 'uv run rm -rf /', 'bundle exec rm -rf /']) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('process wrappers reveal the inner command', () => {
+    for (const command of ['setsid rm -rf /', 'strace -f rm -rf /', 'unshare -r rm -rf /', 'nsenter -t 1 -m rm -rf /', 'chroot / rm -rf /', 'flock /tmp/l rm -rf /']) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('env clearing and split-string reveal the inner command', () => {
+    for (const command of ['env - rm -rf /', 'env -S "rm -rf /"', 'env --split-string="rm -rf /"']) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('npx-family fetch runners: inner command and -c script', () => {
+    expect(tierOf('npx rimraf /')).toBe('review')
+    expect(ruleOf('npx rimraf /')).toBe('shell-delete')
+    expect(ruleOf('npx -c "rm -rf /"')).toBe('rm-recursive-outside-repo')
+  })
+
+  test('privilege-changing wrappers ask even for a benign command, and block a dangerous one', () => {
+    for (const command of ['gosu root whoami', 'runuser -u root id', 'sudo whoami']) {
+      expect(ruleOf(command), command).toBe('privileged')
+    }
+    expect(ruleOf('runuser -u root rm -rf /')).toBe('rm-recursive-outside-repo')
+  })
+
+  test('rimraf, find -ok and parallel are recognised', () => {
+    expect(ruleOf('rimraf build')).toBe('shell-delete')
+    expect(ruleOf('find / -ok rm -rf {} ;')).toBe('shell-find-delete')
+    expect(ruleOf('echo x | parallel rm -rf')).toBe('script-eval')
+  })
+
+  test('remote and container execution is reviewed', () => {
+    for (const command of ['ssh host rm -rf /', 'docker exec x rm -rf /', 'docker run -v /:/host alpine rm -rf /host', 'kubectl exec pod -- rm -rf /', 'rsync -e "cmd" a b']) {
+      expect(bash(command).decided?.ruleId, command).toBe('remote-exec')
+    }
+  })
+
+  test('benign runner and wrapper uses still pass', () => {
+    for (const command of ['npm run build', 'npm test', 'npm install', 'poetry install', 'yarn build', 'docker ps', 'nsenter -t 1 -a ls', 'flock /tmp/l echo hi']) {
+      expect(tierOf(command), command).toBe('allow')
+    }
+  })
+})
+
 describe('tiers', () => {
   test('allow: read-only commands and unmatched calls pass', () => {
     for (const command of ['ls -la', 'git status', 'git log --oneline -5', 'cat src/app.ts', 'npm test', 'grep -r foo src', 'ls 2>/dev/null', 'make 2>&1']) {

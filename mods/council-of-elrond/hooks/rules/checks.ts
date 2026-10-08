@@ -1,5 +1,6 @@
 import type { CheckName } from '../config/types.js'
 import { isInside, resolve } from './paths.js'
+import { PRIVILEGE_WRAPPERS } from './shell.js'
 import type { ShellPart } from './shell.js'
 
 export type CheckContext = {
@@ -94,8 +95,8 @@ function destructiveSqlProduction(part: ShellPart, context: CheckContext): boole
 
 function privileged(part: ShellPart): boolean {
   return (
-    part.wrappers.some(wrapper => wrapper === 'sudo' || wrapper === 'doas') ||
-    ['su', 'sudo', 'doas', 'pkexec'].includes(part.coreWords[0] ?? '')
+    part.wrappers.some(wrapper => PRIVILEGE_WRAPPERS.has(wrapper)) ||
+    ['su', 'sudo', 'doas', 'pkexec', 'gosu', 'runuser', 'setpriv', 'run0'].includes(part.coreWords[0] ?? '')
   )
 }
 

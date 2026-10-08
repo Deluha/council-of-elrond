@@ -49,11 +49,16 @@ const KEYWORDS = new Set([
 /** A function-definition header word, e.g. `deploy()` or glued `deploy(){`. */
 const FUNCTION_HEADER = /^[A-Za-z_]\w*\(\)\{?$/
 
-/** Wrapper programs and the options of each that take an argument. */
+/**
+ * Wrapper programs and the options of each that take an argument. A wrapper
+ * runs the command that follows it, so stripping it lets the rules see that
+ * command. The privilege-changing ones also mark the part privileged (ask),
+ * so a benign command run as another user is still gated.
+ */
 const WRAPPERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['sudo', new Set(['-u', '-g', '-h', '-p', '-C', '-D', '-r', '-t', '-U', '-T', '--user', '--group'])],
   ['doas', new Set(['-u', '-C'])],
-  ['env', new Set(['-u', '-C', '-S', '--unset', '--chdir'])],
+  ['env', new Set(['-u', '-C', '-S', '--unset', '--chdir', '--split-string'])],
   ['nice', new Set(['-n', '--adjustment'])],
   ['ionice', new Set(['-c', '-n', '-p', '-t'])],
   ['nohup', new Set()],
@@ -65,7 +70,62 @@ const WRAPPERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['stdbuf', new Set(['-i', '-o', '-e'])],
   ['unbuffer', new Set()],
   ['caffeinate', new Set(['-t', '-w'])],
+  // Process wrappers that run their argument command.
+  ['chroot', new Set(['--userspec', '--groups'])],
+  ['setsid', new Set()],
+  ['flock', new Set(['-w', '--timeout', '-E', '--conflict-exit-code'])],
+  ['strace', new Set(['-o', '-p', '-e', '-s', '-S', '-u'])],
+  ['ltrace', new Set(['-o', '-p', '-e', '-s'])],
+  ['watch', new Set(['-n', '--interval', '-d', '--differences'])],
+  // Only options that always take a value; the namespace flags take none, so
+  // listing them would swallow the command that follows.
+  ['unshare', new Set(['--map-user', '--map-group'])],
+  ['nsenter', new Set(['-t', '--target', '-S', '--setuid', '-G', '--setgid'])],
+  ['chrt', new Set([])],
+  ['taskset', new Set(['-c', '-p'])],
+  ['numactl', new Set(['-N', '--cpunodebind', '-m', '--membind', '-C', '--physcpubind'])],
+  ['setarch', new Set([])],
+  ['eatmydata', new Set()],
+  ['proxychains', new Set(['-f'])],
+  ['proxychains4', new Set(['-f'])],
+  ['xvfb-run', new Set(['-n', '-s', '-e', '-f'])],
+  ['retry', new Set(['-t', '-d'])],
+  // Privilege-changing wrappers (also flagged by the `privileged` check).
+  ['gosu', new Set()],
+  ['runuser', new Set(['-u', '-g', '-G', '-c', '--user', '--group'])],
+  ['setpriv', new Set(['--reuid', '--regid', '--groups', '--inh-caps', '--ambient-caps', '--bounding-set'])],
+  ['run0', new Set(['--uid', '--gid', '-u', '-g', '--setenv', '--chdir', '-D'])],
+  ['chpst', new Set(['-u', '-U', '-e', '-/', '-n', '-l', '-L'])],
 ])
+
+/**
+ * Package-manager runners whose given subcommands run an arbitrary command
+ * that follows (`poetry run rm ...`, `npm exec rm ...`). The prefix is
+ * stripped so the rules see the command. A runner that fetches and runs an
+ * arbitrary package by name (`npx`, `bunx`) is a wrapper below.
+ */
+const TWO_WORD_RUNNERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['npm', new Set(['exec', 'x'])],
+  ['pnpm', new Set(['exec', 'dlx'])],
+  ['yarn', new Set(['exec', 'dlx'])],
+  ['poetry', new Set(['run'])],
+  ['pipenv', new Set(['run'])],
+  ['pdm', new Set(['run'])],
+  ['rye', new Set(['run'])],
+  ['hatch', new Set(['run'])],
+  ['uv', new Set(['run'])],
+  ['bundle', new Set(['exec'])],
+  ['composer', new Set(['exec'])],
+  ['conda', new Set(['run'])],
+  ['mamba', new Set(['run'])],
+  ['micromamba', new Set(['run'])],
+])
+
+/** One-word runners that fetch and run a command; stripped like a wrapper. */
+const ONE_WORD_RUNNERS: ReadonlySet<string> = new Set(['npx', 'bunx', 'pnpx', 'uvx'])
+
+/** Wrappers that run their command with changed privileges (ask, not allow). */
+export const PRIVILEGE_WRAPPERS: ReadonlySet<string> = new Set(['sudo', 'doas', 'gosu', 'runuser', 'setpriv', 'run0', 'chpst'])
 
 const GIT_GLOBALS_WITH_ARG = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'])
 
@@ -107,9 +167,10 @@ type Builder = {
 }
 
 /** Strips assignments, keywords, wrappers and git's global options. */
-function coreOf(words: readonly string[]): { wrappers: string[]; coreWords: string[] } {
+function coreOf(words: readonly string[]): { wrappers: string[]; coreWords: string[]; nestedScripts: string[] } {
   let k = 0
   const wrappers: string[] = []
+  const nestedScripts: string[] = []
   // Skip leading assignments, plain keywords, function-definition headers and
   // a `case SUBJECT in PATTERN)` arm, so the command they wrap is what the
   // rules see. Without this a definition body or a case arm hides its command.
@@ -143,6 +204,40 @@ function coreOf(words: readonly string[]): { wrappers: string[]; coreWords: stri
     const word = words[k]
     if (word === undefined) break
     const name = word.includes('/') && SYSTEM_BIN.test(word) ? word.slice(word.lastIndexOf('/') + 1) : word
+
+    // A two-word runner: `poetry run <cmd>`, `npm exec <cmd>`.
+    const runnerSubs = TWO_WORD_RUNNERS.get(name)
+    if (runnerSubs !== undefined && runnerSubs.has(words[k + 1] ?? '')) {
+      wrappers.push(`${name} ${words[k + 1]}`)
+      k += 2
+      // Skip this runner's own options and their values until the command.
+      while (k < words.length) {
+        const option = words[k] as string
+        if (option === '--') { k++; break }
+        if (!option.startsWith('-')) break
+        k += option.includes('=') ? 1 : 2 // `-n env`, `--no-capture-output`
+      }
+      continue
+    }
+
+    // A one-word fetch-and-run runner: `npx <pkg>`, `bunx <pkg>`.
+    if (ONE_WORD_RUNNERS.has(name)) {
+      wrappers.push(name)
+      k++
+      while (k < words.length) {
+        const option = words[k] as string
+        if (option === '--') { k++; break }
+        if (option === '-c' || option === '--call') {
+          nestedScripts.push(words[k + 1] ?? '')
+          k += 2
+          continue
+        }
+        if (!option.startsWith('-')) break
+        k += option === '-p' || option === '--package' ? 2 : 1
+      }
+      continue
+    }
+
     const takesArg = WRAPPERS.get(name)
     if (takesArg === undefined) break
     wrappers.push(name)
@@ -153,14 +248,23 @@ function coreOf(words: readonly string[]): { wrappers: string[]; coreWords: stri
         k++
         break
       }
-      if (name === 'env' && isAssignment(option)) {
+      if (name === 'env' && (isAssignment(option) || option === '-' || option === '-i' || option === '--ignore-environment')) {
         k++
+        continue
+      }
+      // `env -S "cmd ..."` / `--split-string=...`: the value is a command line.
+      if (name === 'env' && (option === '-S' || option === '--split-string' || option.startsWith('--split-string='))) {
+        const value = option.includes('=') ? option.slice(option.indexOf('=') + 1) : (words[k + 1] ?? '')
+        nestedScripts.push(value)
+        k += option.includes('=') ? 1 : 2
         continue
       }
       if (!option.startsWith('-') || option === '-') break
       k += takesArg.has(option) ? 2 : 1
     }
     if (name === 'timeout' && k < words.length) k++ // the duration
+    // chroot NEWROOT CMD, flock LOCKFILE CMD: one positional before the command.
+    if ((name === 'chroot' || name === 'flock') && k < words.length && !(words[k] as string).startsWith('-')) k++
   }
   const coreWords = words.slice(k).map((word, index) =>
     index === 0 && word.includes('/') && SYSTEM_BIN.test(word) ? word.slice(word.lastIndexOf('/') + 1) : word,
@@ -173,7 +277,7 @@ function coreOf(words: readonly string[]): { wrappers: string[]; coreWords: stri
     }
     coreWords.splice(1, g - 1)
   }
-  return { wrappers, coreWords }
+  return { wrappers, coreWords, nestedScripts }
 }
 
 /** The script a shell runs with `-c` (any short-option cluster holding `c`). */
@@ -244,7 +348,7 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
       if (out.parts.length >= MAX_PARTS) {
         out.isCut = true
       } else {
-        const { wrappers, coreWords } = coreOf(words)
+        const { wrappers, coreWords, nestedScripts } = coreOf(words)
         const part: ShellPart = {
           text,
           words,
@@ -258,6 +362,7 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
         out.parts.push(part)
         const script = inlineScriptOf(coreWords)
         if (script !== undefined && script !== '') nested(script)
+        for (const nestedScript of nestedScripts) if (nestedScript !== '') nested(nestedScript)
       }
     }
     if (out.parts.length > owner) {
