@@ -213,7 +213,11 @@ from a `ui.render` hook.
 
 ## Working with Claude Code on this repo
 
-The root `CLAUDE.md` holds the rules a session must follow. Three project skills help:
+The root `CLAUDE.md` holds the rules a session must follow, and its "Orchestration" section the
+three lanes a session delegates in: Opus orchestrates and reviews, Sonnet implements, Haiku reads,
+verifies and transcribes. `.claude/agents/scribe.md` is the Haiku agent for dictated edits and
+verify runs; sweeps and the diff pre-check go to the built-in `Explore` agent called with
+`model: "haiku"`. Three project skills help:
 
 - `/checkpoint`: runs the three checks and drafts the stage summary SPEC §20 asks for.
 - `/live-check`: the headless probe procedure above, step by step.

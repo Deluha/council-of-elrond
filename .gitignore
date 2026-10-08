@@ -6,7 +6,7 @@ node_modules/
 # The mod's own audit log, when the mod is loaded in this repository
 .claude/council-of-elrond/audit/
 
-# Local Claude Code settings (the committed .claude/ holds skills only)
+# Local Claude Code settings (the committed .claude/ holds skills and agents only)
 .claude/settings.local.json
 
 # Throwaway folders used for headless live checks
