@@ -58,6 +58,12 @@ describe('operation keys', () => {
     expect(bash('psql -d staging -c "select 1"').key).toBe('shell:psql staging')
   })
 
+  test('a secret in a target never reaches the key (it is written to the audit log)', () => {
+    const token = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789' // the established fixture token
+    const key = bash(`git push https://user:${token}@github.com/o/r main`).key
+    expect(key).not.toContain(token)
+  })
+
   test('Edit and Write on one file share a key; their verbs differ', () => {
     const edit = opOf({ tool: 'Edit', input: { file_path: `${ROOT}/src/app.ts`, old_string: 'a', new_string: 'b' } })
     const write = opOf({ tool: 'Write', input: { file_path: 'src/app.ts', content: 'x' } })

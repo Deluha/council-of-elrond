@@ -1,7 +1,7 @@
 # council-of-elrond: design
 
-Status: **Stage 5** (Stage 4 plus allow rules offered after "allow once", and `/council report`;
-plain mode).
+Status: **Stage 5, hardened in 0.5.0** (Stage 4 plus allow rules offered after "allow once", and
+`/council report`; then the 0.5.0 hardening of §10; plain mode).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
 Built against Claude Code **2.1.289**, and checked against **2.1.291** from Stage 5. The generated API types are
 vendored at `mods/types/claude-code.d.ts` (now 2.1.291's) and are the source of truth over docs,
@@ -236,3 +236,51 @@ tool.call ─► classify (pure, rules only)
 9. **Review time in the audit line.** `latencyMs` covers the whole call (the tool's run and your answers included), so it can't give a reviewer's latency. Lines now carry `reviewMs`, the model review alone (the single member, or the whole council sitting), and the report's medians use it. Lines from before Stage 5 have none and count for tokens only. A council sitting's time isn't split per member.
 10. **`/council report` output** follows decision 1, like every subcommand: pane or `ui.log`, never Claude. Verified live: in `-p` with stream-json it arrives as `system/ui_log` lines, and the result carries no text and no model usage.
 
+
+## 10. The 0.5.0 hardening (the Stage 5 review)
+
+The end-of-Stage-5 review ([docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md)) found commands
+that reached a weaker tier than intended. The rules tier is the safety boundary, so these were
+fixed before Stage 6. The decisions:
+
+1. **Unwrap, don't only pattern-match.** `coreOf` (`rules/shell.ts`) now strips a function or
+   `case`/`coproc` header, package-manager runners (`npm exec`, `poetry run`, …), process wrappers
+   (`setsid`, `strace`, `chroot`, `flock`, `nsenter`, …), `env -`/`-S`, the npx family, and the
+   global options before a kubectl/helm/docker/terraform subcommand, so the command they wrap is
+   what the rules see. A privilege-changing wrapper (`gosu`, `runuser`, `setpriv`, `run0`, `chpst`,
+   `pkexec`) is stripped and also marks the part privileged (ask). The scanner decodes `$'…'`
+   escapes, treats `$"…"` as the quoted string, and drops an empty substitution so a split or
+   disguised program name resolves.
+2. **Three new code checks** (`rules/checks.ts`): `git-config-write` (writing `.git/config`),
+   `git-config-injection` (a dangerous `git -c` key, `--config-env`, `--exec-path`, `bisect run`),
+   and `dangerous-env-assignment` (a leading `LD_PRELOAD`, `GIT_SSH_COMMAND`, `NODE_OPTIONS` and
+   the like). A fourth, `raw-disk-write`, replaced the old regex and covers a redirect to a device
+   and `cp`/`tee`/`shred`/`blkdiscard`/the mkfs family, not just `dd`/`mkfs`.
+3. **Protected paths** (`rules/globs.ts`, `protectedMatcher`/`touchesProtected`) match the
+   protected directory itself, match case-insensitively, and match a targeted glob (`.en*`,
+   `*.env`) whose language includes a protected file. A match-everything segment (`*`) and an
+   unrelated short name (a `db` host) are not treated as protected, so `rm -rf *` stays review and
+   ordinary reads pass. Two-sided glob intersection is not computed (documented gap).
+4. **Force-push** blocks `--mirror`, `--prune` and a glob-destination refspec; **rm** expands
+   brace flags (`-{r,f}`) before the recursive test; **`sh -c --`** reveals the command after the
+   `--`; the part cap already degrades to review.
+5. **Operation keys are redacted** before they reach the audit log (`elrond/operations.ts`), since
+   a key can hold a target a command named verbatim (a push URL with a token).
+6. **The approve-cache fingerprint** (`audit.ts`) collapses whitespace only for fields where it
+   has no meaning (a shell `command`); a file's content is hashed exactly, so a re-indented write
+   is not reused unreviewed.
+7. **The allow rule offered after "allow once"** (`elrond/suggest.ts`) forbids the
+   sandbox-disabled variant of the command, and the offer is withheld if the rule cannot be made
+   safe.
+8. **Reviewer prompts** sanitise call-derived labels with `label()` (`members/shared.ts`), so a
+   path or SQL label full of newlines cannot forge prompt lines outside the untrusted-data block.
+9. **Esc during a review** refuses plainly (no failed attempt, no round, no dialog on the
+   abandoned dispatch); a prompt sent mid-review cannot have a round, wipe or cached approve
+   written into it, because those writes are guarded by the prompt epoch captured when the call
+   began (`register.ts`, `thisPrompt`).
+
+What the review raised and 0.5.0 did **not** change, by decision: a `cd` inside a subshell or
+inline script still resolves against the root (review, not block); two-sided glob intersection is
+not computed; and the breadth of the shipped rule set (which cloud, database and interpreter
+programs are named by default) is left to grow as real reports come in, with project rules as the
+workaround. These are in the README's "Known gaps" and the review's §4.9.

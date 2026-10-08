@@ -7,12 +7,14 @@ Calls that need a second opinion go to a model reviewer, and anything uncertain 
 > catch what a pattern misses, but they never widen what the rules allow. This is not a sandbox or a
 > security product (see [What it does not protect against](#what-it-does-not-protect-against)).
 
-Status: **Stage 5 of 6.** Available now: the rules; three model reviewers (destructive operations,
-diffs, and git and databases) with routing between them; the full council with your project's own
-checks for big operations; the secrets scan, read-only previews, review rounds and lockout, the
-approve cache, escalation to you, allow rules offered after "allow once", `/council` and
-`/council report`, shadow mode and bypass, fail-closed handling and the audit log, all in plain
-mode. The theme and its UI follow in the last stage.
+Status: **Stage 5 of 6, hardened in 0.5.0.** Available now: the rules; three model reviewers
+(destructive operations, diffs, and git and databases) with routing between them; the full council
+with your project's own checks for big operations; the secrets scan, read-only previews, review
+rounds and lockout, the approve cache, escalation to you, allow rules offered after "allow once",
+`/council` and `/council report`, shadow mode and bypass, fail-closed handling and the audit log,
+all in plain mode. The 0.5.0 release closed the rules-tier and pipeline findings of the Stage 5
+review ([docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md)). The theme and its UI follow in the
+last stage.
 See [ROADMAP.md](./ROADMAP.md) for what's left, [SPEC.md](./SPEC.md) for the original spec and
 [DESIGN.md](./DESIGN.md) for how it works.
 
@@ -385,13 +387,17 @@ current prices for the models you choose.
 
 ## Known gaps in shell parsing
 
-Parsing is best effort, by pattern, and not a shell.
+Parsing is best effort, by pattern, and not a shell. The parser does unwrap function and `case`
+bodies, package and process wrappers, `$'…'` escapes and empty substitutions, so the command they
+hold is classified (0.5.0); the gaps that remain:
 
-- **Variables, globs and aliases aren't expanded.** `rm -rf $DIR` has an unknown target, so review decides. `cd $X` followed by a relative recursive delete is treated as if `$X` were `/`.
-- **Earlier commands aren't tracked.** Shell functions and aliases defined in an earlier command are unknown.
+- **Variables and runtime expansions aren't resolved.** `rm -rf $DIR` has an unknown target, so review decides. `cd $X` followed by a relative recursive delete is treated as if `$X` were `/`. A protected file named only through a variable (`X=.env; cat $X`) is not recognised as protected.
+- **A `cd` inside a subshell or an inline script isn't tracked.** `(cd / && rm -rf *)` and `bash -c 'cd / && rm -rf *'` resolve the target against the project root, so they are review rather than block. A `cd` in the top-level command is tracked.
 - **Code inside interpreters isn't parsed.** `python -c "shutil.rmtree('/')"` is review (script execution); the reviewer sees the code, but no rule reads it.
 - **Encoded or downloaded payloads** (`base64 -d | sh`, `curl | sh`) are caught only as "piped into a shell" (review).
 - **Shell symbolic links aren't resolved.** File-tool paths are resolved to their real path; paths in shell commands are not.
+- **Two-sided glob intersection isn't computed.** A glob that names a protected file directly (`cat .en*`) is caught, but a glob with a wildcard in a middle segment against a protected `**` glob (`cat .github/*/ci.yml`) may not be.
+- **Not every program that changes things is named.** The shipped rules cover the common ones; a cloud or database CLI, an HTTP write or an interpreter route they don't list may pass. Add a project rule, or propose a default.
 - **POSIX only:** no Windows paths or PowerShell parsing.
 - **Long commands aren't parsed.** Commands longer than 20,000 characters, or nested more than four levels deep, go to review.
 

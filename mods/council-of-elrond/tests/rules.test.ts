@@ -43,6 +43,186 @@ describe('shell splitting', () => {
   })
 })
 
+describe('a command wrapped in a shell construct is still classified', () => {
+  // A function body, a case arm or a coproc must not hide the command they run.
+  test('function definitions and bodies', () => {
+    for (const command of [
+      'f() { rm -rf /; }; f',
+      'f(){ rm -rf /;}; f',
+      'function f { rm -rf /; }; f',
+      'f() rm -rf /; f',
+    ]) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('case arms and coproc', () => {
+    for (const command of ['case x in x) rm -rf / ;; esac', 'case $1 in *) rm -rf / ;; esac', 'coproc rm -rf /']) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('a legitimate case statement still reads its body commands', () => {
+    expect(tierOf('case $x in a) echo hi ;; esac')).toBe('allow')
+    expect(ruleOf('case $x in a) rm -rf build ;; esac')).toBe('shell-delete')
+  })
+})
+
+describe('the program name cannot be split or disguised', () => {
+  // The shell runs all of these as `rm`; the classifier must see it too.
+  test('empty substitution inside the name', () => {
+    expect(ruleOf('r$()m -rf /'), 'empty $()').toBe('rm-recursive-outside-repo')
+    expect(ruleOf('r``m -rf /'), 'empty backtick').toBe('rm-recursive-outside-repo')
+  })
+
+  test('locale-translation quoting', () => {
+    expect(ruleOf('$"rm" -rf /')).toBe('rm-recursive-outside-repo')
+  })
+
+  test("ANSI-C escapes in $'...'", () => {
+    for (const command of [String.raw`$'\x72m' -rf /`, String.raw`$'\162m' -rf /`, String.raw`$'rm' -rf /`, String.raw`$'rm' -rf /`]) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test("$'...' still decodes a plain escape to its character", () => {
+    expect(splitShell(String.raw`echo $'a\tb'`).parts[0]?.coreWords).toEqual(['echo', 'a\tb'])
+  })
+})
+
+describe('wrappers and runners do not hide the command they run', () => {
+  test('package-manager runners reveal the inner command', () => {
+    for (const command of ['npm exec -- rm -rf /', 'npm exec rm -rf /', 'pnpm exec rm -rf /', 'yarn exec rm -rf /', 'poetry run rm -rf /', 'pipenv run rm -rf /', 'uv run rm -rf /', 'bundle exec rm -rf /']) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('process wrappers reveal the inner command', () => {
+    for (const command of ['setsid rm -rf /', 'strace -f rm -rf /', 'unshare -r rm -rf /', 'nsenter -t 1 -m rm -rf /', 'chroot / rm -rf /', 'flock /tmp/l rm -rf /']) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('env clearing and split-string reveal the inner command', () => {
+    for (const command of ['env - rm -rf /', 'env -S "rm -rf /"', 'env --split-string="rm -rf /"']) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('npx-family fetch runners: inner command and -c script', () => {
+    expect(tierOf('npx rimraf /')).toBe('review')
+    expect(ruleOf('npx rimraf /')).toBe('shell-delete')
+    expect(ruleOf('npx -c "rm -rf /"')).toBe('rm-recursive-outside-repo')
+  })
+
+  test('privilege-changing wrappers ask even for a benign command, and block a dangerous one', () => {
+    for (const command of ['gosu root whoami', 'runuser -u root id', 'sudo whoami']) {
+      expect(ruleOf(command), command).toBe('privileged')
+    }
+    expect(ruleOf('runuser -u root rm -rf /')).toBe('rm-recursive-outside-repo')
+  })
+
+  test('rimraf, find -ok and parallel are recognised', () => {
+    expect(ruleOf('rimraf build')).toBe('shell-delete')
+    expect(ruleOf('find / -ok rm -rf {} ;')).toBe('shell-find-delete')
+    expect(ruleOf('echo x | parallel rm -rf')).toBe('script-eval')
+  })
+
+  test('remote and container execution is reviewed', () => {
+    for (const command of ['ssh host rm -rf /', 'docker exec x rm -rf /', 'docker run -v /:/host alpine rm -rf /host', 'kubectl exec pod -- rm -rf /', 'rsync -e "cmd" a b']) {
+      expect(bash(command).decided?.ruleId, command).toBe('remote-exec')
+    }
+  })
+
+  test('benign runner and wrapper uses still pass', () => {
+    for (const command of ['npm run build', 'npm test', 'npm install', 'poetry install', 'yarn build', 'docker ps', 'nsenter -t 1 -a ls', 'flock /tmp/l echo hi']) {
+      expect(tierOf(command), command).toBe('allow')
+    }
+  })
+})
+
+describe('global options before a subcommand do not defeat the rule', () => {
+  test('kubectl, helm, docker and terraform with a leading option', () => {
+    for (const command of [
+      'kubectl -n prod delete pod x',
+      'kubectl --namespace prod delete pod x',
+      'kubectl --context prod delete deploy y',
+      'kubectl --kubeconfig /tmp/k delete pod x',
+      'helm -n prod uninstall x',
+      'terraform -chdir=infra apply',
+      'tofu -chdir=infra destroy',
+      'docker -H ssh://x rm -f y',
+      'docker --context prod rm -f y',
+      'docker -c prod rm -f y',
+    ]) {
+      expect(ruleOf(command), command).toBe('infrastructure')
+    }
+  })
+
+  test('read-only subcommands still pass, even with an option', () => {
+    for (const command of ['kubectl get pods', 'kubectl -n prod get pods', 'helm list', 'docker ps', 'terraform plan']) {
+      expect(tierOf(command), command).toBe('allow')
+    }
+  })
+})
+
+describe('git configuration and environment-variable injection', () => {
+  test('git config writes and dangerous -c keys are reviewed', () => {
+    expect(ruleOf('git config alias.p "push --force origin main"')).toBe('git-config-write')
+    expect(ruleOf('git config core.hooksPath /tmp/h')).toBe('git-config-write')
+    for (const command of [
+      'git -c alias.p="push --force origin main" p',
+      'git -c core.sshCommand="x" fetch',
+      'git -c core.pager="x" log',
+      'git bisect run ./x.sh',
+      'git --exec-path=/tmp status',
+    ]) {
+      expect(ruleOf(command), command).toBe('git-config-injection')
+    }
+  })
+
+  test('read-only config and harmless -c keys still pass', () => {
+    for (const command of ['git config --get user.email', 'git config -l', 'git config --list', 'git -c color.ui=always status', 'git -c user.name=x commit -m y']) {
+      expect(tierOf(command), command).toBe('allow')
+    }
+  })
+
+  test('environment variables that change what runs are reviewed', () => {
+    for (const command of ['LD_PRELOAD=/tmp/x.so ls', 'GIT_SSH_COMMAND="x" git fetch', 'NODE_OPTIONS="--require /tmp/x.js" node -v', 'PYTHONSTARTUP=/tmp/x.py python3']) {
+      expect(bash(command).decided?.ruleId, command).toBe('dangerous-env-assignment')
+    }
+    expect(tierOf('PATH=/usr/bin ls')).toBe('allow')
+    expect(tierOf('FOO=1 make')).toBe('allow')
+  })
+})
+
+describe('protected paths: the directory itself, globs and letter case', () => {
+  test('the protected directory itself, not only its contents', () => {
+    for (const command of ['rm -rf .git', 'rm -rf .claude/council-of-elrond', 'rm -rf .claude', 'mv .git /tmp', 'rm -rf .github/workflows', 'cp -r .git /tmp', 'tar czf x.tgz .git']) {
+      expect(tierOf(command), command).toBe('ask')
+    }
+  })
+
+  test('a glob that could name a protected file', () => {
+    for (const command of ['cat .en*', 'cat .e*', 'cat .??v']) {
+      expect(tierOf(command), command).toBe('ask')
+    }
+  })
+
+  test('a different letter case (case-insensitive file systems)', () => {
+    expect(tierOf('cat .ENV')).toBe('ask')
+    expect(tierOf('cat .GIT/config')).toBe('ask')
+  })
+
+  test('broad globs and unrelated names are not treated as protected', () => {
+    expect(tierOf('rm -rf ./*')).toBe('review')
+    expect(tierOf('rm -rf build')).toBe('review')
+    expect(tierOf('cat *.md')).toBe('allow')
+    expect(tierOf('ls *.ts')).toBe('allow')
+    expect(tierOf('psql -h db -c "select 1"')).toBe('review') // db is a host, not db/migrate
+  })
+})
+
 describe('tiers', () => {
   test('allow: read-only commands and unmatched calls pass', () => {
     for (const command of ['ls -la', 'git status', 'git log --oneline -5', 'cat src/app.ts', 'npm test', 'grep -r foo src', 'ls 2>/dev/null', 'make 2>&1']) {
@@ -175,6 +355,36 @@ describe('tiers', () => {
 
   test('limits: a command too long to parse is reviewed, never allowed', () => {
     expect(bash(`echo ${'a'.repeat(25_000)}`).decided?.ruleId).toBe('command-too-long')
+  })
+})
+
+describe('block rules that previously stopped one tier short', () => {
+  test('mirror, prune and glob-destination pushes block', () => {
+    for (const command of ['git push --mirror origin', 'git push --prune origin', 'git push -f origin "refs/heads/*:refs/heads/*"']) {
+      expect(ruleOf(command), command).toBe('force-push-protected-branch')
+    }
+    expect(tierOf('git push origin feature')).toBe('review')
+  })
+
+  test('brace expansion in rm flags blocks', () => {
+    for (const command of ['rm -{r,f} /', 'rm --{recursive,force} /']) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('raw-disk writes by a tool, a redirect or cp/tee/shred block', () => {
+    for (const command of ['mkfs.ext4 -F /dev/sda1', 'cat x > /dev/sda', 'tee /dev/sda', 'shred /dev/sda', 'cp x /dev/sda', 'dd if=/dev/zero of=/dev/sda', 'blkdiscard /dev/nvme0n1']) {
+      expect(ruleOf(command), command).toBe('raw-disk-write')
+    }
+    for (const command of ['dd if=a of=b', 'cat x > out.txt', 'tee log.txt', 'cp a b', 'echo x > /dev/null', 'shred secret.txt']) {
+      expect(tierOf(command), command).not.toBe('block')
+    }
+  })
+
+  test('sh -c -- and pkexec reveal the inner command', () => {
+    expect(ruleOf("sh -c -- 'rm -rf /'")).toBe('rm-recursive-outside-repo')
+    expect(ruleOf('pkexec rm -rf /')).toBe('rm-recursive-outside-repo')
+    expect(ruleOf('pkexec whoami')).toBe('privileged')
   })
 })
 

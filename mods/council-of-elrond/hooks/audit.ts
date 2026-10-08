@@ -68,21 +68,27 @@ export function auditLine(record: AuditRecord): string {
   return `${JSON.stringify({ ...record, reason })}\n`
 }
 
-/** Collapses whitespace in every string, sorting keys, so a reformatted call matches. */
-function canonical(value: unknown): unknown {
-  if (typeof value === 'string') return value.replace(/\s+/g, ' ').trim()
-  if (Array.isArray(value)) return value.map(canonical)
+// Fields whose whitespace carries no meaning, so a reformatted value is the
+// same call. A shell command is one; a file's content is NOT (indentation is
+// significant in YAML, Python, Makefiles), so it is hashed exactly, or a
+// re-indented write would reuse an earlier approve without review.
+const INSIGNIFICANT_WHITESPACE = new Set(['command'])
+
+/** Sorts keys; collapses whitespace only in fields where it has no meaning. */
+function canonical(value: unknown, collapseWhitespace = false): unknown {
+  if (typeof value === 'string') return collapseWhitespace ? value.replace(/\s+/g, ' ').trim() : value
+  if (Array.isArray(value)) return value.map(item => canonical(item, collapseWhitespace))
   if (typeof value === 'object' && value !== null) {
     return Object.fromEntries(
       Object.keys(value)
         .sort()
-        .map(key => [key, canonical((value as Record<string, unknown>)[key])]),
+        .map(key => [key, canonical((value as Record<string, unknown>)[key], INSIGNIFICANT_WHITESPACE.has(key))]),
     )
   }
   return value
 }
 
-/** The text a fingerprint hashes: tool name plus arguments, whitespace collapsed. */
+/** The text a fingerprint hashes: tool name plus arguments, canonicalised. */
 export const fingerprintText = (tool: string, input: unknown): string => `${tool}\u0000${JSON.stringify(canonical(input))}`
 
 export async function fingerprintOf(tool: string, input: unknown): Promise<string> {

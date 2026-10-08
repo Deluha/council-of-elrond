@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, truncate, untrusted, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, label, truncate, untrusted, untrustedRules } from './shared.js'
 import type { Call } from '../rules/classify.js'
 
 /**
@@ -233,8 +233,8 @@ export function legolasPrompt(context: LegolasContext, nonce: string): string {
   const sections = [
     `Tool: ${context.tool}`,
     ...(context.range !== undefined
-      ? [`Command:\n${untrusted('call', truncate(context.range.call, 40, 4_000), nonce)}`, `The changes the ${context.range.kind} would ${context.range.kind === 'push' ? 'send' : 'bring in'}: ${context.path}`]
-      : [`File: ${context.path}${context.diff.isNew ? ' (new file)' : ''}`]),
+      ? [`Command:\n${untrusted('call', truncate(context.range.call, 40, 4_000), nonce)}`, `The changes the ${context.range.kind} would ${context.range.kind === "push" ? "send" : "bring in"}: ${label(context.path)}`]
+      : [`File: ${label(context.path)}${context.diff.isNew ? ' (new file)' : ''}`]),
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
     ...(context.diff.note !== undefined ? [NOTES[context.diff.note]] : []),
     context.range !== undefined ? 'The changes, as a diff:' : 'Proposed change:',

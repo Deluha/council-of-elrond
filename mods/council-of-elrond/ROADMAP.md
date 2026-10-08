@@ -32,7 +32,7 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (242 at the end of stage 5)
+cd mods/council-of-elrond && claude plugin test .     # all tests (273 after the 0.5.0 hardening)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```

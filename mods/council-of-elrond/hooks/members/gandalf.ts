@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, truncate, untrusted, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, label, truncate, untrusted, untrustedRules } from './shared.js'
 
 /**
  * Gandalf: destructive operations (deletes, recursive or wildcard operations,
@@ -57,7 +57,7 @@ export function gandalfPrompt(context: GandalfContext, nonce: string): string {
       : 'No preview is available.',
     ...context.scripts.map(
       script =>
-        `Script it runs, written in this session (${script.path}):\n${untrusted('script', truncate(script.content, limits.scriptLines, limits.scriptChars), nonce)}`,
+        `Script it runs, written in this session (${label(script.path)}):\n${untrusted('script', truncate(script.content, limits.scriptLines, limits.scriptChars), nonce)}`,
     ),
     "The user's latest message:",
     untrusted('user-request', truncate(context.latestPrompt || '(none recorded)', 60, limits.promptChars), nonce),

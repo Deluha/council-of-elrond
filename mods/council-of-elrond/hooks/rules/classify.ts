@@ -3,6 +3,7 @@ import { strictness } from '../config/types.js'
 import type { MemberName, Profile, RuleSource, Tier } from '../config/types.js'
 import { runCheck } from './checks.js'
 import type { CheckContext } from './checks.js'
+import { touchesProtected } from './globs.js'
 import { relativeTo, resolve } from './paths.js'
 import { splitShell } from './shell.js'
 import type { ShellPart } from './shell.js'
@@ -111,7 +112,7 @@ function isProtectedPath(candidate: string, config: CompiledConfig, context: Cla
   const absolute = resolve(candidate.replace(/^['"]|['"]$/g, ''), cwd, context.home)
   const relative = relativeTo(absolute, context.root)
   const forms = relative !== undefined ? [relative] : [absolute.slice(1)]
-  return config.protectedPaths.some(({ re }) => forms.some(form => re.test(form)))
+  return forms.some(form => touchesProtected(form, config.protectedPaths))
 }
 
 function subjectsOf(call: Call, context: ClassifyContext): { subjects: Subject[]; tooLong: boolean; cut: boolean } {

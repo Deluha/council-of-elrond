@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { fingerprintText } from '../hooks/audit.js'
 import { allStrings } from '../hooks/strings.js'
 import {
   APPROVE,
@@ -249,6 +250,14 @@ describe('audit log', () => {
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     const [a, b] = auditLines(w)
     expect(a?.fingerprint).toBe(b?.fingerprint)
+  })
+
+  test('a file write reindented is a different fingerprint, so it is not cached unreviewed', () => {
+    const a = fingerprintText('Write', { file_path: '/work/x.yml', content: 'a:\n  b: 1\n' })
+    const b = fingerprintText('Write', { file_path: '/work/x.yml', content: 'a:\n    b: 1\n' })
+    expect(a).not.toBe(b)
+    // A shell command's insignificant spacing still collapses to one fingerprint.
+    expect(fingerprintText('Bash', { command: 'rm  -rf build' })).toBe(fingerprintText('Bash', { command: 'rm -rf build' }))
   })
 
   test('rotates by size', { options: { auditMaxKb: 16 } }, async ($, on) => {

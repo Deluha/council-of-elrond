@@ -54,6 +54,7 @@ const TABLE = {
   'reason.nobodyToAsk': { plain: 'The call needs the user, and nobody can be asked in this session. {why}' },
   'reason.failure': { plain: 'The council could not complete its review ({problem}), and it fails closed.' },
   'reason.internal': { plain: 'The council failed while checking this call, and it fails closed.' },
+  'reason.aborted': { plain: 'The review was interrupted before it finished. Nothing was decided; run the command again if you still want it.' },
   'alternative.ask': { plain: 'Stop and ask the user how they want to proceed.' },
   'alternative.narrower': { plain: 'Ask the user first, or use a narrower command that does not match this rule.' },
   'reason.secretHigh': { plain: 'The call contains a {label} (high confidence): {snippet}' },

@@ -1009,6 +1009,12 @@ export const register: Register = (on, options) => {
 
     // A gated call: everything from here is audited.
     const state = sessionOf(await read($, session))
+    // The prompt this call belongs to. A review runs while `next(e)` is in
+    // flight; if the user sends a new prompt meanwhile, resetForPrompt bumps
+    // the epoch, and a round, wipe or cached approve written afterwards must
+    // not land in that new prompt. `thisPrompt` guards those writes.
+    const epoch = state.promptEpoch
+    const thisPrompt = (value: CouncilSession | undefined): boolean => sessionOf(value).promptEpoch === epoch
     const fingerprint = await fingerprintOf(call.tool, call.input)
     const operation = operationOf(call, classification, where)
     const decided = classification.decided
@@ -1063,7 +1069,11 @@ export const register: Register = (on, options) => {
       await audit($, record, ctx.root)
       const counts = result.deny !== undefined ? isWipe : isWipeOutcome(outcome, wipePolicy())
       if (counts || outcome === 'ran') {
-        await update($, session, value => (counts ? noteWipe(sessionOf(value), operation) : resetOperation(sessionOf(value), operation.key)))
+        await update($, session, value => {
+          const current = sessionOf(value)
+          if (!thisPrompt(current)) return current // a new prompt already reset the counters
+          return counts ? noteWipe(current, operation) : resetOperation(current, operation.key)
+        })
       }
       if (result.deny === undefined) await noteWrite($, call, cwd, ctx.home, result).catch(() => undefined)
       return result
@@ -1270,6 +1280,14 @@ export const register: Register = (on, options) => {
       const checks = settings.gimliEnabled ? ctx.loaded.compiled.config.gimli.commands : []
       const reviewStarted = Date.now()
       const held = await convene($, sittings, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), settings.councilSequential, checks, ctx.root, next.signal)
+      // Esc aborts the model calls and kills the checks. That is not a verdict
+      // and not the user keeping the call blocked: refuse plainly, no wipe, no
+      // round, no dialog on an abandoned dispatch.
+      if (next.signal.aborted) {
+        verdictText = 'aborted'
+        isShadowed = shadow
+        return finish({ deny: refusalText({ who: 'who.fullCouncil', verdict: 'interrupted', reason: text('reason.aborted'), alternative: '' }) }, false)
+      }
       const runs = held.runs.map(run => ({ ...run, tail: redact(run.tail, ctx.patterns) }))
       const combined = combine(held.voices, runs)
       const councilMs = Date.now() - reviewStarted
@@ -1297,7 +1315,7 @@ export const register: Register = (on, options) => {
         }
         if (runs.length > 0) counted = count(counted, 'gimli', runs.some(isGimliBlock) ? 'block' : 'approve')
         counted = count(counted, 'council', isVerdict ? combined.verdict : 'failed')
-        return isVerdict && !shadow ? noteRound(counted, operation.key, combined.verdict === 'approve') : counted
+        return isVerdict && !shadow && thisPrompt(value) ? noteRound(counted, operation.key, combined.verdict === 'approve') : counted
       })
 
       if (combined.reviewed === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', combined.opinions)
@@ -1305,6 +1323,7 @@ export const register: Register = (on, options) => {
       if (combined.verdict === 'approve') {
         await update($, session, value => {
           const current = sessionOf(value)
+          if (!thisPrompt(current)) return current // do not cache into a newer prompt
           return { ...current, cache: cacheApprove(current.cache, fingerprint) }
         })
         return finish(await proceed())
@@ -1336,6 +1355,11 @@ export const register: Register = (on, options) => {
     model = choice.model
     const reviewStarted = Date.now()
     const verdict = await review($, brief, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), next.signal)
+    if (next.signal.aborted) {
+      verdictText = 'aborted'
+      isShadowed = shadow
+      return finish({ deny: refusalText({ who, verdict: 'interrupted', reason: text('reason.aborted'), alternative: '' }) }, false)
+    }
     const memberMs = Date.now() - reviewStarted
     reviewMs = memberMs
     tokens = verdict.tokens
@@ -1344,7 +1368,7 @@ export const register: Register = (on, options) => {
       const spent = addReviewTime(addTokens(sessionOf(value), verdict.tokens), memberMs)
       const counted = count(spent, brief.member, verdict.ok ? verdict.verdict.verdict : 'failed')
       // A round is a verdict that enforces: in shadow, verdicts only log.
-      return verdict.ok && !shadow ? noteRound(counted, operation.key, verdict.verdict.verdict === 'approve') : counted
+      return verdict.ok && !shadow && thisPrompt(value) ? noteRound(counted, operation.key, verdict.verdict.verdict === 'approve') : counted
     })
 
     if (!verdict.ok) {
@@ -1358,6 +1382,7 @@ export const register: Register = (on, options) => {
     if (verdict.verdict.verdict === 'approve') {
       await update($, session, value => {
         const current = sessionOf(value)
+        if (!thisPrompt(current)) return current // do not cache into a newer prompt
         return { ...current, cache: cacheApprove(current.cache, fingerprint) }
       })
       return finish(await proceed())

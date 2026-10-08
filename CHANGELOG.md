@@ -10,6 +10,46 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.0] - 2026-10-08
+
+A hardening release closing the rules-tier and pipeline findings of the end-of-Stage-5 review
+([docs/REVIEW-2026-10.md](docs/REVIEW-2026-10.md)), plus the project's open-source scaffolding.
+No new features; the theme and UI (Stage 6) are still to come.
+
+### Security
+Every item below could let a tool call reach a weaker tier than intended; the rules tier is the
+safety boundary. Each fix ships with a test using the input it closes.
+- **Shell constructs no longer hide a command.** A function body, a `case` arm or a `coproc`, and
+  a program name written with an empty substitution, locale-translation quoting or ANSI-C escapes,
+  are now classified as the command the shell runs.
+- **Wrappers and runners reveal the command they run.** Package-manager runners (npm exec, poetry
+  run and the like), process wrappers (setsid, strace, chroot, flock, nsenter and others) and
+  env's environment-clearing and split-string options are stripped; privilege-changing wrappers
+  (gosu, runuser, setpriv, run0, chpst, pkexec) also ask. New shipped rules cover rimraf and the
+  trash tools, `find -ok`, `parallel`, and remote or in-container execution (ssh, docker/kubectl
+  exec, docker run, rsync -e).
+- **Global options before a subcommand** no longer defeat the kubectl, helm, docker and terraform
+  rules.
+- **Git configuration and environment-variable injection** are reviewed: `git config` writes,
+  dangerous `git -c` keys, `--exec-path`, `bisect run`, and leading assignments of LD_PRELOAD,
+  GIT_SSH_COMMAND, NODE_OPTIONS and similar.
+- **Protected paths** now cover the protected directory itself (not only its contents), match
+  case-insensitively, and catch a targeted glob that could name a protected file.
+- **Block rules that stopped one tier short** now block: mirror, prune and glob-destination
+  pushes, brace-expanded rm flags, a wider raw-disk device and tool set (redirects, cp, tee,
+  shred, blkdiscard, the mkfs family), `sh -c --`, and pkexec of a blocked command.
+- **Secrets no longer reach the audit log** through the operation key, which is now redacted.
+- **The approve cache** hashes file content exactly (whitespace is collapsed only for shell
+  commands), so a re-indented write is not reused unreviewed.
+- **The allow rule offered after "allow once"** forbids the sandbox-disabled variant of the same
+  command.
+- **Reviewer prompts** sanitise call-derived labels (a file path, a SQL piece's name), so they
+  cannot forge prompt lines outside the untrusted-data block.
+- **Esc during a review** refuses plainly with no failed attempt, round or dialog; a new prompt
+  arriving mid-review cannot have a stale round, wipe or cached approve written into it.
+
 ### Added
 - Stage 5 ([Deluha/council-of-elrond#5](https://github.com/Deluha/council-of-elrond/pull/5)):
   an allow rule offered after "allow once", once the call has run, written to `rules.json` only
@@ -19,12 +59,8 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - Project documentation for contributors and maintainers: `CONTRIBUTING.md`, `SECURITY.md`,
   `CODE_OF_CONDUCT.md`, `SUPPORT.md`, this changelog, issue and pull request templates, CI and a
   release workflow, git hooks, CODEOWNERS, a marketplace manifest, `docs/`.
-
-### Changed
-- Nothing yet.
-
-### Notes
-- The manifest still says 0.4.0; Stage 5 did not bump it. The next release should be 0.5.0.
+- `mods/types/NOTICE.md` states what the vendored API declarations are and that the MIT licence
+  makes no claim over them.
 
 ## [0.4.0] - 2026-10-05
 
@@ -86,7 +122,8 @@ Stage 1 ([Deluha/council-of-elrond#1](https://github.com/Deluha/council-of-elron
   keep blocked and a typed instruction, fail-closed handling, and the JSONL audit log with
   rotation. Plain mode only.
 
-[Unreleased]: https://github.com/Deluha/council-of-elrond/compare/0.4.0...HEAD
+[Unreleased]: https://github.com/Deluha/council-of-elrond/compare/council-of-elrond--v0.5.0...HEAD
+[0.5.0]: https://github.com/Deluha/council-of-elrond/compare/0.4.0...council-of-elrond--v0.5.0
 [0.4.0]: https://github.com/Deluha/council-of-elrond/pull/4
 [0.3.0]: https://github.com/Deluha/council-of-elrond/pull/3
 [0.2.0]: https://github.com/Deluha/council-of-elrond/pull/2

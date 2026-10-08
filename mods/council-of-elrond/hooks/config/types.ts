@@ -27,6 +27,10 @@ export const CHECKS = [
   'destructive-sql-production',
   'privileged',
   'redirect-write',
+  'git-config-write',
+  'git-config-injection',
+  'dangerous-env-assignment',
+  'raw-disk-write',
 ] as const
 export type CheckName = (typeof CHECKS)[number]
 

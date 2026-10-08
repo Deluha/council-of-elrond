@@ -141,7 +141,9 @@ export function operationOf(call: Call, classification: Classification, context:
     const ops = parts.map(finding => partOperation(finding.part as ShellPart, finding.cwd ?? context.cwd, context))
     const verbs = sortedUnique(ops.map(op => op.verb))
     const key = sortedUnique(ops.map(op => `${op.verb} ${sortedUnique(op.targets).slice(0, MAX_TARGETS).join(' ')}`.trim()))
-    return { key: cap(`shell:${key.join(' ; ')}`), verbKey: cap(`shell:${verbs.join(' ; ')}`) }
+    // The key can hold a target a command named verbatim (a push URL with a
+    // token, a connection string); it is written to the audit log, so redact.
+    return { key: cap(redact(`shell:${key.join(' ; ')}`)), verbKey: cap(`shell:${verbs.join(' ; ')}`) }
   }
   const field = FILE_PATH_FIELDS[call.tool]
   const given = field === undefined ? undefined : call.input[field]
