@@ -442,7 +442,23 @@ Run with `claude -p --plugin-dir … --output-format stream-json --verbose` in a
    `is_backgrounded: false`): reviewed (987 tokens, 2.5 s), then denied by the permission check.
    So a subagent's call is not raised "beneath" the hook's own frame: the `.catch` handler's
    refusal on `re-entry` did not fire, and nothing in the handler changes.
-2. Two model reviews ran in all (about 1,970 tokens).
+2. **A new branch's push reads its range against `<remote>/HEAD`** (§13.1). In a probe repository
+   with a bare `origin` and a `feature` branch the remote did not have: with `origin/HEAD` unset
+   (a `git remote add`, not a clone), the diff reviewer sat out (`skipped`) and the other two
+   approved (1,896 tokens); with `origin/HEAD` set (`git remote set-head origin main`), all three
+   sat and approved, the diff reviewer on the fallback range (3,036 tokens, 1.9 s). Both pushes
+   were then stopped by Claude Code's own permission check, as `-p` stops a push with nobody to ask.
+3. **An allowed call with a high-confidence secret is refused** (§13.2). `echo token=<a fake AWS
+   key>` is allow-tier; it came back as the secrets scan's refusal with the key redacted, no model
+   was asked, and the audit line reads `tier: "allow"`, `member: "gollum"`, `verdict: "block"`,
+   `outcome: "refused"`, `opKey: null`.
+4. **A denial wording the mod does not know.** The permission check's refusal of the push in `-p`
+   read "This command requires approval", which matches neither the user-refusal nor the
+   automatic-denial patterns (§6.14), so the line's outcome is `error` rather than
+   `denied-by-permission`, and it counts as a failed attempt under the default setting. The `rm`
+   probe above was denied with the known "needs approval" wording. Tracked in ROADMAP.md, "Known
+   follow-ups".
+5. Five model reviews ran in all (about 6,900 tokens).
 
 What this does **not** settle: whether the mod's own `$.ui.ask` (an `AskUserQuestion` call raised
 inside the hook) ever reaches the `.catch` as `re-entry`. `-p` has no surface, so the mod refuses
