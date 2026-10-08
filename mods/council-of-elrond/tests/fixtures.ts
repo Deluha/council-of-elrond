@@ -20,6 +20,14 @@ export const THEME =
 /** Member ids (`[gandalf]`, `[aragorn/git]`) are config keys the user types, not theme text. */
 export const withoutIds = (shown: string): string => shown.replace(/\[[a-z/]+\]/g, '')
 
+/**
+ * Fake secrets in the shapes the redaction patterns match. Each is joined from
+ * two halves at run time so that no committed line holds a well-formed token
+ * (secret scanners flag those), while the tests still exercise the real patterns.
+ */
+export const FAKE_AWS_KEY = ['AKIA', 'ABCDEFGHIJKLMNOP'].join('')
+export const FAKE_GITHUB_TOKEN = ['ghp_', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('')
+
 export const ROOT = '/work'
 export const HOME = '/home/me'
 

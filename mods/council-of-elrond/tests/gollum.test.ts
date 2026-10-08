@@ -2,9 +2,9 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { withAllowlistEntry } from '../hooks/config/write.js'
 import { patternsWith, scanCall, scanText } from '../hooks/members/gollum.js'
-import { ALLOW_ONCE, ALLOWLIST, APPROVE, auditLines, denyOf, KEEP_BLOCKED, ROOT, world } from './fixtures.js'
+import { ALLOW_ONCE, ALLOWLIST, APPROVE, auditLines, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, ROOT, world } from './fixtures.js'
 
-const AWS = 'AKIAABCDEFGHIJKLMNOP'
+const AWS = FAKE_AWS_KEY
 const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
 
 describe('the scan', () => {

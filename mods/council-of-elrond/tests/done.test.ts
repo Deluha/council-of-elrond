@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { ALLOW_ONCE, APPROVE, auditLines, denyOf, KEEP_BLOCKED, ROOT, USAGE, world } from './fixtures.js'
+import { ALLOW_ONCE, APPROVE, auditLines, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, ROOT, USAGE, world } from './fixtures.js'
 import type { ModelReply, World } from './fixtures.js'
 
 /**
@@ -9,7 +9,7 @@ import type { ModelReply, World } from './fixtures.js'
  */
 
 const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
-const AWS = 'AKIAABCDEFGHIJKLMNOP'
+const AWS = FAKE_AWS_KEY
 const PUSH = { tool: 'Bash', command: 'git push origin feature' } as const
 const REVIEWED = { tool: 'Bash', command: 'rm -rf build' } as const
 

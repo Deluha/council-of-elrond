@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { aragornDatabasePrompt, aragornDatabaseSystem, aragornGitPrompt, aragornGitSystem, productionHits, sqlOf } from '../hooks/members/aragorn.js'
 import { callDiff, legolasPrompt, legolasSystem, lineOps, textDiff } from '../hooks/members/legolas.js'
 import { classify } from '../hooks/rules/classify.js'
-import { APPROVE, CONTEXT, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
+import { APPROVE, CONTEXT, FAKE_GITHUB_TOKEN, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
 
 const FILE = ['import x from "y"', '', 'export function add(a, b) {', '  return a + b', '}', '', 'export const one = 1', ''].join('\n')
 
@@ -113,7 +113,7 @@ describe('Aragorn: what each profile sees', () => {
 describe('in the pipeline', () => {
   test('Legolas sees the diff with the file around it, redacted, and the git preview', async ($, on) => {
     const w = world(on, { replies: [APPROVE] })
-    w.files.set(`${ROOT}/src/app.ts`, 'const t = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"\nconst b = 2\nconst c = 3\n')
+    w.files.set(`${ROOT}/src/app.ts`, `const t = "${FAKE_GITHUB_TOKEN}"\nconst b = 2\nconst c = 3\n`)
     w.processReply = argv => (argv[1] === 'ls-files' ? { exitCode: 0, stdout: 'src/app.ts\n' } : { exitCode: 0, stdout: '' })
     await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/src/app.ts`, old_string: 'const b = 2', new_string: 'const b = 3' })
     const prompt = String(w.modelRequests[0]?.prompt)
@@ -121,7 +121,7 @@ describe('in the pipeline', () => {
     expect(prompt).toContain('-const b = 2\n+const b = 3\n const c = 3')
     expect(prompt).toContain(' const t = ')
     expect(prompt).toContain('whether git tracks src/app.ts: yes')
-    expect(prompt).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789')
+    expect(prompt).not.toContain(FAKE_GITHUB_TOKEN)
   })
 
   test('a new file is diffed as all added', async ($, on) => {

@@ -41,6 +41,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   `/config` to keep the old text ("Allow once", "Keep blocked", role names).
 - **README.** A "Modes" section (enforcing, shadow, bypass, plain), the install command under
   "Loading it", a note that subagents' calls are gated too, and bypass named among the limits.
+- **Test fixtures.** Fake secrets in tests are built at run time from two halves, so no committed line holds a well-formed token.
 
 ### Security
 - **Allowed calls are scanned for high-confidence secrets.** A literal key in an allowed `curl` or

@@ -4,7 +4,7 @@ import { rangeOf } from '../hooks/elrond/council.js'
 import { formatPreview, MAX_INSPECTIONS, planPreview, rangeDiffInspection } from '../hooks/members/galadriel.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
-import { APPROVE, CONTEXT, KEEP_BLOCKED, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
+import { APPROVE, CONTEXT, FAKE_GITHUB_TOKEN, KEEP_BLOCKED, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
 
 const plan = (call: Call) => planPreview(call, classify(call, SHIPPED_COMPILED, CONTEXT), CONTEXT)
 const bash = (command: string) => plan({ tool: 'Bash', input: { command } })
@@ -172,10 +172,10 @@ describe('in the pipeline', () => {
 
   test('the preview is shown in an escalation, redacted', async ($, on) => {
     const w = world(on, { replies: [{ isAnswered: false, reason: 'aborted', usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }], answer: KEEP_BLOCKED })
-    w.processReply = argv => (argv[1] === 'remote' ? { exitCode: 0, stdout: 'https://me:ghp_abcdefghijklmnopqrstuvwxyz0123456789@github.com/a/b\n' } : { exitCode: 0, stdout: 'main\n' })
+    w.processReply = argv => (argv[1] === 'remote' ? { exitCode: 0, stdout: `https://me:${FAKE_GITHUB_TOKEN}@github.com/a/b\n` } : { exitCode: 0, stdout: 'main\n' })
     await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
     expect(w.asked[0]?.question).toContain('What it would touch:')
-    expect(w.asked[0]?.question).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789')
+    expect(w.asked[0]?.question).not.toContain(FAKE_GITHUB_TOKEN)
   })
 
   test('switched off, no inspection runs', { options: { galadrielEnabled: false } }, async ($, on) => {
