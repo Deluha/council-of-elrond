@@ -141,6 +141,31 @@ describe('wrappers and runners do not hide the command they run', () => {
   })
 })
 
+describe('global options before a subcommand do not defeat the rule', () => {
+  test('kubectl, helm, docker and terraform with a leading option', () => {
+    for (const command of [
+      'kubectl -n prod delete pod x',
+      'kubectl --namespace prod delete pod x',
+      'kubectl --context prod delete deploy y',
+      'kubectl --kubeconfig /tmp/k delete pod x',
+      'helm -n prod uninstall x',
+      'terraform -chdir=infra apply',
+      'tofu -chdir=infra destroy',
+      'docker -H ssh://x rm -f y',
+      'docker --context prod rm -f y',
+      'docker -c prod rm -f y',
+    ]) {
+      expect(ruleOf(command), command).toBe('infrastructure')
+    }
+  })
+
+  test('read-only subcommands still pass, even with an option', () => {
+    for (const command of ['kubectl get pods', 'kubectl -n prod get pods', 'helm list', 'docker ps', 'terraform plan']) {
+      expect(tierOf(command), command).toBe('allow')
+    }
+  })
+})
+
 describe('tiers', () => {
   test('allow: read-only commands and unmatched calls pass', () => {
     for (const command of ['ls -la', 'git status', 'git log --oneline -5', 'cat src/app.ts', 'npm test', 'grep -r foo src', 'ls 2>/dev/null', 'make 2>&1']) {

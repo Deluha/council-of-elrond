@@ -129,6 +129,20 @@ export const PRIVILEGE_WRAPPERS: ReadonlySet<string> = new Set(['sudo', 'doas', 
 
 const GIT_GLOBALS_WITH_ARG = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'])
 
+/**
+ * Subcommand tools whose global options come before the verb, with the
+ * options of each that take a separate value. Stripping these leading options
+ * lets a rule anchored on `<tool> <verb>` match `kubectl -n prod delete ...`.
+ * An option written `--opt=value` is one token and needs no entry.
+ */
+const SUBCOMMAND_GLOBALS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['kubectl', new Set(['-n', '--namespace', '--context', '--cluster', '--user', '--kubeconfig', '-s', '--server', '--as', '--as-group', '--as-uid', '--token', '--cache-dir', '--request-timeout', '--tls-server-name', '--client-certificate', '--client-key', '--certificate-authority', '-v', '--v'])],
+  ['helm', new Set(['-n', '--namespace', '--kube-context', '--kubeconfig', '--kube-apiserver', '--kube-as-user', '--kube-as-group', '--kube-token', '--kube-ca-file', '--registry-config', '--repository-config', '--repository-cache', '--burst-limit'])],
+  ['docker', new Set(['-H', '--host', '-c', '--context', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey'])],
+  ['terraform', new Set()],
+  ['tofu', new Set()],
+])
+
 const SYSTEM_BIN = /^\/(usr\/(local\/)?)?s?bin\/|^\/opt\/homebrew\/bin\/|^\/bin\//
 
 const isAssignment = (word: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(word)
@@ -274,6 +288,15 @@ function coreOf(words: readonly string[]): { wrappers: string[]; coreWords: stri
     while (g < coreWords.length && (coreWords[g] as string).startsWith('-')) {
       const option = coreWords[g] as string
       g += GIT_GLOBALS_WITH_ARG.has(option) ? 2 : 1
+    }
+    coreWords.splice(1, g - 1)
+  }
+  const subGlobals = SUBCOMMAND_GLOBALS.get(coreWords[0] ?? '')
+  if (subGlobals !== undefined) {
+    let g = 1
+    while (g < coreWords.length && (coreWords[g] as string).startsWith('-')) {
+      const option = coreWords[g] as string
+      g += !option.includes('=') && subGlobals.has(option) ? 2 : 1
     }
     coreWords.splice(1, g - 1)
   }
