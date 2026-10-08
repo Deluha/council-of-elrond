@@ -86,7 +86,9 @@ The full conventions, with the reasons behind them, are in
    title and description; put it in a test with a neutral name.
 
 Commit messages: an imperative summary line under 72 characters, then why the change was made.
-No model names, session links or personal paths in code, comments or docs.
+No model names, session links or personal paths in code, comments or docs. Family names and
+aliases (Sonnet and `sonnet`, Opus, Haiku, Fable) are fine, and so is a full model id used as test
+data or a config example. Saying which model wrote something is not.
 
 ## Writing style for docs
 
