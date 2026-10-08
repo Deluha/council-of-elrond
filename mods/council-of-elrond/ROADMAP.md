@@ -268,31 +268,39 @@ ask → **Galadriel** → route → act → **after the tool runs**.
   - [x] plain mode shows no theme text: the string table, `/council` output, the dialog and the mounted pane and band trees (Stage 6);
   - [x] with every model member disabled, rules, Gollum and escalation still work; *(tests/done.test.ts, mutation-checked)*
   - [x] the README states the limits plainly.
-- [ ] Live interactive check by the user in a terminal, screen by screen: the loot roll (Need, Pass, typed instruction, "Chat about this", dismiss) and its "allowed once" notice under Claude Code's prompt; the allow-rule offer after "allow once"; the secrets dialog with Greed and its confirm; the debate pane opening on its own at 144 columns and through `/council debate` below that, with a subagent's review in its view; the ready-check band during a `git push` with a project check; the epic drop row and toast after an approved push; the `council: Leeroy mode` and `council: shadow` labels; every `/council` subcommand in its pane; plain mode on the same screens; and whether VS Code paints the pane.
+- [ ] Live interactive check by the user in a terminal, screen by screen: the loot roll (Need, which must run the call, since the mod's own question could arrive at the hook's `.catch` as re-entry on 2.1.294; Pass; a typed instruction; "Chat about this", after which `/council log` must show `decision: chat`, not `dismissed`, since the wording `interpretRejection` matches is unverified; dismiss) and its "allowed once" notice under Claude Code's prompt; the allow-rule offer after "allow once"; the secrets dialog with Greed and its confirm; the debate pane opening on its own at 144 columns and through `/council debate` below that, with a subagent's review in its view; the ready-check band during a `git push` with a project check; the epic drop row and toast after an approved push; the `council: Leeroy mode` and `council: shadow` labels; every `/council` subcommand in its pane; plain mode on the same screens; and whether VS Code paints the pane.
 
 ## Known follow-ups
 
-### Recommendations on the open items (end of Stage 6, pending the maintainer's decision)
+### Decisions on the open items (after the final deliverables)
 
 | Item | Recommendation |
 | :- | :- |
-| `.catch` and re-entry (2.1.294) | Half settled live (DESIGN §12.1): a subagent's gated calls are reviewed, in the background and the foreground, not refused. Left for the terminal check: whether the mod's own `AskUserQuestion` arrives as re-entry ("Allow once" must still run the call). If it does, pass exactly that through (a guard on the tool name and the pending ask) and keep refusing every other re-entry. |
-| The ~40-case live eval | Run it once before 1.0, as a `claude plugin eval` suite under `mods/council-of-elrond/evals/` (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injections inside diffs, plus a council set). Roughly 40 to 120 reviews at about 1,000 tokens each. Record the results in DESIGN.md; keep it out of CI. Make it a definition-of-done item. |
-| Live UI checks (stages 2 to 6) | Fold them into the one screen-by-screen check above and run it once, at the end of Stage 6. |
-| Prompt-refusal wording | Re-check against the 2.1.294 binary (`/upgrade-types` step 5) as part of the terminal check. The final live check found a third automatic-denial wording, "This command requires approval" (a `git push` in `-p`), which `outcomeOf` reads as an ordinary error, so it counts as a failed attempt; add it to the automatic-denial patterns (DESIGN §12.1 item 4). |
+| `.catch` and re-entry (2.1.294) | Half settled live (DESIGN §12.1): a subagent's gated calls are reviewed, in the background and the foreground, not refused. **Terminal check:** whether the mod's own `AskUserQuestion` arrives as re-entry ("Allow once" must still run the call). If it does, pass exactly that through (a guard on the tool name and the pending ask) and keep refusing every other re-entry. |
+| The ~40-case live eval | **Before 1.0, not before 0.6.0.** A `claude plugin eval` suite under `mods/council-of-elrond/evals/` (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injections inside diffs, plus a council set), about 40 to 120 reviews at about 1,000 tokens each, run once after the prompts are final, results in DESIGN.md, out of CI. A definition-of-done item for 1.0 (below). |
+| Live UI checks (stages 2 to 6) | **Terminal check:** the one screen-by-screen pass above, once, before 0.6.0. |
+| Prompt-refusal wording | The third automatic-denial wording, "This command requires approval" (a `git push` in `-p` on 2.1.294), is now recognised (DESIGN §6.14). **Terminal check:** re-check the two user-refusal wordings against the 2.1.294 binary (`/upgrade-types` step 5). |
 | A new branch's push has no range | Done (DESIGN §13.1): a fixed fallback against `<remote>/HEAD` when the push names a remote. |
 | Scan allowed calls for secrets | Do it for high-confidence findings only (refuse), never asking on an allowed call. The cost is a pattern scan of the command text. A literal token in an allowed `curl` currently reaches the network unscanned. Behaviour change: 0.6.0. Done (DESIGN §13.2). |
-| An `exact` field in the rule schema | Not now. The `input` pin works and is tested; a schema change waits for a user asking to hand-edit such rules. |
-| The allow-rule offer after every "allow once" | Wait for feedback. If it is noisy, add a `/config` switch for the offer (smallest change). |
-| An allow rule pins text, not the folder | Document only (README, "What it does not protect against"); pinning the cwd needs a schema change. |
-| Migration tools' own files | Defer. Name the gap in the README; add per-tool lookups (Prisma first) only on request. |
-| Review time per council member | Drop: the sitting's time is what the user waits for. |
+| An `exact` field in the rule schema | Declined. The `input` pin works and is tested; add the field only if someone hand-editing `rules.json` asks. |
+| The allow-rule offer after every "allow once" | Wait for feedback from real use. If it is noisy, a `/config` switch for the offer is the smallest change. |
+| An allow rule pins text, not the folder | Documented (README, "What it does not protect against"); pinning the cwd needs a schema change, declined. |
+| Migration tools' own files | Deferred; the gap is named in the README. Per-tool lookups (Prisma first) only on request. |
+| Review time per council member | Dropped: the sitting's time is what the user waits for. |
 | `auditMaxKb` above 4,096 | Nothing to do: the `/config` row's `max` is 3072, under the 4 MiB read cap. |
-| The council's cost (about 3 Opus reviews per push) | Keep the default; the README's cost section already names the knobs. |
-| `isReadOnly` unused | Leave it unused: trusting it to skip work would let the tool's own claim lower the gate. |
-| `$.ui.ask` in SDK and cloud hosts | Covered by the live check; until then the mod refuses where no surface is attached. |
-| Windows | Declare it unsupported in INSTALL.md (POSIX shell parsing, `HOME` only). |
-| Versioning | Release Stage 6 as 0.6.0 (a minor bump: the default text changed). |
+| The council's cost (about 3 Opus reviews per push) | Default kept; the README's cost section names the knobs. |
+| `isReadOnly` unused | Left unused: trusting it to skip work would let the tool's own claim lower the gate. |
+| `$.ui.ask` in SDK and cloud hosts | Left as is: the mod refuses where no surface is attached, which is the safe default. The terminal check covers the terminal only. |
+| Windows | Declared unsupported in `docs/INSTALL.md` (POSIX shells, `HOME` only). |
+| Versioning | Release as **0.6.0** once the terminal check passes: the default text changed, allowed calls are scanned, and a push's range changed, each a behaviour change under a minor bump. Move the `[Unreleased]` entries to `[0.6.0]` and bump `plugin.json` then, not before. |
+
+Also decided after the final deliverables: the fake secrets in tests are built at run time from two halves (`tests/fixtures.ts`), so no committed line holds a well-formed token and `scripts/check-hygiene.sh` reports none; the audit appender's whole-file re-read stays (tens of milliseconds at 1 MiB; revisit only if latency shows).
+
+### Before 1.0
+
+- [ ] The ~40-case live eval (above), recorded in DESIGN.md: a definition-of-done item for 1.0.
+- [ ] A `/config` switch for the allow-rule offer, only if feedback says the offer is noisy.
+- [ ] The two terminal-check items above resolved: the `AskUserQuestion` re-entry path, and the user-refusal wordings against the binary.
 
 From the 2.1.294 types (Stage 6):
 - **`.catch` and re-entry.** 2.1.294 asks a hook's `.catch` handler, with `next.error.kind === 're-entry'` and `next.called` false, when the engine skips the hook because the event was raised beneath its own frame. Elrond's handler then refuses (fails closed). Verify live, in a terminal, that an escalation's "Allow once" still runs the call (the mod's own `$.ui.ask` must not be refused this way), and that a subagent's gated calls are still reviewed rather than refused. Only then decide whether the handler should pass the mod's own `AskUserQuestion` through. The subagent half is verified (DESIGN §12.1).
