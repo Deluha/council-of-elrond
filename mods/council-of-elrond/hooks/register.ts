@@ -37,6 +37,8 @@ import {
 import type { WipePolicy } from './elrond/operations.js'
 import { refusalText } from './elrond/refusal.js'
 import { reportOutput } from './elrond/report.js'
+import { bandRows, debateRows, voiceNote } from './elrond/view.js'
+import type { Row } from './elrond/view.js'
 import { ruleJson, suggestRule } from './elrond/suggest.js'
 import type { Refusal } from './elrond/refusal.js'
 import { route } from './elrond/routing.js'
@@ -65,18 +67,27 @@ import {
   addReviewTime,
   addTokens,
   clearCache,
+  clearEpic,
+  closeDebate,
   count,
   declineRule,
   INITIAL_SESSION,
   isShadow,
+  markDebateOpened,
+  noteCheck,
+  noteVoice,
   noteWritten,
+  openDebate,
   resetForPrompt,
   sessionOf,
+  tidyCall,
+  tidyReason,
   withBypass,
+  withEpic,
   withSessionModel,
   withShadow,
 } from './state.js'
-import type { CouncilSession } from '../types'
+import type { CouncilDebate, CouncilSession } from '../types'
 import { currentMode, setMode, text } from './strings.js'
 import type { StringKey } from './strings.js'
 
@@ -105,6 +116,15 @@ const MAX_SCRIPTS = 3
 
 const COMMAND = 'council'
 const PANE_ID = 'council'
+
+/** The debate pane: its own id, so it sits beside the `/council` output as a tab. */
+const DEBATE_PANE_ID = 'council-debate'
+
+/** Rows the debate pane asks for where it is placed inline. */
+const DEBATE_PANE_ROWS = 12
+
+/** How long the epic drop row and toast last. */
+const EPIC_MS = 8_000
 
 /** The `/config` row a `--save` writes, per slot that has one. */
 const CONFIG_ROWS: Readonly<Partial<Record<ModelSlot, string>>> = {
@@ -553,6 +573,9 @@ type Sitting = { seat: CouncilSeat; who: StringKey; brief?: Brief; skip?: string
 
 type Held = { voices: Voice[]; tokens: number[]; runs: GimliRun[] }
 
+/** What `convene` reports as it goes, for the debate record: a voice resolved, or a check ended. */
+type Progress = { kind: 'voice'; index: number; voice: Voice } | { kind: 'check'; run: GimliRun }
+
 /**
  * The full council. The project's checks start first and run on their own
  * timeouts (decision 3); the model members run in parallel, or one at a time
@@ -568,10 +591,16 @@ async function convene(
   checks: readonly GimliCommand[],
   root: string,
   signal: AbortSignal,
+  progress: (event: Progress) => Promise<void>,
 ): Promise<Held> {
   const started = await $.clock.now()
   const stop = new AbortController()
   let isCheckFailed = false
+  // The debate record is only watching: a note that fails or lags changes nothing here.
+  const noted: Promise<void>[] = []
+  const note = (event: Progress): void => {
+    noted.push(Promise.resolve().then(() => progress(event)).catch(() => undefined))
+  }
   const checking = Promise.all(
     checks.map(command =>
       runCheck($, command, root, stop.signal).then(run => {
@@ -579,6 +608,7 @@ async function convene(
           isCheckFailed = true
           stop.abort()
         }
+        note({ kind: 'check', run })
         return run
       }),
     ),
@@ -594,23 +624,27 @@ async function convene(
     tokens[index] = result.tokens
     return result.ok ? { kind: 'verdict', ...base, verdict: result.verdict } : { kind: 'failed', ...base, problem: result.problem }
   }
+  const resolved = (index: number, voice: Voice): Voice => {
+    note({ kind: 'voice', index, voice })
+    return voice
+  }
   let voices: Voice[]
   if (isSequential) {
     voices = []
     for (const [index, sitting] of sittings.entries()) {
       const isBlocked = isCheckFailed || voices.some(voice => voice.kind === 'failed' || (voice.kind === 'verdict' && voice.verdict.verdict === 'block'))
       voices.push(
-        isBlocked
-          ? { kind: 'skipped', ...baseOf(sitting), why: text('council.stopped') }
-          : await ask(sitting, index),
+        resolved(index, isBlocked ? { kind: 'skipped', ...baseOf(sitting), why: text('council.stopped') } : await ask(sitting, index)),
       )
     }
   } else {
-    voices = await Promise.all(sittings.map(ask))
+    voices = await Promise.all(sittings.map(async (sitting, index) => resolved(index, await ask(sitting, index))))
   }
   // A check can only add a block: once a member has blocked, one still running cannot matter.
   if (hasRealBlock(voices)) stop.abort()
-  return { voices, tokens, runs: await checking }
+  const runs = await checking
+  await Promise.all(noted)
+  return { voices, tokens, runs }
 }
 
 /** Puts the call to the user; where nobody can be asked, says so. */
@@ -742,6 +776,59 @@ async function show($: EngineInterface, output: Output): Promise<void> {
   for (const line of output.lines) $.ui.log(line)
 }
 
+/** Rows as a column of Text: a theme key for colour, never a raw colour, so a theme change reaches them. */
+function drawRows(Box: Parameters<typeof h>[0], Text: Parameters<typeof h>[0], rows: readonly Row[], wrap: 'wrap' | 'truncate'): RenderElement {
+  const lines = rows.map(row =>
+    h(Text, { wrap, ...(row.color !== undefined && { color: row.color }), ...(row.bold === true && { bold: true }), ...(row.dim === true && { dimColor: true }) }, row.text),
+  )
+  return h(Box, { flexDirection: 'column' }, ...lines) as RenderElement
+}
+
+/**
+ * Opens the debate pane unasked, once per session: the engine itself keeps an
+ * unasked open undrawn below 144 columns, so the mod never measures the terminal.
+ * A refused open is ignored; it is never retried.
+ */
+async function openDebatePane($: EngineInterface): Promise<void> {
+  if (sessionOf(await read($, session)).debateOpened) return
+  // Claimed before the open, so a parallel call does not open it too.
+  await update($, session, value => markDebateOpened(sessionOf(value)))
+  if ((await $.session.surfaces().catch(() => [])).length === 0) return
+  await $.ui.open({ id: DEBATE_PANE_ID, title: text('debate.title'), rows: DEBATE_PANE_ROWS }).catch(() => undefined)
+}
+
+/** `/council debate`: the pane at any width (it answers the person's command), else the same rows as transcript lines. */
+async function showDebate($: EngineInterface): Promise<void> {
+  const surfaces = await $.session.surfaces().catch(() => [])
+  if (surfaces.length > 0) {
+    const opened = await $.ui.open({ id: DEBATE_PANE_ID, title: text('debate.title'), rows: DEBATE_PANE_ROWS }).catch(() => undefined)
+    if (opened?.isPlaced === true) return
+  }
+  $.ui.log(text('debate.title'))
+  for (const row of debateRows(sessionOf(await read($, session)), undefined, currentMode())) $.ui.log(row.text)
+}
+
+/**
+ * The epic drop (themed mode, a pushed or merged call the full council
+ * approved): the row hides itself once `epicUntil` passes, whatever happens to
+ * the timer, which is only a redraw trigger (a hot reload cancels it).
+ */
+async function epicDrop($: EngineInterface): Promise<void> {
+  const until = (await $.clock.now()) + EPIC_MS
+  await update($, session, value => withEpic(sessionOf(value), until))
+  $.ui.toast(text('epic.toast'), { timeoutMs: EPIC_MS })
+  $.clock.after(EPIC_MS + 100, () => {
+    void (async () => {
+      try {
+        const now = await $.clock.now()
+        await update($, session, value => clearEpic(sessionOf(value), now))
+      } catch {
+        // The row hides itself at its time anyway.
+      }
+    })()
+  })
+}
+
 /** `/council report`: the rotated files (oldest first), then the current one; an unreadable file is named and left out. */
 async function reportFrom($: EngineInterface, path: string): Promise<Output> {
   const files: string[] = []
@@ -818,7 +905,7 @@ async function councilModel($: EngineInterface, command: Extract<CouncilCommand,
   return { title, lines }
 }
 
-async function councilOutput($: EngineInterface, command: CouncilCommand): Promise<Output> {
+async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand, { kind: 'debate' }>): Promise<Output> {
   const title = text('cmd.title')
   switch (command.kind) {
     case 'status': {
@@ -939,8 +1026,8 @@ export const register: Register = (on, options) => {
     await $.command
       .register({
         name: COMMAND,
-        description: 'The council: status, bypass, shadow mode, log, rules, test a command, models, reload, report',
-        argumentHint: '[on|off|shadow on|off|log [n]|rules|test "<cmd>"|model [<member> <model> [--save]]|reload|report]',
+        description: 'The council: status, bypass, shadow mode, log, rules, test a command, models, reload, report, debate pane',
+        argumentHint: '[on|off|shadow on|off|log [n]|rules|test "<cmd>"|model [<member> <model> [--save]]|reload|report|debate]',
       })
       .catch((error: unknown) => {
         $.ui.log(text('notice.commandFailed', { problem: error instanceof Error ? error.message : String(error) }))
@@ -964,7 +1051,9 @@ export const register: Register = (on, options) => {
 
   // Output goes to the user only (decision 1): no text for Claude to read.
   on('command.run', { command: COMMAND }, async ($, e) => {
-    await show($, await councilOutput($, parseCouncil(e.args)))
+    const command = parseCouncil(e.args)
+    if (command.kind === 'debate') await showDebate($)
+    else await show($, await councilOutput($, command))
     return {}
   }).catch(($, e) => {
     $.ui.log(text('cmd.help'))
@@ -976,6 +1065,23 @@ export const register: Register = (on, options) => {
     const shown = await read($, panel)
     // Called directly rather than as JSX, so this module stays a .ts file.
     return h(Box, { flexDirection: 'column' }, ...shown.lines.map(line => h(Text, { wrap: 'wrap' }, line))) as RenderElement
+  })
+
+  // The debate pane draws the agent in view (the main conversation: none) and only reads state.
+  on('ui.render', { component: 'Pane', requestId: DEBATE_PANE_ID }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const state = sessionOf(await read($, session))
+    return drawRows(Box, Text, debateRows(state, e.props.view.agentId, currentMode()), 'wrap')
+  })
+
+  // The council check, and the epic drop: a row each, only while there is one (terminal and desktop).
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const state = sessionOf(await read($, session))
+    const rows = bandRows(state, e.props.view.agentId, await $.clock.now(), currentMode())
+    if (rows === undefined) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return drawRows(Box, Text, rows, 'truncate')
   })
 
   // The mode label by the prompt while bypass or shadow is on (terminal and desktop).
@@ -1025,6 +1131,21 @@ export const register: Register = (on, options) => {
     const decided = classification.decided
     const shadow = isShadow(state, settings.shadowMode)
     const shownCall = `${call.tool}: ${callText(call, ctx.patterns)}`
+    // The debate record: keyed by the call's id, tagged with the agent that made it. It only watches.
+    const debateId = e.tool_use_id
+    const debateOf = (kind: CouncilDebate['kind'], voices: CouncilDebate['voices'], checks: CouncilDebate['checks'] = []): CouncilDebate => ({
+      id: debateId,
+      ...(e.agentId !== undefined && { agentId: e.agentId }),
+      tool: call.tool,
+      call: tidyCall(callText(call, ctx.patterns)),
+      kind,
+      status: 'sitting',
+      voices,
+      checks,
+    })
+    const redacted = (raw: string | undefined): string | undefined => (raw === undefined ? undefined : redact(raw, ctx.patterns))
+    // Set once the full council approved this very call; the epic drop reads it after the call ran.
+    let isCouncilApproved = false
     // Who reviews a review-tier call: the rule's member, or the fallback (pure).
     const seated = classification.tier === 'review' ? route(call, classification, enabledMembers()) : undefined
     const routedMember: MemberName | null = seated === undefined ? null : seated.kind === 'member' ? seated.member : seated.wanted.member
@@ -1079,6 +1200,10 @@ export const register: Register = (on, options) => {
           if (!thisPrompt(current)) return current // a new prompt already reset the counters
           return counts ? noteWipe(current, operation) : resetOperation(current, operation.key)
         })
+      }
+      // Cosmetic and themed only: a failure here never changes the result.
+      if (outcome === 'ran' && isCouncilApproved && rangeOf(classification) !== undefined && currentMode() === 'themed') {
+        await epicDrop($).catch(() => undefined)
       }
       if (result.deny === undefined) await noteWrite($, call, cwd, ctx.home, result).catch(() => undefined)
       return result
@@ -1286,14 +1411,36 @@ export const register: Register = (on, options) => {
         sittings.push({ seat, who, brief: await briefOf($, asked, call, classification, cwd, realPath, state, preview, ctx) })
       }
       const checks = settings.gimliEnabled ? ctx.loaded.compiled.config.gimli.commands : []
+      const debate = debateOf(
+        'council',
+        sittings.map(sitting => ({
+          member: sitting.seat.member,
+          ...(sitting.seat.member === 'aragorn' && { profile: sitting.seat.profile }),
+          status: sitting.brief === undefined ? ('skipped' as const) : ('waiting' as const),
+          ...(sitting.brief === undefined && sitting.skip !== undefined && { reason: tidyReason(sitting.skip) }),
+        })),
+        checks.map(check => ({ name: check.name, status: 'running' as const })),
+      )
+      await update($, session, value => openDebate(sessionOf(value), debate)).catch(() => undefined)
+      await openDebatePane($).catch(() => undefined)
+      const progress = async (event: Progress): Promise<void> => {
+        if (event.kind === 'check') {
+          await update($, session, value => noteCheck(sessionOf(value), debateId, event.run.name, event.run.status))
+          return
+        }
+        const outcome = voiceNote(event.voice)
+        const detail = { reason: redacted(outcome.reason), alternative: redacted(outcome.alternative) }
+        await update($, session, value => noteVoice(sessionOf(value), debateId, event.index, outcome.status, detail))
+      }
       const reviewStarted = Date.now()
-      const held = await convene($, sittings, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), settings.councilSequential, checks, ctx.root, next.signal)
+      const held = await convene($, sittings, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), settings.councilSequential, checks, ctx.root, next.signal, progress)
       // Esc aborts the model calls and kills the checks. That is not a verdict
       // and not the user keeping the call blocked: refuse plainly, no wipe, no
       // round, no dialog on an abandoned dispatch.
       if (next.signal.aborted) {
         verdictText = 'aborted'
         isShadowed = shadow
+        await update($, session, value => closeDebate(sessionOf(value), debateId, 'aborted')).catch(() => undefined)
         return finish({ deny: refusalText({ who: 'who.fullCouncil', verdict: 'interrupted', reason: text('reason.aborted'), alternative: '' }) }, false)
       }
       const runs = held.runs.map(run => ({ ...run, tail: redact(run.tail, ctx.patterns) }))
@@ -1304,6 +1451,9 @@ export const register: Register = (on, options) => {
       isShadowed = shadow
       const isVerdict = combined.reviewed > 0 && !combined.isFailureOnly
       verdictText = isVerdict ? combined.verdict : 'failed'
+      isCouncilApproved = isVerdict && combined.verdict === 'approve'
+      const debateVerdict = isVerdict ? combined.verdict : 'failed'
+      await update($, session, value => closeDebate(sessionOf(value), debateId, debateVerdict)).catch(() => undefined)
       // The audit keeps no check output: the summary leaves it out.
       reasonText = combined.summary || null
       councilRecord = {
@@ -1361,17 +1511,26 @@ export const register: Register = (on, options) => {
     profile = brief.profile ?? null
     const choice = modelChoice(brief.member, ctx, state.models)
     model = choice.model
+    const debate = debateOf('review', [{ member: brief.member, ...(brief.profile !== undefined && { profile: brief.profile }), status: 'waiting' }])
+    await update($, session, value => openDebate(sessionOf(value), debate)).catch(() => undefined)
+    await openDebatePane($).catch(() => undefined)
     const reviewStarted = Date.now()
     const verdict = await review($, brief, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), next.signal)
     if (next.signal.aborted) {
       verdictText = 'aborted'
       isShadowed = shadow
+      await update($, session, value => closeDebate(sessionOf(value), debateId, 'aborted')).catch(() => undefined)
       return finish({ deny: refusalText({ who, verdict: 'interrupted', reason: text('reason.aborted'), alternative: '' }) }, false)
     }
     const memberMs = Date.now() - reviewStarted
     reviewMs = memberMs
     tokens = verdict.tokens
     isShadowed = shadow
+    const voiced = verdict.ok ? verdict.verdict.verdict : ('failed' as const)
+    const voicedDetail = verdict.ok
+      ? { reason: redacted(verdict.verdict.reason), alternative: redacted(verdict.verdict.safer_alternative) }
+      : { reason: redacted(verdict.problem) }
+    await update($, session, value => closeDebate(noteVoice(sessionOf(value), debateId, 0, voiced, voicedDetail), debateId, voiced)).catch(() => undefined)
     await update($, session, value => {
       const spent = addReviewTime(addTokens(sessionOf(value), verdict.tokens), memberMs)
       const counted = count(spent, brief.member, verdict.ok ? verdict.verdict.verdict : 'failed')

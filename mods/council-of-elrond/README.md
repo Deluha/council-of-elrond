@@ -7,14 +7,15 @@ Calls that need a second opinion go to a model reviewer, and anything uncertain 
 > catch what a pattern misses, but they never widen what the rules allow. This is not a sandbox or a
 > security product (see [What it does not protect against](#what-it-does-not-protect-against)).
 
-Status: **Stage 5 of 6, hardened in 0.5.0.** Available now: the rules; three model reviewers
+Status: **Stage 6 of 6, after the 0.5.0 hardening.** Available now: the rules; three model reviewers
 (destructive operations, diffs, and git and databases) with routing between them; the full council
 with your project's own checks for big operations; the secrets scan, read-only previews, review
 rounds and lockout, the approve cache, escalation to you, allow rules offered after "allow once",
 `/council` and `/council report`, shadow mode and bypass, fail-closed handling and the audit log,
-all in plain mode. The 0.5.0 release closed the rules-tier and pipeline findings of the Stage 5
-review ([docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md)). The theme and its UI follow in the
-last stage.
+the theme (with a plain mode), and the debate pane, the council check band, the wipe counter, the
+threat meter and the epic drop. The 0.5.0 release closed the rules-tier and pipeline findings of the
+Stage 5 review ([docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md)). A live check in a terminal
+is still to come.
 See [ROADMAP.md](./ROADMAP.md) for what's left, [SPEC.md](./SPEC.md) for the original spec and
 [DESIGN.md](./DESIGN.md) for how it works.
 
@@ -250,28 +251,14 @@ What is themed, for you only:
   "Pass: keep blocked" and, for one possible secret, "Greed: add to allowlist".
 - Bypass is Leeroy mode (`council: Leeroy mode` by the prompt, and in `/council`).
 - `/council` counts wipes where plain mode says "refused or failed attempts".
-- Each member's one line of flavour in the debate pane, once that pane lands.
+- Each member's one line of flavour in the debate pane, the pane's title ("The debate"), the council check band's header ("Ready check"), the wipe counter, the threat meter and the epic drop (see [Debate pane and council check](#debate-pane-and-council-check)).
 
 What is never themed: what Claude reads. Refusals, the full council's reasons and the rule reason
 written to your rules file are plain in both modes, and name the role, not the character. Member
 ids you type (`/council model gandalf opus`) are config keys and stay as written. The dialogs that
 confirm exact data you agree to write (the allowlist entry, an allow rule) keep their plain text.
 
-| Theme term | Plain name |
-| :- | :- |
-| Gandalf | The destructive-operations reviewer |
-| Legolas | The diff reviewer |
-| Aragorn | The git and database reviewer |
-| Gimli | The project checks |
-| Gollum | The secrets scan |
-| Galadriel | The read-only preview |
-| Elrond | The council's chair: the gate itself |
-| The Council of Elrond | The full council |
-| Loot roll | The escalation dialog |
-| Need, Pass, Greed | Allow once, keep blocked, add to allowlist |
-| Leeroy mode | Bypass (`/council off`) |
-| Wipe | A refused or failed attempt |
-| Lockout | Three wipes on one operation |
+Each theme term and its plain name are in the [Glossary](#glossary).
 
 "Council" stays in plain mode: it is the product's name.
 
@@ -292,6 +279,7 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | `/council model [<member> <model> [--save]]` | Lists each slot's model and where it came from, or switches one for this session (`default` clears the switch). `--save` also writes the `/config` row when the model is one of its picker values. |
 | `/council reload` | Reads `rules.json` again. |
 | `/council report` | A summary of the audit log, rotated files included (see below). |
+| `/council debate` | Opens the [debate pane](#debate-pane-and-council-check) at any width (where nothing draws, prints its rows as transcript lines). |
 
 ### `/council report`
 
@@ -303,6 +291,18 @@ Read the report after a few days in shadow mode to tune the rules. It has four p
 - **Cost per reviewer:** tokens per reviewer, with its share of full councils (taken from each member's own tokens in the council), the full council's sittings, and the median review time. Review times are logged from Stage 5 on; older lines count for tokens only.
 
 A line that doesn't parse is skipped and counted; a log file that can't be read is named and left out.
+
+## Debate pane and council check
+
+Three things show you a review as it happens, none of them read by Claude:
+
+- **The debate pane** (`The debate` themed, `Council review` plain) lists your newest reviews, three at most, newest first. Each shows the call, then one row per reviewer: its name, a symbol with a word (`✓ approve`, `✗ revise`, `✗ block`, `✗ no verdict`, `… reviewing`, `– sat out`), its reason and its safer alternative, and, in themed mode, one line of flavour. A full council also shows each project check (`✓ passed`, `✗ failed`, `✗ timed out`, `✗ could not start`, `– stopped`, `… running`) and a final verdict row. Below the reviews are two session-wide rows: the **wipe counter** (refused or failed attempts since your last prompt, over how many operations, and how many are locked out; "Wipes" themed) and the **threat meter** (each reviewer that has blocked, most blocks first, as a bar and the number: `Gandalf ███ 3 blocks`; plain mode says `the destructive-operations reviewer ███ 3 blocks`). Nothing depends on colour: every symbol has its word.
+- **The council check band** sits above the prompt only while a full council sits: a header ("Ready check" themed, "Full council review" plain), then a row per reviewer and per check as it answers. It leaves when the council is done, and gives way to a survey. A single reviewer's review never draws in the band.
+- **The epic drop** is for themed mode only. When a push or merge passed the full council, ran, and was not a repeat of an approved call, "✦ Legendary commit acquired" shows in the band for eight seconds, with a toast of the same words. Plain mode has none of it: no toast, no row.
+
+The pane has its own tab (`council-debate`), beside the `/council` output pane. It opens on its own once per session, the first time a model review or a full council starts; Claude Code keeps an unasked pane hidden below 144 terminal columns, so on a narrow terminal it stays hidden. `/council debate` opens it at any width, and is the way back after you close it. It follows the agent in view: with a subagent's transcript on screen, it shows that subagent's reviews.
+
+What draws where: the pane on every surface Claude Code draws panes for (terminal, desktop, VS Code, mobile; whether VS Code paints it is for a live check to say), and the band on the terminal and desktop only. Where a surface draws nothing (a `claude -p` run, the SDK, cloud), nothing is drawn and nothing is lost: `/council debate` prints the rows as transcript lines, and the audit log and `/council` keep the full record.
 
 ## Secrets scan
 
@@ -469,8 +469,8 @@ of session content it sees is wrapped as untrusted data.
 
 ## Glossary
 
-The mod's output is in plain words. The names below are the project's own vocabulary, used in the
-code, the design documents and (from Stage 6) the themed mode.
+The names below are the project's own vocabulary, used in the code, the design documents and the
+themed mode, which is the default. Plain mode says the plain meaning instead, everywhere you read.
 
 | Name | Plain meaning |
 | :- | :- |
@@ -483,16 +483,16 @@ code, the design documents and (from Stage 6) the themed mode.
 | Gimli | The project checks: your tests, lint and typecheck, run alongside the full council. |
 | Gollum | The secrets scan. |
 | Galadriel | The read-only preview ("the mirror") of what a call would touch. |
-| Full council | Every enabled reviewer at once, for a big operation. |
-| Ready check, council check | The full council's per-member tick or cross (Stage 6 UI). |
+| Full council | Every enabled reviewer at once, for a big operation. Themed: the Council of Elrond. |
+| Ready check, council check | The band above the prompt while the full council sits: a row per reviewer and check, with its answer. |
 | Round | One proposal and one verdict on the same operation. Two refusals, and the call comes to you. |
-| Wipe | A failed attempt: a refusal, your "keep blocked", a call that ran and errored. |
+| Wipe | A failed attempt: a refusal, your "keep blocked", a call that ran and errored. The wipe counter shows them in the debate pane. |
 | Lockout | Three failed attempts on one operation, or five on one kind: Claude is told to stop retrying. |
-| Loot roll | The escalation question (allow once, keep blocked, type an instruction) in themed mode. |
+| Loot roll | The escalation question, in themed mode. Need, Pass and Greed are its labels: allow once, keep blocked, add to allowlist (you can also type an instruction). |
 | Leeroy mode | Session bypass (`/council off`). |
 | Shadow mode | Reviewers log their verdicts but never refuse. |
-| Threat meter | Blocks per reviewer (Stage 6 UI). |
-| Epic drop | The "Legendary commit acquired" banner after a push or merge passes the full council (Stage 6 UI). |
+| Threat meter | Blocks per reviewer, in the debate pane. |
+| Epic drop | The "Legendary commit acquired" row and toast after a push or merge passes the full council (themed mode only). |
 | Plain mode | Every string in its plain variant; no theme names anywhere. Behaviour is identical. |
 
 ## Tests

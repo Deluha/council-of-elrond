@@ -19,7 +19,17 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **The loot roll.** The escalation dialog is headed "Loot roll" with the options "Need: allow
   once", "Pass: keep blocked" and, for one possible secret, "Greed: add to allowlist". Bypass is
   "Leeroy mode".
-- The flavour lines for the debate pane (a later change draws them).
+- **The debate pane.** A second pane (`council-debate`, "The debate" themed, "Council review"
+  plain) shows your newest reviews: the call, each reviewer's verdict with a word beside every
+  symbol, its reason and safer alternative, the project checks, and one line of flavour per
+  reviewer in themed mode. It follows the agent in view, opens by itself once per session at the
+  first model review, and `/council debate` opens it at any width.
+- **The council check band.** While a full council sits, a band above the prompt (terminal and
+  desktop) shows a row per reviewer and per check as each answers ("Ready check" themed).
+- **The wipe counter and the threat meter** in the debate pane: refused or failed attempts since
+  your last prompt, and each reviewer's blocks as a bar and a number.
+- **The epic drop** (themed mode only): after a push or merge the full council approved and that
+  ran, "Legendary commit acquired" as a toast and a band row for eight seconds.
 
 ### Changed
 - The default is now themed: `/council`, the dialog and the report name the characters, and the

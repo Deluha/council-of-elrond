@@ -8,7 +8,7 @@ taken, and [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for how it works and
 
 ```sh
 cd council-of-elrond
-claude plugin test mods/council-of-elrond       # 242 tests, about 15 s
+claude plugin test mods/council-of-elrond       # 336 tests, about 15 s
 tsc -p mods                                    # strict, against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
 ```
@@ -38,8 +38,9 @@ mods/
     hooks/config/                shipped defaults, rules.json schema, types, the writer
     hooks/members/               one file per member, plus brief.ts and shared.ts
     hooks/elrond/                routing, council seats, verdict combination, operations,
-                                 escalation, refusal text, model choice, commands, suggest, report
-    types/index.d.ts             the $.state contract (CouncilSession, CouncilPanel)
+                                 escalation, refusal text, model choice, commands, suggest, report,
+                                 view (the rows the debate pane and the band draw)
+    types/index.d.ts             the $.state contract (CouncilSession, CouncilDebate, CouncilPanel)
     tests/                       *.test.ts, run by `claude plugin test`; fixtures.ts is the fake world
     README.md DESIGN.md ROADMAP.md SPEC.md
 ```
@@ -57,8 +58,9 @@ function in that file (passing `$` to an imported function fails validation). Ke
   result if `next.called`, else refuses.
 - `prompt.submit` runs `resetForPrompt`, the single per-prompt reset.
 - `session.start` loads the config and registers `/council`; `command.run` answers it.
-- `ui.render` draws the `/council` pane and the mode label. Drawing is done with the global
-  `h(Element, props, ...children)` and elements from `$.ui.resolve(e)`, so the file stays `.ts`.
+- `ui.render` draws the `/council` pane, the debate pane, the council check band and the mode
+  label. The debate pane and the band only read state; their rows come from `elrond/view.ts`.
+  Drawing is done with the global `h(Element, props, ...children)` and elements from `$.ui.resolve(e)`, so the file stays `.ts`.
 
 Everything that decides something lives in a sibling module and gets its inputs as plain values.
 If you find yourself deciding in register.ts, move it out and test it directly.
@@ -111,6 +113,12 @@ Patterns to keep:
   the fixture's switches (`replies`, `answers`, `surfaces`, `processReply`, `spawnReply`).
 - **Mock the clock for anything that waits.** A test has 5 s. `world(on, { isClockMocked: true })`
   gives `w.clock`; `w.modelDelays` sets how long each model request takes.
+- **Mounted drawings** (`$.ui.mount`): a mounted tree re-reads on its own after a `$.state` write,
+  so mount once, drive the calls, and read `drawn()`, `find` or `findAll({ type: 'Text' })`. The
+  engine keeps one instance per pane id, so unmount before mounting the same pane again. Mount
+  the debate pane on all four surfaces and the band on `terminal` and `desktop`. The fixture's
+  `isBandDrawn` adds the engine's own band beneath the plugin, so a pass-through shows
+  "engine band"; `replyFor` picks a model reply by the request, for calls in flight together.
 - **Kit specifics** (bottom hooks that must return `{ cwd }`, `{ result }`, async generators for
   `process.spawn`) are in the ROADMAP's API facts, item 12 and 14.
 

@@ -20,6 +20,8 @@ describe('parsing', () => {
     expect(parseCouncil('test rm -rf build')).toEqual({ kind: 'test', command: 'rm -rf build' })
     expect(parseCouncil('model gandalf opus --save')).toEqual({ kind: 'model', slot: 'gandalf', model: 'opus', save: true })
     expect(parseCouncil('model')).toEqual({ kind: 'models' })
+    expect(parseCouncil('debate')).toEqual({ kind: 'debate' })
+    expect(parseCouncil('  DEBATE ')).toEqual({ kind: 'debate' })
     expect(parseCouncil('frobnicate')).toMatchObject({ kind: 'usage', key: 'cmd.unknown' })
     expect(words('a "b c" \'d e\'')).toEqual(['a', 'b c', 'd e'])
   })

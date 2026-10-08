@@ -32,7 +32,7 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (273 after the 0.5.0 hardening)
+cd mods/council-of-elrond && claude plugin test .     # all tests (336 after Stage 6 part B)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
@@ -240,14 +240,14 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 ## Stage 6: theme, then UI (SPEC §17, in this order; drop what the API can't do)
 
 - [x] **Theme strings:** add `themed` variants in `hooks/strings.ts`; a `plainMode` userConfig option (default off, i.e. themed). Themed messages: one line of flavour, then the plain reason and the safer alternative. Gandalf's block: "You shall not pass" style. Bypass is themed "Leeroy mode", and the escalation dialog is the "loot roll". Member names become the theme names (`who.*` entries).
-- [ ] **Debate pane:** `Pane` showing the proposal (the call) beside the reviewing member's verdict; reads `$.state`. Opened unasked only from 144 columns; `/council` opens it at any width.
-- [ ] **Council check:** for big operations, a ready-check row per member (tick or cross) in the `AbovePrompt` band (terminal + desktop).
-- [ ] **Wipe counter** in the band or the pane.
-- [ ] **Threat meter:** blocks per member (pane).
+- [x] **Debate pane:** `Pane` showing the proposal (the call) beside the reviewing member's verdict; reads `$.state`. Opened unasked only from 144 columns; `/council` opens it at any width. *(Done: the pane is its own id, `council-debate`, a tab beside `/council`'s; `/council debate` opens it at any width; it draws per `view.agentId`; DESIGN §11.7-10.)*
+- [x] **Council check:** for big operations, a ready-check row per member (tick or cross) in the `AbovePrompt` band (terminal + desktop). *(Done: a row per member and per check while a full council sits; each symbol has a word.)*
+- [x] **Wipe counter** in the band or the pane. *(Done: in the pane only, so the band takes no row all session.)*
+- [x] **Threat meter:** blocks per member (pane). *(Done: a bar of up to ten blocks with the number as text.)*
 - [x] **Loot roll:** themed escalation text and labels (and optionally a `ui.render` hook on `AskUserQuestion`; a rewrite must still fit the tool's schema). The optional ui.render hook is dropped (review §5 item 5).
-- [ ] **Epic drop:** after a merge or push succeeds following a passed council check, a short magenta band row plus a toast saying "Legendary commit acquired", cleared by `$.clock.after`. No flash primitive exists. Cosmetic only.
-- [ ] Degrade cleanly: no colour dependence, and nothing drawn where nothing draws (VS Code, `-p`, SDK, cloud).
-- [ ] Tests: plain mode shows no theme text anywhere (extend the stage 1 test to every string and every drawn tree); mount UI through `$.ui.mount` on both `'terminal'` and `'desktop'`.
+- [x] **Epic drop:** after a merge or push succeeds following a passed council check, a short magenta band row plus a toast saying "Legendary commit acquired", cleared by `$.clock.after`. No flash primitive exists. Cosmetic only. *(Done: themed mode only; the row hides itself by `epicUntil` in state, and the timer is only a redraw trigger, since a hot reload cancels timers.)*
+- [x] Degrade cleanly: no colour dependence, and nothing drawn where nothing draws (VS Code, `-p`, SDK, cloud). *(Done: every symbol has a word; the pane is raised on every surface and the band on terminal and desktop, per the types; `/council debate` logs where nothing places it. Whether VS Code paints the pane is a live check.)*
+- [x] Tests: plain mode shows no theme text anywhere (extend the stage 1 test to every string and every drawn tree); mount UI through `$.ui.mount` on both `'terminal'` and `'desktop'`. *(Done: `tests/view.test.ts` and `tests/debate.test.ts`; the pane is mounted on terminal, desktop, VS Code and mobile, the band on terminal and desktop; three mutation checks recorded at the checkpoint.)*
 
 ## Final deliverables (SPEC §21–22)
 

@@ -5,14 +5,7 @@ import type { Voice } from '../hooks/elrond/combine.js'
 import { refusalText } from '../hooks/elrond/refusal.js'
 import type { GimliRun } from '../hooks/members/gimli.js'
 import { allStrings, currentMode, flavourOf, setMode, text, themedKeys } from '../hooks/strings.js'
-import { ALLOW_ONCE, auditLines, BLOCK, denyOf, KEEP_BLOCKED, world } from './fixtures.js'
-
-/** The theme's own words: none may reach plain mode or anything Claude reads. */
-const THEME =
-  /gandalf|legolas|aragorn|gimli|gollum|galadriel|elrond|boromir|mordor|middle-earth|shall not pass|leeroy|wipe|loot|raid|\bneed:|\bpass:|greed|legendary|epic|threat|ready check|precious|isengard|rivendell|\belf\b/i
-
-/** Member ids (`[gandalf]`, `[aragorn/git]`) are config keys the user types, not theme text. */
-const withoutIds = (shown: string): string => shown.replace(/\[[a-z/]+\]/g, '')
+import { ALLOW_ONCE, auditLines, BLOCK, denyOf, KEEP_BLOCKED, THEME, withoutIds, world } from './fixtures.js'
 
 /** What Claude reads: these families, and these single keys, never get a themed variant. */
 const CLAUDE_FACING_FAMILIES = ['refusal.', 'reason.', 'alternative.', 'council.', 'gimli.', 'escalate.', 'route.', 'suggest.', 'notice.', 'report.']
