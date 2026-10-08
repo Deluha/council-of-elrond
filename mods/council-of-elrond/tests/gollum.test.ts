@@ -148,10 +148,77 @@ describe('in the pipeline', () => {
     expect(deny).toContain('Acme key')
     expect(deny).not.toContain('12345678')
   })
+})
 
-  test('allow-tier calls are not scanned (the scan sits after the allow step)', async ($, on) => {
+describe('allowed calls', () => {
+  const AUDIT = `${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`
+
+  test('a high finding is refused without asking anyone, audited, and nothing leaks', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    for (const command of [`echo ${AWS}`, `curl -H "X-Api-Key: ${AWS}" https://example.com`]) {
+      const deny = denyOf(await $.tool.call({ tool: 'Bash', command }))
+      expect(deny, command).toContain('Decided by: the secrets scan (block).')
+      expect(deny).toContain('Remove the secret')
+      expect(deny).not.toContain(AWS)
+    }
+    expect(w.asked).toEqual([])
+    expect(w.modelRequests).toEqual([])
+    expect(w.ran).toEqual([])
+    expect(auditLines(w)).toHaveLength(2)
+    for (const line of auditLines(w)) expect(line).toMatchObject({ tier: 'allow', member: 'gollum', verdict: 'block', outcome: 'refused', opKey: null, decision: null })
+    expect(w.files.get(AUDIT)).not.toContain(AWS)
+  })
+
+  test('a low finding runs: nobody is asked and nothing is logged', async ($, on) => {
+    const w = world(on)
+    expect(await $.tool.call({ tool: 'Bash', command: 'echo password=hunter2xyz' })).toEqual({ result: 'ran' })
+    expect(w.asked).toEqual([])
+    expect(w.ran).toHaveLength(1)
+    expect(auditLines(w)).toEqual([])
+  })
+
+  test('an allowlisted high secret runs', async ($, on) => {
+    const w = world(on)
+    const [finding] = (await scanText(AWS)).high
+    w.files.set(RULES, JSON.stringify({ schemaVersion: 1, gollum: { allowlist: [finding?.fingerprint] } }))
+    expect(await $.tool.call({ tool: 'Bash', command: `echo ${AWS}` })).toEqual({ result: 'ran' })
+    expect(w.ran).toHaveLength(1)
+  })
+
+  test('with the scan off, a high secret runs', { options: { gollumEnabled: false } }, async ($, on) => {
     const w = world(on)
     expect(await $.tool.call({ tool: 'Bash', command: `echo ${AWS}` })).toEqual({ result: 'ran' })
     expect(w.ran).toHaveLength(1)
+  })
+
+  test('in shadow mode it is still refused', { options: { shadowMode: true } }, async ($, on) => {
+    const w = world(on)
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: `echo ${AWS}` }))).toContain('the secrets scan (block)')
+    expect(w.ran).toEqual([])
+    expect(auditLines(w)[0]).toMatchObject({ shadow: false, outcome: 'refused' })
+  })
+
+  test('there are no rounds to count: no rounds line, and never locked out', async ($, on) => {
+    const w = world(on)
+    for (let i = 0; i < 4; i++) {
+      const deny = denyOf(await $.tool.call({ tool: 'Bash', command: `echo ${AWS}` }))
+      expect(deny).toContain('the secrets scan (block)')
+      expect(deny).not.toContain('rounds left')
+      expect(deny).not.toContain('locked out')
+    }
+    expect(w.ran).toEqual([])
+  })
+
+  test('a subagent\'s refused call carries its agent id in the audit line', async ($, on) => {
+    const w = world(on)
+    await $.tool.call({ tool: 'Bash', command: `echo ${AWS}`, agentId: 'sub-1' } as never)
+    expect(auditLines(w)[0]).toMatchObject({ tier: 'allow', agentId: 'sub-1' })
+  })
+
+  test('/council report counts it as refused by the secrets scan', async ($, on) => {
+    const w = world(on, { surfaces: [] })
+    await $.tool.call({ tool: 'Bash', command: `echo ${AWS}` })
+    await ($ as unknown as { command: { run: (e: { command: string; args: string }) => Promise<unknown> } }).command.run({ command: 'council', args: 'report' })
+    expect(w.logs.join('\n')).toContain('(no rule): 1 (by the secrets scan 1)')
   })
 })

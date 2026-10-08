@@ -1145,6 +1145,41 @@ export const register: Register = (on, options) => {
     const classification = classify(call, ctx.loaded.compiled, where)
 
     if (classification.tier === 'allow') {
+      // High-confidence secrets refuse an allowed call too (DESIGN §13.2). It has
+      // no operation, so no rounds, no failed attempt and no state write; low
+      // findings are ignored here, as the mod never asks on an allowed call.
+      if (settings.gollumEnabled) {
+        const scan = await scanCall(call, ctx.patterns, ctx.loaded.compiled.config.gollum.allowlist)
+        const first = scan.high[0]
+        if (first !== undefined) {
+          const deny = refusalText({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') })
+          await audit(
+            $,
+            {
+              ts: new Date().toISOString(),
+              tool: call.tool,
+              fingerprint: await fingerprintOf(call.tool, call.input),
+              opKey: null,
+              tier: 'allow',
+              ruleId: classification.decided?.ruleId ?? null,
+              member: 'gollum',
+              profile: null,
+              model: null,
+              verdict: 'block',
+              reason: scan.high.map(finding => finding.label).join(', '),
+              shadow: false,
+              bypass: false,
+              decision: null,
+              outcome: 'refused',
+              latencyMs: Date.now() - started,
+              tokens: 0,
+              ...(e.agentId !== undefined && { agentId: e.agentId }),
+            },
+            ctx.root,
+          )
+          return { deny }
+        }
+      }
       const result = await proceed()
       await noteWrite($, call, cwd, ctx.home, result).catch(() => undefined)
       return result

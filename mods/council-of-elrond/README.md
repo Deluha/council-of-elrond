@@ -322,10 +322,12 @@ What draws where: the pane on every surface Claude Code draws panes for (termina
 
 ## Secrets scan
 
-Every gated call is scanned for secrets in what it would write or run: the shell command (heredocs
-included), Write content, an Edit's new text, a notebook cell, an MCP call's input.
+Every call is scanned for secrets in what it would write or run: the shell command (heredocs
+included), Write content, an Edit's new text, a notebook cell, an MCP call's input. A high-confidence
+finding refuses the call whatever its tier, allowed calls included. A low-confidence finding comes to
+you only on a gated call: an allowed call never gets a question.
 
-- **High confidence** (private keys, AWS, GitHub, Anthropic, OpenAI, Slack, Google and Stripe keys, passwords in connection strings): refused without asking you. Claude is told to remove the secret.
+- **High confidence** (private keys, AWS, GitHub, Anthropic, OpenAI, Slack, Google and Stripe keys, passwords in connection strings): refused without asking you, on an allowed call too (it is logged, with tier `allow`). Claude is told to remove the secret.
 - **Low confidence** (`password=…`-style assignments, long random-looking tokens): comes to you with a redacted snippet. Allow once, keep blocked, type an instruction, or **add to allowlist**. The allowlist asks a second time, showing the exact entry: a `sha256:` fingerprint of the secret, never the secret. Only then is it written to `rules.json` under `gollum.allowlist`.
 
 Add your own patterns in `rules.json`:
@@ -409,7 +411,7 @@ this call through. If one of your own rules would still decide first, nothing is
 No rule is offered for:
 
 - a call the rules block, or one touching a protected path;
-- a call the secrets scan flagged at any level (an allow rule would skip the scan);
+- a call the secrets scan flagged at any level (an allow rule would skip the low-confidence scan);
 - a script or inline code (what runs isn't in the command);
 - a command whose words expand when it runs (`$VAR`, `$(…)`, backticks), one over several lines, or one over 300 characters;
 - a call you then refused at Claude Code's own prompt, or one that didn't run.
@@ -470,7 +472,7 @@ hold is classified (0.5.0); the gaps that remain:
 - **The database reviewer sees only the SQL it can find**: inline `-c`/`-e`, heredocs, and `.sql` files named in the command and inside the project. A migration tool's own migration files (`prisma migrate deploy`) are not looked up.
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.
 - Rules you loosen, and calls you allow. An allow rule you add skips review, the ask tier and the secrets scan for that exact command; it does not follow a `cd` earlier in another command, so `rm -r build` is allowed in whichever folder Claude runs it.
-- **Secrets in allowed calls.** The secrets scan reads gated calls only: it sits after the allow step, as the spec orders it. A `curl` GET with a key in a header, or a `git commit`, is not scanned.
+- **Low-confidence secrets in allowed calls.** An allowed call is scanned for high-confidence secrets only: a `password=…`-style assignment or a random-looking token in an allowed `curl` or `echo` passes without a question.
 - **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`) and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through.
 - **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb.
 - A hook that overruns its time limit. The engine may run the call; Elrond refuses rather than pass with its budget nearly spent, but it can't act once it has run out.

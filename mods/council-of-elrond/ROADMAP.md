@@ -281,7 +281,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 | Live UI checks (stages 2 to 6) | Fold them into the one screen-by-screen check above and run it once, at the end of Stage 6. |
 | Prompt-refusal wording | Re-check against the 2.1.294 binary (`/upgrade-types` step 5) as part of that live check; this session could not read the binary. |
 | A new branch's push has no range | Done (DESIGN §13.1): a fixed fallback against `<remote>/HEAD` when the push names a remote. |
-| Scan allowed calls for secrets | Do it for high-confidence findings only (refuse), never asking on an allowed call. The cost is a pattern scan of the command text. A literal token in an allowed `curl` currently reaches the network unscanned. Behaviour change: 0.6.0. |
+| Scan allowed calls for secrets | Do it for high-confidence findings only (refuse), never asking on an allowed call. The cost is a pattern scan of the command text. A literal token in an allowed `curl` currently reaches the network unscanned. Behaviour change: 0.6.0. Done (DESIGN §13.2). |
 | An `exact` field in the rule schema | Not now. The `input` pin works and is tested; a schema change waits for a user asking to hand-edit such rules. |
 | The allow-rule offer after every "allow once" | Wait for feedback. If it is noisy, add a `/config` switch for the offer (smallest change). |
 | An allow rule pins text, not the folder | Document only (README, "What it does not protect against"); pinning the cwd needs a schema change. |
@@ -321,7 +321,7 @@ From stage 3:
 From stage 2:
 - **Verify the prompt-refusal wording live** in a terminal. The patterns come from the 2.1.289 binary ("The user doesn't want to proceed with this tool use", "…take this action right now"); after a Claude Code update, re-check them (`grep -a` the binary) or a refusal reads as an ordinary tool error.
 - **Live UI check in a terminal (user):** the `/council` pane, the `council: shadow` / `council: bypass` label, the "Council: you allowed this once" line under the permission dialog, the secrets dialog with three options and the allowlist confirm.
-- **Scan allowed calls too?** The secrets scan follows SPEC §4 and reads gated calls only (DESIGN §6.1). Scanning every call is cheap; it needs the user's say-so since it changes the pipeline order.
+- ~~**Scan allowed calls too?** The secrets scan follows SPEC §4 and reads gated calls only (DESIGN §6.1). Scanning every call is cheap; it needs the user's say-so since it changes the pipeline order.~~ Done, high confidence only (DESIGN §13.2).
 - **Plain-mode identifiers.** `/council` prints member ids such as `gandalf` where you type them (DESIGN §6.16); stage 6's plain-mode test should decide whether ids count as theme text.
 - ~~`/config` has no model row for the full council~~ Added in stage 4.
 

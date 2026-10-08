@@ -42,6 +42,12 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **README.** A "Modes" section (enforcing, shadow, bypass, plain), the install command under
   "Loading it", a note that subagents' calls are gated too, and bypass named among the limits.
 
+### Security
+- **Allowed calls are scanned for high-confidence secrets.** A literal key in an allowed `curl` or
+  `echo` used to reach the network or the transcript unscanned; it is now refused, as on a gated
+  call, and logged with tier `allow` so `/council report` counts it. Low-confidence findings on an
+  allowed call still pass: the mod never asks on an allowed call.
+
 ## [0.5.0] - 2026-10-08
 
 A hardening release closing the rules-tier and pipeline findings of the end-of-Stage-5 review

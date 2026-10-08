@@ -70,7 +70,7 @@ project checks the user listed in `rules.json` (`gimli.commands`, §8).
 
 ```
 tool.call ─► classify (pure, rules only)
-             │ allow ──────────────────────────────► next(e)            (no I/O beyond cwd/stat)
+             │ allow ─► high secret? refuse (audited) · else next(e)     (no state read or written)
              │ gated: fingerprint, operation key ───────────────────────── audit, count
              │ bypass ─► next(e)
              │ block ──► refuse (rule reason)                            failed attempt
@@ -126,6 +126,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | Failure | Behaviour |
 | :- | :- |
 | Hook throws before the call runs | `.catch` refuses ("fails closed"). |
+| A high-confidence secret in an allowed call | Refused, audited with tier `allow`; no rounds, no failed attempt, no state write. |
 | Hook throws after the call ran | `.catch` replays the real result (`next.called`); the call is not re-run and Claude isn't told a call that ran was refused. |
 | A `tool.call` raised beneath the hook's own frame (`re-entry`, from 2.1.294) | `.catch` answers with `called` false and refuses. A subagent's calls do not arrive this way, in the background or the foreground (verified live, §12.1). |
 | Hook overruns its 10 s own-time budget | **Probe result: the engine did not cut the hook off in the test kit, even with `.catch`.** A hook that overran and then called `next(e)` ran the call. Elrond therefore passes calls only through `proceed()`, which refuses when `next.budget.remainingMs` < 1 s. The hook's own work is bounded to make this unlikely: commands over 20,000 characters aren't parsed (review), parse depth ≤ 4, ≤ 200 parts. |
@@ -174,7 +175,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 
 ## 6. Decisions the spec did not cover (Stage 2)
 
-1. **The secrets scan reads gated calls only.** It sits after the allow step, as SPEC §4 orders it, so allowed calls stay free of work. A `curl` GET with a key in a header or a `git commit` is not scanned. Scanning every call is cheap (patterns only) and could be turned on if you prefer.
+1. **The secrets scan reads gated calls only.** It sits after the allow step, as SPEC §4 orders it, so allowed calls stay free of work. A `curl` GET with a key in a header or a `git commit` is not scanned. Scanning every call is cheap (patterns only) and could be turned on if you prefer. *Superseded by §13.2.*
 2. **Allowlist entries are fingerprints.** The dialog offers `sha256:` plus 16 hex digits of the secret, so the secret never lands in `rules.json`. Hand-written exact strings (6+ characters) are honoured too. The entry is written only after a second question showing it, and only for a single finding. Cancel keeps the call blocked, which counts as a failed attempt.
 3. **Low-confidence heuristics.** Assignment values that look like code (`$X`, `process.env.X`, `getToken()`, a digit-free identifier such as `string`) and hashes (`sha512-…`, `integrity`) are not findings, so code doesn't trigger a question per write.
 4. **One question for a secret on the ask tier.** Allowing at the secrets dialog also answers the ask tier, since the dialog already showed the call and its rule. A secret on the review tier still goes to the reviewer after you allow it.
@@ -500,3 +501,11 @@ the final deliverables.
    - **Not a fourth step.** The fallback is an alternative to one step, not a step: it does not count against the three-inspection cap, so a preview starts at most one extra process. `previewOf` and `rangeDiffOf` share `runGitInspection`, which runs the first argv, then (when it exits non-zero or throws) `orElse.argv` once with the same working folder, environment and 5 s timeout. The fallback's label stands only if it succeeds; if it fails too, the outcome is as before (no commits in the preview; the diff reviewer sits out, "the changes could not be read").
    - **Legolas's brief** carries the range that was read as its `path`, so the reviewer sees `origin/HEAD...HEAD`; its prompt needed no change.
    - `/council test` runs nothing and is unchanged.
+
+2. **Allowed calls are scanned for high-confidence secrets** (the `allow` branch of the `tool.call` hook in `hooks/register.ts`). Before an allowed call passes, `scanCall` runs with the shipped and configured patterns and the allowlist; a high finding refuses the call with the same refusal as a gated one (`who.gollum`, `reason.secretHigh`, `alternative.removeSecret`). A low finding is ignored there.
+   - **Why now.** The spec put the scan after the allow step so that allowed calls stay free of work. A pattern scan of the call's text is cheap, and a literal key in an allowed `curl` or `echo` reached the network or the transcript unscanned.
+   - **High only.** A question on an allowed call would turn every `echo` with a token into a dialog; the mod never asks on an allowed call.
+   - **Audited.** A refusal writes one line (`tier: allow`, `member: gollum`, `verdict: block`, `outcome: refused`, `opKey: null`, `decision: null`, the labels as the reason, `agentId` when a subagent made the call), so `/council report` counts it among the refusals, "by the secrets scan". A clean allowed call still writes nothing.
+   - **No state.** An allowed call has no operation, so there are no rounds, no failed attempt, no lockout and no wipe, and nothing is read from or written to the session state: §5.9 holds.
+   - **Every mode.** The branch runs before shadow mode and bypass are read, so the scan enforces in shadow mode, as the gated scan does (§6.10). Switching the secrets scan off turns it off here too.
+   - **The offered allow rule** is unchanged: still never offered for a call with any secrets finding, since the low finding you allowed once would otherwise pass unseen.
