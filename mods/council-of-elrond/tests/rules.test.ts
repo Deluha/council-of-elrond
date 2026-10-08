@@ -43,6 +43,53 @@ describe('shell splitting', () => {
   })
 })
 
+describe('a command wrapped in a shell construct is still classified', () => {
+  // A function body, a case arm or a coproc must not hide the command they run.
+  test('function definitions and bodies', () => {
+    for (const command of [
+      'f() { rm -rf /; }; f',
+      'f(){ rm -rf /;}; f',
+      'function f { rm -rf /; }; f',
+      'f() rm -rf /; f',
+    ]) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('case arms and coproc', () => {
+    for (const command of ['case x in x) rm -rf / ;; esac', 'case $1 in *) rm -rf / ;; esac', 'coproc rm -rf /']) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('a legitimate case statement still reads its body commands', () => {
+    expect(tierOf('case $x in a) echo hi ;; esac')).toBe('allow')
+    expect(ruleOf('case $x in a) rm -rf build ;; esac')).toBe('shell-delete')
+  })
+})
+
+describe('the program name cannot be split or disguised', () => {
+  // The shell runs all of these as `rm`; the classifier must see it too.
+  test('empty substitution inside the name', () => {
+    expect(ruleOf('r$()m -rf /'), 'empty $()').toBe('rm-recursive-outside-repo')
+    expect(ruleOf('r``m -rf /'), 'empty backtick').toBe('rm-recursive-outside-repo')
+  })
+
+  test('locale-translation quoting', () => {
+    expect(ruleOf('$"rm" -rf /')).toBe('rm-recursive-outside-repo')
+  })
+
+  test("ANSI-C escapes in $'...'", () => {
+    for (const command of [String.raw`$'\x72m' -rf /`, String.raw`$'\162m' -rf /`, String.raw`$'rm' -rf /`, String.raw`$'rm' -rf /`]) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test("$'...' still decodes a plain escape to its character", () => {
+    expect(splitShell(String.raw`echo $'a\tb'`).parts[0]?.coreWords).toEqual(['echo', 'a\tb'])
+  })
+})
+
 describe('tiers', () => {
   test('allow: read-only commands and unmatched calls pass', () => {
     for (const command of ['ls -la', 'git status', 'git log --oneline -5', 'cat src/app.ts', 'npm test', 'grep -r foo src', 'ls 2>/dev/null', 'make 2>&1']) {

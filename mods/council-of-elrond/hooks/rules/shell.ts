@@ -39,7 +39,15 @@ const MAX_DEPTH = 4
 
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh', 'ash', 'busybox'])
 
-const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', 'esac', '!', '{', '}', 'function'])
+// `function` is not here: coreOf consumes it with the name that follows, so
+// that `function f { ... }` does not hide the body behind the name `f`.
+const KEYWORDS = new Set([
+  'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until',
+  'case', 'esac', 'in', 'coproc', 'select', '!', '{', '}',
+])
+
+/** A function-definition header word, e.g. `deploy()` or glued `deploy(){`. */
+const FUNCTION_HEADER = /^[A-Za-z_]\w*\(\)\{?$/
 
 /** Wrapper programs and the options of each that take an argument. */
 const WRAPPERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
@@ -102,8 +110,36 @@ type Builder = {
 function coreOf(words: readonly string[]): { wrappers: string[]; coreWords: string[] } {
   let k = 0
   const wrappers: string[] = []
+  // Skip leading assignments, plain keywords, function-definition headers and
+  // a `case SUBJECT in PATTERN)` arm, so the command they wrap is what the
+  // rules see. Without this a definition body or a case arm hides its command.
+  const skipTrivia = () => {
+    for (;;) {
+      while (k < words.length && (isAssignment(words[k] as string) || KEYWORDS.has(words[k] as string))) k++
+      const word = words[k]
+      if (word === undefined) return
+      if (word === 'function') {
+        k++
+        if (k < words.length && !KEYWORDS.has(words[k] as string)) k++ // the name
+        continue
+      }
+      if (FUNCTION_HEADER.test(word)) {
+        k++
+        continue
+      }
+      return
+    }
+  }
+  // A `case` arm: the subject, `in`, and the pattern up to its `)`.
+  if (words[0] === 'case') {
+    k = 1
+    while (k < words.length && words[k] !== 'in') k++
+    if (words[k] === 'in') k++
+    while (k < words.length && !(words[k] as string).includes(')')) k++
+    if (k < words.length) k++
+  }
   for (;;) {
-    while (k < words.length && (isAssignment(words[k] as string) || KEYWORDS.has(words[k] as string))) k++
+    skipTrivia()
     const word = words[k]
     if (word === undefined) break
     const name = word.includes('/') && SYSTEM_BIN.test(word) ? word.slice(word.lastIndexOf('/') + 1) : word
@@ -173,6 +209,15 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
   let input = ''
 
   const nested = (text: string) => scan(text, depth + 1, true, out)
+
+  // A command substitution inside a word. It is scanned for the commands it
+  // runs, and leaves a placeholder in the word — but an empty one (`$()`, ``)
+  // expands to nothing, so the surrounding text joins up (`r$()m` -> `rm`).
+  const substitution = (inner: string): string => {
+    if (inner.trim() === '') return ''
+    nested(inner)
+    return '$(...)'
+  }
 
   const endWord = () => {
     if (!hasWord) return
@@ -274,12 +319,31 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
     if (c === '$' && next === "'") {
       let j = i + 2
       for (; j < command.length && command[j] !== "'"; j++) {
-        if (command[j] === '\\') {
-          j++
-          const escaped = command[j]
-          word += escaped === 'n' ? '\n' : escaped === 't' ? '\t' : (escaped ?? '')
-        } else {
+        if (command[j] !== '\\') {
           word += command[j]
+          continue
+        }
+        // $'...' decodes C-style escapes, so the program name can be written
+        // $'\x72m', $'\162m' or $'rm'. Decode them to what the shell runs.
+        j++
+        const e = command[j] as string | undefined
+        if (e === undefined) break
+        const simple: Record<string, string> = { n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', f: '\f', v: '\v', e: '\x1b', '\\': '\\', "'": "'", '"': '"' }
+        if (e === 'x' || e === 'u' || e === 'U') {
+          const len = e === 'x' ? 2 : e === 'u' ? 4 : 8
+          const hex = /^[0-9a-fA-F]+/.exec(command.slice(j + 1, j + 1 + len))?.[0] ?? ''
+          if (hex !== '') {
+            word += String.fromCodePoint(parseInt(hex, 16))
+            j += hex.length
+          } else {
+            word += e
+          }
+        } else if (e >= '0' && e <= '7') {
+          const oct = /^[0-7]{1,3}/.exec(command.slice(j))?.[0] ?? e
+          word += String.fromCharCode(parseInt(oct, 8) & 0xff)
+          j += oct.length - 1
+        } else {
+          word += simple[e] ?? e
         }
       }
       hasWord = true
@@ -287,8 +351,9 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
       i = j
       continue
     }
-    if (c === '"') {
-      let j = i + 1
+    // `$"..."` is locale translation: the shell runs it as `"..."`.
+    if (c === '"' || (c === '$' && next === '"')) {
+      let j = c === '$' ? i + 2 : i + 1
       for (; j < command.length && command[j] !== '"'; j++) {
         const d = command[j] as string
         if (d === '\\' && /["\\$`\n]/.test(command[j + 1] ?? '')) {
@@ -297,14 +362,12 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
         } else if (d === '$' && command[j + 1] === '(' && command[j + 2] !== '(') {
           const close = findClose(command, j + 2, '(', ')')
           const stop = close < 0 ? command.length : close
-          nested(command.slice(j + 2, stop))
-          word += '$(...)'
+          word += substitution(command.slice(j + 2, stop))
           j = stop
         } else if (d === '`') {
           const close = command.indexOf('`', j + 1)
           const stop = close < 0 ? command.length : close
-          nested(command.slice(j + 1, stop))
-          word += '$(...)'
+          word += substitution(command.slice(j + 1, stop))
           j = stop
         } else {
           word += d
@@ -326,8 +389,7 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
       }
       const close = findClose(command, i + 2, '(', ')')
       const stop = close < 0 ? command.length : close
-      nested(command.slice(i + 2, stop))
-      word += '$(...)'
+      word += substitution(command.slice(i + 2, stop))
       hasWord = true
       i = stop
       continue
@@ -335,8 +397,7 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
     if (c === '`') {
       const close = command.indexOf('`', i + 1)
       const stop = close < 0 ? command.length : close
-      nested(command.slice(i + 1, stop))
-      word += '$(...)'
+      word += substitution(command.slice(i + 1, stop))
       hasWord = true
       i = stop
       continue
