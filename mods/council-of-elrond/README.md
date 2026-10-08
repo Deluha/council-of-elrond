@@ -7,15 +7,17 @@ Calls that need a second opinion go to a model reviewer, and anything uncertain 
 > catch what a pattern misses, but they never widen what the rules allow. This is not a sandbox or a
 > security product (see [What it does not protect against](#what-it-does-not-protect-against)).
 
-Status: **Stage 6 of 6, after the 0.5.0 hardening.** Available now: the rules; three model reviewers
-(destructive operations, diffs, and git and databases) with routing between them; the full council
-with your project's own checks for big operations; the secrets scan, read-only previews, review
-rounds and lockout, the approve cache, escalation to you, allow rules offered after "allow once",
-`/council` and `/council report`, shadow mode and bypass, fail-closed handling and the audit log,
-the theme (with a plain mode), and the debate pane, the council check band, the wipe counter, the
-threat meter and the epic drop. The 0.5.0 release closed the rules-tier and pipeline findings of the
-Stage 5 review ([docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md)). A live check in a terminal
-is still to come.
+Status: **all six stages done, with the final deliverables (SPEC §21–22), after the 0.5.0
+hardening.** Available now: the rules; three model reviewers (destructive operations, diffs, and
+git and databases) with routing between them; the full council with your project's own checks for
+big operations; the secrets scan, read-only previews, review rounds and lockout, the approve cache,
+escalation to you, allow rules offered after "allow once", `/council` and `/council report`, shadow
+mode and bypass, fail-closed handling and the audit log, the theme (with a plain mode), and the
+debate pane, the council check band, the wipe counter, the threat meter and the epic drop. The
+0.5.0 release closed the rules-tier and pipeline findings of the Stage 5 review
+([docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md)). Headless live checks ran on Claude Code
+2.1.294; the interactive screens (the dialogs, the pane, the band, the mode label) still await a
+check in a terminal.
 See [ROADMAP.md](./ROADMAP.md) for what's left, [SPEC.md](./SPEC.md) for the original spec and
 [DESIGN.md](./DESIGN.md) for how it works.
 
@@ -32,6 +34,7 @@ toast at session start suggests it.
 Requires Claude Code 2.1.287 or later (mods are on by default).
 
 - **One session:** `claude --plugin-dir ./mods/council-of-elrond`
+- **For good:** `claude plugin marketplace add Deluha/council-of-elrond`, then `claude plugin install council-of-elrond@council-of-elrond`. Other ways, updating and removing: [docs/INSTALL.md](../../docs/INSTALL.md).
 - **Where no flag can be given** (desktop app, SDK host): set `CLAUDE_CODE_PLUGIN_DIRS` to the folder's absolute path in the environment or in `~/.claude/settings.json` under `env`.
 
 Check it loaded: `/plugin` shows the mods line, and `claude plugin validate ./mods/council-of-elrond`
@@ -71,6 +74,10 @@ Shipped defaults:
 
 **Approve never pre-approves.** An approved call still goes through Claude Code's normal permission
 check and prompt. The mod never takes part in the permission decision.
+
+**Subagents are gated too.** A subagent's tool calls go through the same pipeline as the main
+conversation's, and their audit lines carry the subagent's `agentId` (checked live on Claude Code
+2.1.294, with the subagent in the background and in the foreground).
 
 ## Reviewers
 
@@ -236,6 +243,15 @@ overrides the deadline.
 | Preview line limit | 80 |
 | Diff line limit | 200 |
 | Tool errors count as failed attempts | on |
+
+## Modes
+
+| Mode | What it does | How to set it |
+| :- | :- | :- |
+| Enforcing (the default) | Every tier applies. A reviewer's revise or block refuses the call; a reviewer that fails, or none being on, brings it to you. | Nothing to set. |
+| Shadow | Reviewers and the full council (its project checks included) log their verdicts and never refuse; a failed review passes, logged. The block tier, the ask tier, protected paths, the secrets scan and lockouts still enforce. | `/council shadow on` for the session, or "Shadow mode" in `/config`. Label: `council: shadow`. |
+| Bypass (themed: Leeroy mode) | Every gated call passes unreviewed, block-tier calls and the secrets scan included, and each is logged. | `/council off`, for this session only and never saved; `/council on` ends it. Label: `council: bypass` (`council: Leeroy mode` themed). |
+| Plain | Every string in its plain variant, with no theme text anywhere; behaviour is identical. It combines with any mode above. | "Plain mode" in `/config`. |
 
 ## Theme and plain mode
 
@@ -419,6 +435,8 @@ the preview, your latest prompt) and receives roughly 100–300 output tokens, p
 Sonnet, Opus and Fable at low effort. In a live check, small reviews took about 1,000 tokens each:
 a one-line file write (diffs, Sonnet) in 1.6 s, a `git tag` (git, Opus) in 2.8 s and a `psql -c`
 (database, Opus) in 2.4 s.
+In the final live check, a subagent's `rm -r build` was reviewed like any other call: about 980
+tokens in 1.9–2.5 s on Sonnet.
 
 A **full council** costs one review per seat, on the council's model (Opus by default): typically
 three for a push (about 3,000 tokens in all, about 2 s in a live check, in parallel), two for a
@@ -445,6 +463,7 @@ hold is classified (0.5.0); the gaps that remain:
 
 - Anything outside tool calls: what Claude says, files it reads, network requests other tools make.
 - A mod that fails to load, a disabled mod, `disableAllHooks`, `--safe-mode` or `--bare`: then nothing is gated.
+- **Bypass.** While `/council off` is on, every gated call passes, block-tier calls and the secrets scan included, until `/council on` or the session ends.
 - **Diffs are built from the call, not from git.** The diff reviewer sees the change the call describes against the file as it stands when the hook runs; a file over 4 MiB, or one it can't read, is shown as the call's own text only, and the prompt says so.
 - **The project checks run your project's code.** Claude can edit the tests and scripts they run (file edits go to the diff reviewer, not to you), so a passing check is only as good as the code it runs. They run as you, with your environment.
 - **A push of a branch the remote doesn't have yet** has no range to diff: the diff reviewer sits out of that council, and the preview shows no commits.

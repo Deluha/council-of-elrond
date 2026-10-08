@@ -35,6 +35,8 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - The default is now themed: `/council`, the dialog and the report name the characters, and the
   dialog's options read "Need: allow once" and "Pass: keep blocked". Turn on "Plain mode" in
   `/config` to keep the old text ("Allow once", "Keep blocked", role names).
+- **README.** A "Modes" section (enforcing, shadow, bypass, plain), the install command under
+  "Loading it", a note that subagents' calls are gated too, and bypass named among the limits.
 
 ## [0.5.0] - 2026-10-08
 
