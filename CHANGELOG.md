@@ -10,7 +10,21 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- **Themed strings and a plain mode.** Member names, the escalation dialog, bypass and the wipe
+  count have themed variants (Gandalf, Legolas, Aragorn, Gimli, Gollum, Galadriel, Elrond, the
+  Council of Elrond), and a "Plain mode" option in `/config` (default off) switches every theme
+  word off. Refusals Claude reads, the full council's reasons and the rule reason written to your
+  rules file stay plain in both modes.
+- **The loot roll.** The escalation dialog is headed "Loot roll" with the options "Need: allow
+  once", "Pass: keep blocked" and, for one possible secret, "Greed: add to allowlist". Bypass is
+  "Leeroy mode".
+- The flavour lines for the debate pane (a later change draws them).
+
+### Changed
+- The default is now themed: `/council`, the dialog and the report name the characters, and the
+  dialog's options read "Need: allow once" and "Pass: keep blocked". Turn on "Plain mode" in
+  `/config` to keep the old text ("Allow once", "Keep blocked", role names).
 
 ## [0.5.0] - 2026-10-08
 

@@ -1,7 +1,6 @@
 # council-of-elrond: design
 
-Status: **Stage 5, hardened in 0.5.0** (Stage 4 plus allow rules offered after "allow once", and
-`/council report`; then the 0.5.0 hardening of §10; plain mode).
+Status: **Stage 6 in progress** (themed strings and plain mode; the UI features follow).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
 Built against Claude Code **2.1.289**, checked against **2.1.291** from Stage 5 and **2.1.294** from
 Stage 6. The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.294's) and
@@ -292,3 +291,35 @@ inline script still resolves against the root (review, not block); two-sided glo
 not computed; and the breadth of the shipped rule set (which cloud, database and interpreter
 programs are named by default) is left to grow as real reports come in, with project rules as the
 workaround. These are in the README's "Known gaps" and the review's §4.9.
+
+## 11. Decisions the spec did not cover (Stage 6)
+
+1. **One mode, set at registration.** `strings.ts` holds a module-level mode, `setMode` sets it
+   from the `plainMode` option as `register` starts, and `text()` defaults to it. No call site
+   passes a mode, so a new string cannot forget to follow the setting. The mode never changes
+   within a session.
+2. **What Claude reads is plain in both modes, enforced twice.** A themed refusal would put
+   character names into the model's context and invite it to role-play, and a themed reason would
+   be written into the audit log and the rules file. So `refusalText`, `combine` and `suggest`
+   ask for `'plain'` explicitly, and the key families Claude can read (`refusal.`, `reason.`,
+   `alternative.`, `council.`, `gimli.`, `escalate.`, `route.`, `suggest.`, `notice.`, `report.`,
+   and the dialog lines that confirm exact data) have no themed variant, which a test asserts.
+   `escalate.*` is shown in the dialog but is also embedded in the "nobody to ask" refusal, so it
+   stays plain too.
+3. **What is themed** is only what the user reads and the spec names: the `who.*` names, the
+   loot roll (header, title, closing line and the three labels), Leeroy mode (label, status and
+   the `/council off` line), wipes in the status, and one flavour line per member and verdict
+   (plain variant empty; read through `flavourOf`, which is undefined in plain mode and for an
+   unknown pair). The dialogs that confirm exact data (the allowlist entry, an allow rule) keep
+   the plain header and text.
+4. **Ids and "council" are not theme text** (§6.16 stands). Plain mode still prints the member ids a
+   user types (`[gandalf]`), because they are config keys, and "council" is the product's plain
+   name. The plain-mode tests strip bracketed ids before scanning for theme words.
+5. **The loot roll's labels compare exactly in the mode in use.** `escalate` reads the mode once
+   and uses that one value both to offer the options and to interpret the answer. Reading it twice,
+   or interpreting in plain while offering themed labels, would turn "Need: allow once" into an
+   instruction for Claude and refuse the call; a test covers it, and the other direction (plain
+   labels typed in themed mode are an instruction, not a decision) is tested too.
+6. **No `ui.render` hook on `AskUserQuestion`.** The review's amendment (§5 item 5) drops it: the
+   dialog is themed through the question, options and header passed to `$.ui.ask`, which already
+   fit the tool's schema, and a rewrite hook would add a second path to keep in step with them.

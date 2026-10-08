@@ -155,7 +155,7 @@ describe('/council report', () => {
     await $.tool.call({ tool: 'Bash', command: 'rm -r build' })
     expect(typeof auditLines(w)[0]?.reviewMs).toBe('number')
     await council($, 'report')
-    expect(w.logs.join('\n')).toContain('the destructive-operations reviewer [gandalf]: 1 reviews alone, 1000 tokens')
+    expect(w.logs.join('\n')).toContain('Gandalf [gandalf]: 1 reviews alone, 1000 tokens')
   })
 
   test('an unreadable rotated file is named and left out; the rest is reported', async ($, on) => {

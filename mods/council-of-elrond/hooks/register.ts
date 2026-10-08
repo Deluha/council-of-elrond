@@ -77,7 +77,7 @@ import {
   withShadow,
 } from './state.js'
 import type { CouncilSession } from '../types'
-import { text } from './strings.js'
+import { currentMode, setMode, text } from './strings.js'
 import type { StringKey } from './strings.js'
 
 /**
@@ -143,6 +143,7 @@ type Settings = {
   previewLines: number
   gollumEnabled: boolean
   galadrielEnabled: boolean
+  plainMode: boolean
 }
 
 const modelSetting = (value: unknown): string => (typeof value === 'string' ? value : 'default')
@@ -171,6 +172,7 @@ const settingsOf = (options: PluginOptions): Settings => ({
   previewLines: typeof options.previewLines === 'number' ? options.previewLines : 80,
   gollumEnabled: options.gollumEnabled !== false,
   galadrielEnabled: options.galadrielEnabled !== false,
+  plainMode: options.plainMode === true,
 })
 
 type Context = {
@@ -616,8 +618,10 @@ async function escalate($: EngineInterface, question: string, withAllowlist: boo
   const surfaces = await $.session.surfaces().catch(() => [])
   if (surfaces.length === 0) return 'unavailable'
   try {
-    const answer = await $.ui.ask(question, { options: optionsOf('plain', withAllowlist), header: text('ask.header') })
-    return interpretAnswer(answer, 'plain', withAllowlist)
+    // One mode for the labels offered and the labels compared: they must match exactly.
+    const mode = currentMode()
+    const answer = await $.ui.ask(question, { options: optionsOf(mode, withAllowlist), header: text('ask.rollHeader', {}, mode) })
+    return interpretAnswer(answer, mode, withAllowlist)
   } catch (error) {
     return interpretRejection(error)
   }
@@ -928,6 +932,7 @@ function callOf(e: Readonly<Record<string, unknown>>): Call {
 
 export const register: Register = (on, options) => {
   settings = settingsOf(options)
+  setMode(settings.plainMode ? 'plain' : 'themed')
 
   on('session.start', async ($, e, next) => {
     const ctx = await contextOf($).catch(() => undefined)
@@ -1111,15 +1116,18 @@ export const register: Register = (on, options) => {
       opinions: readonly MemberOpinion[],
       secrets: readonly GollumFinding[] = [],
     ): Promise<'allowed' | ToolCallResult> => {
-      const question = questionText({
-        call: shownCall,
-        ruleReason: decided?.reason ?? '',
-        why,
-        opinions,
-        ...(preview !== undefined && { preview }),
-        ...(secrets.length > 0 && { secrets: secrets.map(finding => ({ label: finding.label, snippet: finding.snippet })) }),
-        canAllowlist: secrets.length === 1,
-      })
+      const question = questionText(
+        {
+          call: shownCall,
+          ruleReason: decided?.reason ?? '',
+          why,
+          opinions,
+          ...(preview !== undefined && { preview }),
+          ...(secrets.length > 0 && { secrets: secrets.map(finding => ({ label: finding.label, snippet: finding.snippet })) }),
+          canAllowlist: secrets.length === 1,
+        },
+        currentMode(),
+      )
       // One entry per confirm: the allowlist is offered for a single finding only.
       const answer = await escalate($, question, secrets.length === 1)
       if (answer === 'unavailable' || answer === 'dismissed' || answer === 'chat') {

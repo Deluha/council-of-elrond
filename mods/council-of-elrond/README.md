@@ -229,11 +229,51 @@ overrides the deadline.
 | Audit log path | `.claude/council-of-elrond/audit/audit.jsonl` |
 | Audit log size before rotation (KB) | 1024, three files kept |
 | Shadow mode | off |
+| Plain mode | off (themed). On: no theme text anywhere |
 | Secrets scan enabled | on |
 | Read-only preview enabled | on |
 | Preview line limit | 80 |
 | Diff line limit | 200 |
 | Tool errors count as failed attempts | on |
+
+## Theme and plain mode
+
+By default the council speaks in its theme. The "Plain mode" option in `/config` switches every
+theme word off; behaviour is identical in both modes.
+
+What is themed, for you only:
+
+- The names: `/council`, the dialog and the report say Gandalf, Legolas, Aragorn (git or
+  databases), Gimli, Gollum, Galadriel, Elrond and the Council of Elrond where plain mode says the
+  role ("the destructive-operations reviewer", "the full council").
+- The escalation dialog is a loot roll: headed "Loot roll", with the options "Need: allow once",
+  "Pass: keep blocked" and, for one possible secret, "Greed: add to allowlist".
+- Bypass is Leeroy mode (`council: Leeroy mode` by the prompt, and in `/council`).
+- `/council` counts wipes where plain mode says "refused or failed attempts".
+- Each member's one line of flavour in the debate pane, once that pane lands.
+
+What is never themed: what Claude reads. Refusals, the full council's reasons and the rule reason
+written to your rules file are plain in both modes, and name the role, not the character. Member
+ids you type (`/council model gandalf opus`) are config keys and stay as written. The dialogs that
+confirm exact data you agree to write (the allowlist entry, an allow rule) keep their plain text.
+
+| Theme term | Plain name |
+| :- | :- |
+| Gandalf | The destructive-operations reviewer |
+| Legolas | The diff reviewer |
+| Aragorn | The git and database reviewer |
+| Gimli | The project checks |
+| Gollum | The secrets scan |
+| Galadriel | The read-only preview |
+| Elrond | The council's chair: the gate itself |
+| The Council of Elrond | The full council |
+| Loot roll | The escalation dialog |
+| Need, Pass, Greed | Allow once, keep blocked, add to allowlist |
+| Leeroy mode | Bypass (`/council off`) |
+| Wipe | A refused or failed attempt |
+| Lockout | Three wipes on one operation |
+
+"Council" stays in plain mode: it is the product's name.
 
 ## Commands
 
@@ -244,7 +284,7 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | Command | What it does |
 | :- | :- |
 | `/council` | Status: mode, each member with its state, model and verdict counts, the full council and the project checks, failed attempts since your last prompt, tokens spent, median review time. |
-| `/council off`, `/council on` | Bypass for this session: gated calls pass unreviewed and are logged. Never persisted. The label `council: bypass` shows by the prompt. |
+| `/council off`, `/council on` | Bypass for this session: gated calls pass unreviewed and are logged. Never persisted. The label `council: bypass` (`council: Leeroy mode` when themed) shows by the prompt. |
 | `/council shadow on`, `/council shadow off` | Shadow mode for this session, over the `/config` setting. |
 | `/council log [n]` | The last *n* gated calls (default 10) from the audit log. |
 | `/council rules` | Every effective rule with its source (`shipped` or `project`), and the lists. |
@@ -318,8 +358,8 @@ operation. A push keys on its remote and branch, and SQL on its database.
 When a call comes to you, the question shows the call (with secrets redacted), why it was gated,
 the read-only preview when there is one, and each reviewer's verdict. You can:
 
-- **Allow once:** the call runs, and still meets Claude Code's normal permission prompt, which then carries the line "Council: you allowed this once".
-- **Keep blocked:** it is refused.
+- **Allow once** (themed: "Need: allow once"): the call runs, and still meets Claude Code's normal permission prompt, which then carries the line "Council: you allowed this once".
+- **Keep blocked** (themed: "Pass: keep blocked"): it is refused.
 - **Type an instruction:** it is refused and your text is passed to Claude.
 
 Dismissing the question refuses the call. Where nobody can be asked (`claude -p`, nothing

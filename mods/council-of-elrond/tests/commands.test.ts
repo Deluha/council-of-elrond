@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { parseCouncil, words } from '../hooks/elrond/commands.js'
-import { APPROVE, auditLines, BLOCK, denyOf, ROOT, USAGE, world } from './fixtures.js'
+import { ALLOW_ONCE, APPROVE, auditLines, BLOCK, denyOf, KEEP_BLOCKED, ROOT, USAGE, world } from './fixtures.js'
 
 const PLUGIN = 'council-of-elrond'
 
@@ -75,15 +75,15 @@ describe('/council', () => {
     expect(w.logs.join('\n')).toMatch(/Reviewer: .+ \[gandalf\], model sonnet \(built-in\)/)
     w.logs.length = 0
     await council($, 'test "git rebase main"')
-    expect(w.logs.join('\n')).toContain('Reviewer: the git reviewer [aragorn/git], model opus (built-in)')
+    expect(w.logs.join('\n')).toContain('Reviewer: Aragorn (git) [aragorn/git], model opus (built-in)')
     w.logs.length = 0
     await council($, 'test "git rebase main && rm -rf build"')
-    expect(w.logs.join('\n')).toContain('Reviewer: the destructive-operations reviewer [gandalf], model sonnet (built-in)')
-    expect(w.logs.join('\n')).toContain('The rule names the git reviewer [aragorn/git], but the parts of the command name different reviewers')
+    expect(w.logs.join('\n')).toContain('Reviewer: Gandalf [gandalf], model sonnet (built-in)')
+    expect(w.logs.join('\n')).toContain('The rule names Aragorn (git) [aragorn/git], but the parts of the command name different reviewers')
     w.logs.length = 0
     await council($, 'test "git push origin feature && rm -rf build"')
-    expect(w.logs.join('\n')).toContain('Reviewer: the full council (a big operation: /^git\\s+push(\\s|$)/), model opus (built-in).')
-    expect(w.logs.join('\n')).toContain('Seats: the destructive-operations reviewer [gandalf]; the diff reviewer [legolas], on what the push would change; the git reviewer [aragorn/git].')
+    expect(w.logs.join('\n')).toContain('Reviewer: the Council of Elrond (a big operation: /^git\\s+push(\\s|$)/), model opus (built-in).')
+    expect(w.logs.join('\n')).toContain('Seats: Gandalf [gandalf]; Legolas [legolas], on what the push would change; Aragorn (git) [aragorn/git].')
     expect(w.logs.join('\n')).toContain('No project checks are configured')
     w.logs.length = 0
     await council($, 'test "ls -la"')
@@ -94,8 +94,8 @@ describe('/council', () => {
     const w = world(on, { surfaces: [] })
     await council($, 'test "psql -c \'DELETE FROM t\'"')
     const shown = w.logs.join('\n')
-    expect(shown).toContain('Reviewer: the destructive-operations reviewer [gandalf]')
-    expect(shown).toContain('The rule names the database reviewer [aragorn/database], but it is switched off')
+    expect(shown).toContain('Reviewer: Gandalf [gandalf]')
+    expect(shown).toContain('The rule names Aragorn (databases) [aragorn/database], but it is switched off')
   })
 
   test('status lists every model member with its state, model and counts', { options: { legolasEnabled: false } }, async ($, on) => {
@@ -126,7 +126,7 @@ describe('/council', () => {
   })
 
   test('reload picks up an edited rules file', async ($, on) => {
-    const w = world(on, { surfaces: [], answer: 'Keep blocked' })
+    const w = world(on, { surfaces: [], answer: KEEP_BLOCKED })
     expect(await $.tool.call({ tool: 'Bash', command: 'make deploy' })).toEqual({ result: 'ran' })
     w.files.set(`${ROOT}/.claude/council-of-elrond/rules.json`, JSON.stringify({ schemaVersion: 1, rules: [{ id: 'deploy', tier: 'ask', tools: ['Bash'], command: '^make deploy', reason: 'Deploys.' }] }))
     expect(await $.tool.call({ tool: 'Bash', command: 'make deploy' })).toEqual({ result: 'ran' })
@@ -233,7 +233,7 @@ describe('shadow mode', () => {
   })
 
   test('block rules, the ask tier and protected paths still enforce', { options: { shadowMode: true } }, async ($, on) => {
-    const w = world(on, { answer: 'Keep blocked' })
+    const w = world(on, { answer: KEEP_BLOCKED })
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf /' }))).toContain('(block)')
     expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/.env`, old_string: 'A=1', new_string: 'A=2' }))).toContain('(keep blocked)')
     expect(w.asked).toHaveLength(1)
@@ -268,7 +268,7 @@ describe('the mode label', () => {
     }
     await council($, 'off')
     const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
-    expect(await ui.find({ text: /council: bypass/ })).toBeDefined()
+    expect(await ui.find({ text: /council: Leeroy mode/ })).toBeDefined()
   })
 
   test('on a surface with no mode labels, it goes to the status line', async ($, on) => {
@@ -280,7 +280,7 @@ describe('the mode label', () => {
 
 describe('allow once', () => {
   test('labels Claude Code\'s own permission dialog', async ($, on) => {
-    const w = world(on, { answer: 'Allow once' })
+    const w = world(on, { answer: ALLOW_ONCE })
     await $.tool.call({ tool: 'Bash', command: 'sudo ls', tool_use_id: 'tu-1' } as never)
     expect(w.notices).toEqual([{ id: 'tu-1', text: 'Council: you allowed this once' }])
   })

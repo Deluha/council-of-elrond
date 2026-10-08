@@ -10,7 +10,7 @@ import { statusOf, tailOf } from '../hooks/members/gimli.js'
 import type { GimliRun } from '../hooks/members/gimli.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
-import { APPROVE, auditLines, BLOCK, CONTEXT, denyOf, REVISE, ROOT, SHIPPED_COMPILED, verdict, world } from './fixtures.js'
+import { APPROVE, auditLines, BLOCK, CONTEXT, denyOf, KEEP_BLOCKED, REVISE, ROOT, SHIPPED_COMPILED, verdict, world } from './fixtures.js'
 import type { World } from './fixtures.js'
 
 const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
@@ -219,12 +219,12 @@ describe('the full council in the pipeline', () => {
   })
 
   test('one member failing blocks; with no real objection the call comes to the user', async ($, on) => {
-    const w = world(on, { replies: [APPROVE, MALFORMED, APPROVE], answer: 'Keep blocked' })
+    const w = world(on, { replies: [APPROVE, MALFORMED, APPROVE], answer: KEEP_BLOCKED })
     expect(denyOf(await $.tool.call(PUSH))).toContain('(keep blocked)')
     const question = w.asked[0]?.question ?? ''
     expect(question).toContain('members of it could not give a verdict')
-    expect(question).toContain('the diff reviewer: no verdict (malformed verdict')
-    expect(question).toContain('the git reviewer: approve.')
+    expect(question).toContain('Legolas: no verdict (malformed verdict')
+    expect(question).toContain('Aragorn (git): approve.')
     expect(auditLines(w)[0]).toMatchObject({ member: 'council', verdict: 'failed', decision: 'keep-blocked' })
   })
 
@@ -263,7 +263,7 @@ describe('the full council in the pipeline', () => {
   })
 
   test('with every model member off, a big operation comes to the user', { options: { gandalfEnabled: false, legolasEnabled: false, aragornEnabled: false } }, async ($, on) => {
-    const w = world(on, { answer: 'Keep blocked' })
+    const w = world(on, { answer: KEEP_BLOCKED })
     expect(denyOf(await $.tool.call(PUSH))).toContain('(keep blocked)')
     expect(w.modelRequests).toEqual([])
     expect(w.spawned).toEqual([])
@@ -272,18 +272,18 @@ describe('the full council in the pipeline', () => {
 
 describe('the shared deadline', () => {
   test('in parallel every member gets the whole deadline; one slower than it counts as its block', { options: { reviewDeadlineSeconds: 10 } }, async ($, on) => {
-    const w = world(on, { replies: [APPROVE], isClockMocked: true, answer: 'Keep blocked' })
+    const w = world(on, { replies: [APPROVE], isClockMocked: true, answer: KEEP_BLOCKED })
     w.modelDelays = [1_000, 12_000, 2_000]
     const pending = $.tool.call(PUSH)
     await w.clock?.settle()
     await w.clock?.advance(12_000)
     expect(denyOf(await pending)).toContain('(keep blocked)')
     expect(w.modelRequests.map(request => request.timeoutMs)).toEqual([10_000, 10_000, 10_000])
-    expect(w.asked[0]?.question).toContain('the diff reviewer: no verdict (it ran out of time or was interrupted)')
+    expect(w.asked[0]?.question).toContain('Legolas: no verdict (it ran out of time or was interrupted)')
   })
 
   test('one at a time, each member gets what is left of the one deadline, and the first block stops the rest', { options: { councilSequential: true } }, async ($, on) => {
-    const w = world(on, { replies: [APPROVE, APPROVE, APPROVE], isClockMocked: true, answer: 'Keep blocked' })
+    const w = world(on, { replies: [APPROVE, APPROVE, APPROVE], isClockMocked: true, answer: KEEP_BLOCKED })
     w.modelDelays = [20_000, 24_000, 0]
     const pending = $.tool.call(PUSH)
     await w.clock?.settle()
@@ -301,7 +301,7 @@ describe('the shared deadline', () => {
   })
 
   test('a member asked after the deadline has passed gives no verdict, and makes no request', { options: { councilSequential: true } }, async ($, on) => {
-    const w = world(on, { replies: [APPROVE], isClockMocked: true, answer: 'Keep blocked' })
+    const w = world(on, { replies: [APPROVE], isClockMocked: true, answer: KEEP_BLOCKED })
     w.modelDelays = [44_000, 1_000]
     const pending = $.tool.call(PUSH)
     await w.clock?.settle()
@@ -309,7 +309,7 @@ describe('the shared deadline', () => {
     await w.clock?.advance(1_000)
     expect(denyOf(await pending)).toContain('(keep blocked)')
     expect(w.modelRequests.map(request => request.timeoutMs)).toEqual([45_000, 1_000])
-    expect(w.asked[0]?.question).toContain('the diff reviewer: no verdict')
+    expect(w.asked[0]?.question).toContain('Legolas: no verdict')
   })
 })
 
@@ -404,8 +404,8 @@ describe('commands', () => {
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
     await council($, 'test "git merge feature"')
     const shown = w.logs.join('\n')
-    expect(shown).toContain('Reviewer: the full council (a big operation: merge-to-protected), model opus (built-in).')
-    expect(shown).toContain('the project checks would run alongside: "tests".')
+    expect(shown).toContain('Reviewer: the Council of Elrond (a big operation: merge-to-protected), model opus (built-in).')
+    expect(shown).toContain('Gimli would run alongside: "tests".')
     expect(shown).toContain('it assumed so')
     expect(w.processes).toEqual([])
     expect(w.spawned).toEqual([])
@@ -415,12 +415,12 @@ describe('commands', () => {
   test('/council test says when the council is off; status shows it and the checks', { options: { councilEnabled: false, councilSequential: true } }, async ($, on) => {
     const w = world(on, { surfaces: [] })
     await council($, 'test "git push origin feature"')
-    expect(w.logs.join('\n')).toContain('Reviewer: the git reviewer [aragorn/git]')
-    expect(w.logs.join('\n')).toContain('It is a big operation (/^git\\s+push(\\s|$)/), but the full council is switched off in /config')
+    expect(w.logs.join('\n')).toContain('Reviewer: Aragorn (git) [aragorn/git]')
+    expect(w.logs.join('\n')).toContain('It is a big operation (/^git\\s+push(\\s|$)/), but the Council of Elrond is switched off in /config')
     w.logs.length = 0
     await council($)
-    expect(w.logs.join('\n')).toContain('the full council [council], for big operations: off, model opus (built-in), members one at a time, stopping at the first block')
-    expect(w.logs.join('\n')).toContain('the project checks, for big operations: on, 0 commands configured')
+    expect(w.logs.join('\n')).toContain('the Council of Elrond [council], for big operations: off, model opus (built-in), members one at a time, stopping at the first block')
+    expect(w.logs.join('\n')).toContain('Gimli, for big operations: on, 0 commands configured')
   })
 })
 

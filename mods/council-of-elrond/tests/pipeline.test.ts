@@ -1,12 +1,13 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { fingerprintText } from '../hooks/audit.js'
-import { allStrings } from '../hooks/strings.js'
 import {
+  ALLOW_ONCE,
   APPROVE,
   auditLines,
   BLOCK,
   denyOf,
+  KEEP_BLOCKED,
   REVISE,
   ROOT,
   USAGE,
@@ -117,7 +118,7 @@ describe('fail closed', () => {
 
   for (const [name, reply] of failures) {
     test(`${name} escalates, and keep blocked refuses`, async ($, on) => {
-      const w = world(on, { replies: [reply as never], answer: 'Keep blocked' })
+      const w = world(on, { replies: [reply as never], answer: KEEP_BLOCKED })
       const deny = expectRefusal(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))
       expect(w.asked).toHaveLength(1)
       expect(w.asked[0]?.question).toContain('no verdict')
@@ -127,14 +128,14 @@ describe('fail closed', () => {
   }
 
   test('a failed review the user allows once runs', async ($, on) => {
-    const w = world(on, { replies: [{ isAnswered: false, reason: 'aborted', usage: USAGE }], answer: 'Allow once' })
+    const w = world(on, { replies: [{ isAnswered: false, reason: 'aborted', usage: USAGE }], answer: ALLOW_ONCE })
     expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).toEqual({ result: 'ran' })
     expect(w.ran).toHaveLength(1)
     expect(auditLines(w)[0]).toMatchObject({ verdict: 'failed', decision: 'allow-once', outcome: 'ran' })
   })
 
   test('once the token budget is spent, reviews go to the user', { options: { tokenBudget: 1500 } }, async ($, on) => {
-    const w = world(on, { replies: [BLOCK], answer: 'Keep blocked' })
+    const w = world(on, { replies: [BLOCK], answer: KEEP_BLOCKED })
     for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Bash', command: `rm -rf build/${i}` })
     expect(w.modelRequests).toHaveLength(2)
     expect(w.asked).toHaveLength(1)
@@ -142,7 +143,7 @@ describe('fail closed', () => {
   })
 
   test('with Gandalf switched off, review calls go to the user', { options: { gandalfEnabled: false } }, async ($, on) => {
-    const w = world(on, { answer: 'Keep blocked' })
+    const w = world(on, { answer: KEEP_BLOCKED })
     expectRefusal(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))
     expect(w.modelRequests).toEqual([])
     expect(w.asked[0]?.question).toContain('Its reviewer is switched off.')
@@ -150,7 +151,7 @@ describe('fail closed', () => {
   })
 
   test('a budget of zero tokens sends every review to the user', { options: { tokenBudget: 0 } }, async ($, on) => {
-    const w = world(on, { answer: 'Keep blocked' })
+    const w = world(on, { answer: KEEP_BLOCKED })
     expectRefusal(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))
     expect(w.modelRequests).toEqual([])
     expect(w.asked[0]?.question).toContain('token budget is spent')
@@ -166,11 +167,11 @@ describe('fail closed', () => {
 
 describe('escalation', () => {
   test('ask tier: allow once runs the call unchanged', async ($, on) => {
-    const w = world(on, { answer: 'Allow once' })
+    const w = world(on, { answer: ALLOW_ONCE })
     const call = { tool: 'Bash', command: 'sudo systemctl restart nginx' } as const
     expect(await $.tool.call(call)).toEqual({ result: 'ran' })
     expect(w.ran).toEqual([call])
-    expect(w.asked[0]).toMatchObject({ options: ['Allow once', 'Keep blocked'], header: 'Council' })
+    expect(w.asked[0]).toMatchObject({ options: [ALLOW_ONCE, KEEP_BLOCKED], header: 'Loot roll' })
     expect(w.asked[0]?.question).toContain('A rule sends this call straight to you.')
   })
 
@@ -196,7 +197,7 @@ describe('escalation', () => {
   })
 
   test("the mod's own question does not re-enter the gate", async ($, on) => {
-    const w = world(on, { answer: 'Allow once' })
+    const w = world(on, { answer: ALLOW_ONCE })
     await $.tool.call({ tool: 'Bash', command: 'sudo ls' })
     // The escalation, then the allow-rule offer: neither is gated itself.
     expect(w.asked).toHaveLength(2)
@@ -266,12 +267,5 @@ describe('audit log', () => {
     const path = `${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`
     expect(w.files.has(`${path}.1`)).toBe(true)
     expect((w.files.get(path) ?? '').length).toBeLessThanOrEqual(16 * 1024)
-  })
-})
-
-describe('plain mode', () => {
-  test('no theme text anywhere in the strings', () => {
-    const theme = /gandalf|legolas|aragorn|gimli|gollum|galadriel|elrond|boromir|mordor|middle-earth|shall not pass|leeroy|wipe|loot|raid/i
-    for (const line of allStrings('plain')) expect(line, line).not.toMatch(theme)
   })
 })

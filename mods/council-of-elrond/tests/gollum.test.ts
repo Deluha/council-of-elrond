@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { withAllowlistEntry } from '../hooks/config/write.js'
 import { patternsWith, scanCall, scanText } from '../hooks/members/gollum.js'
-import { APPROVE, auditLines, denyOf, ROOT, world } from './fixtures.js'
+import { ALLOW_ONCE, ALLOWLIST, APPROVE, auditLines, denyOf, KEEP_BLOCKED, ROOT, world } from './fixtures.js'
 
 const AWS = 'AKIAABCDEFGHIJKLMNOP'
 const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
@@ -86,10 +86,10 @@ describe('in the pipeline', () => {
   })
 
   test('a low finding asks with a redacted snippet; allow once goes on to the review', async ($, on) => {
-    const w = world(on, { answer: 'Allow once', replies: [APPROVE] })
+    const w = world(on, { answer: ALLOW_ONCE, replies: [APPROVE] })
     const call = { tool: 'Write', file_path: `${ROOT}/src/db.ts`, content: 'const password = "hunter2xyz"' } as const
     expect(await $.tool.call(call)).toEqual({ result: 'ran' })
-    expect(w.asked[0]?.options).toEqual(['Allow once', 'Add to allowlist', 'Keep blocked'])
+    expect(w.asked[0]?.options).toEqual([ALLOW_ONCE, ALLOWLIST, KEEP_BLOCKED])
     expect(w.asked[0]?.question).toContain('Possible secret')
     expect(w.asked[0]?.question).not.toContain('hunter2xyz')
     expect(w.modelRequests).toHaveLength(1)
@@ -98,14 +98,14 @@ describe('in the pipeline', () => {
   })
 
   test('keep blocked refuses a low finding', async ($, on) => {
-    const w = world(on, { answer: 'Keep blocked' })
+    const w = world(on, { answer: KEEP_BLOCKED })
     const deny = denyOf(await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/db.ts`, content: 'const password = "hunter2xyz"' }))
     expect(deny).toContain('(keep blocked)')
     expect(w.ran).toEqual([])
   })
 
   test('the allowlist is written only after the second confirm, then honoured', async ($, on) => {
-    const w = world(on, { answers: ['Add to allowlist', 'Add it'], answer: 'Keep blocked', replies: [APPROVE] })
+    const w = world(on, { answers: [ALLOWLIST, 'Add it'], answer: KEEP_BLOCKED, replies: [APPROVE] })
     const call = { tool: 'Write', file_path: `${ROOT}/src/db.ts`, content: 'const password = "hunter2xyz"' } as const
     expect(await $.tool.call(call)).toEqual({ result: 'ran' })
     expect(w.asked[1]?.question).toMatch(/sha256:[0-9a-f]{16}/)
@@ -121,13 +121,13 @@ describe('in the pipeline', () => {
   })
 
   test('several possible secrets: no allowlist option', async ($, on) => {
-    const w = world(on, { answer: 'Keep blocked' })
+    const w = world(on, { answer: KEEP_BLOCKED })
     await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/db.ts`, content: 'password = "hunter2xyz"\ntoken = "abc123def456"' })
-    expect(w.asked[0]?.options).toEqual(['Allow once', 'Keep blocked'])
+    expect(w.asked[0]?.options).toEqual([ALLOW_ONCE, KEEP_BLOCKED])
   })
 
   test('cancelling the confirm writes nothing and refuses', async ($, on) => {
-    const w = world(on, { answers: ['Add to allowlist', 'Cancel'] })
+    const w = world(on, { answers: [ALLOWLIST, 'Cancel'] })
     const deny = denyOf(await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/db.ts`, content: 'const password = "hunter2xyz"' }))
     expect(deny).toContain('(keep blocked)')
     expect(w.files.has(RULES)).toBe(false)

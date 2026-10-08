@@ -13,6 +13,8 @@ import type { MemberOpinion } from './escalation.js'
  * counts as a block from that member; a check that failed, timed out or
  * could not start is a block too. Each reason is labelled with who gave it.
  * Members never see each other's verdicts: this runs after all of them.
+ * Claude reads the reason and alternative, so every string here is asked for
+ * in plain mode, whatever the session's mode.
  */
 
 /** One model member's part in the council. */
@@ -48,21 +50,21 @@ const valueOf = (voice: Voice): VerdictValue | undefined =>
 export function runLine(run: GimliRun): string {
   switch (run.status) {
     case 'passed':
-      return text('gimli.passed', { name: run.name })
+      return text('gimli.passed', { name: run.name }, 'plain')
     case 'failed':
       return run.code === null || run.code === undefined
-        ? text('gimli.killed', { name: run.name, signal: run.signal ?? 'a signal' })
-        : text('gimli.failed', { name: run.name, code: run.code })
+        ? text('gimli.killed', { name: run.name, signal: run.signal ?? 'a signal' }, 'plain')
+        : text('gimli.failed', { name: run.name, code: run.code }, 'plain')
     case 'timed-out':
-      return text('gimli.timedOut', { name: run.name, seconds: Math.round(run.ms / 1000) })
+      return text('gimli.timedOut', { name: run.name, seconds: Math.round(run.ms / 1000) }, 'plain')
     case 'error':
-      return text('gimli.error', { name: run.name })
+      return text('gimli.error', { name: run.name }, 'plain')
     case 'stopped':
-      return text('gimli.stopped', { name: run.name })
+      return text('gimli.stopped', { name: run.name }, 'plain')
   }
 }
 
-const withTail = (run: GimliRun): string => (run.tail === '' ? runLine(run) : `${runLine(run)} ${text('gimli.tail', { tail: run.tail })}`)
+const withTail = (run: GimliRun): string => (run.tail === '' ? runLine(run) : `${runLine(run)} ${text('gimli.tail', { tail: run.tail }, 'plain')}`)
 
 export function combine(voices: readonly Voice[], runs: readonly GimliRun[]): Combined {
   let verdict: VerdictValue = 'approve'
@@ -74,14 +76,14 @@ export function combine(voices: readonly Voice[], runs: readonly GimliRun[]): Co
     const value = valueOf(voice)
     if (value === undefined || value === 'approve') continue
     if (rank(value) > rank(verdict)) verdict = value
-    const who = text(voice.who)
+    const who = text(voice.who, {}, 'plain')
     if (voice.kind === 'verdict') {
       isRealBlock = true
-      reasons.push(text('council.voice', { who, verdict: value, reason: voice.verdict.reason }))
+      reasons.push(text('council.voice', { who, verdict: value, reason: voice.verdict.reason }, 'plain'))
       summaries.push(reasons.at(-1) as string)
-      alternatives.push(text('council.voice', { who, verdict: value, reason: voice.verdict.safer_alternative }))
+      alternatives.push(text('council.voice', { who, verdict: value, reason: voice.verdict.safer_alternative }, 'plain'))
     } else if (voice.kind === 'failed') {
-      reasons.push(text('council.noVerdict', { who, problem: voice.problem }))
+      reasons.push(text('council.noVerdict', { who, problem: voice.problem }, 'plain'))
       summaries.push(reasons.at(-1) as string)
     }
   }
@@ -90,12 +92,12 @@ export function combine(voices: readonly Voice[], runs: readonly GimliRun[]): Co
     verdict = 'block'
     isRealBlock = true
     for (const run of failedRuns) {
-      reasons.push(text('council.voice', { who: text('who.gimli'), verdict: 'block', reason: withTail(run) }))
-      summaries.push(text('council.voice', { who: text('who.gimli'), verdict: 'block', reason: runLine(run) }))
+      reasons.push(text('council.voice', { who: text('who.gimli', {}, 'plain'), verdict: 'block', reason: withTail(run) }, 'plain'))
+      summaries.push(text('council.voice', { who: text('who.gimli', {}, 'plain'), verdict: 'block', reason: runLine(run) }, 'plain'))
     }
-    alternatives.push(text('alternative.gimli', { names: failedRuns.map(run => `"${run.name}"`).join(', ') }))
+    alternatives.push(text('alternative.gimli', { names: failedRuns.map(run => `"${run.name}"`).join(', ') }, 'plain'))
   }
-  if (verdict !== 'approve' && alternatives.length === 0) alternatives.push(text('alternative.ask'))
+  if (verdict !== 'approve' && alternatives.length === 0) alternatives.push(text('alternative.ask', {}, 'plain'))
 
   const opinions: MemberOpinion[] = [
     ...voices.flatMap((voice): MemberOpinion[] =>

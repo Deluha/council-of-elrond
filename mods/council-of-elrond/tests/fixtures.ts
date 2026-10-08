@@ -50,6 +50,11 @@ export const APPROVE = verdict('approve', 'Proportionate and requested.')
 export const BLOCK = verdict('block', 'Deletes the whole build cache.', 'Delete only build/tmp with rm -r build/tmp.')
 export const REVISE = verdict('revise', 'Too wide.', 'Run rm -r build/out instead.')
 
+/** The loot roll's labels, as the default (themed) mode offers them. */
+export const ALLOW_ONCE = 'Need: allow once'
+export const KEEP_BLOCKED = 'Pass: keep blocked'
+export const ALLOWLIST = 'Greed: add to allowlist'
+
 export type Asked = { question: string; options: readonly string[]; header: string | undefined }
 
 export type ProcessReply = { exitCode: number; stdout: string } | 'timeout'
@@ -121,7 +126,7 @@ export function world(
     dirs: new Set([ROOT, `${ROOT}/src`, `${ROOT}/build`, HOME, '/', '/etc', `${ROOT}/.claude`]),
     links: new Map(),
     surfaces: setup.surfaces ?? ['terminal'],
-    answer: setup.answer ?? 'Keep blocked',
+    answer: setup.answer ?? KEEP_BLOCKED,
     answers: setup.answers ?? [],
     replies: setup.replies ?? [APPROVE],
     ran: [],

@@ -6,7 +6,7 @@ import { route } from '../hooks/elrond/routing.js'
 import type { Enabled } from '../hooks/elrond/routing.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
-import { APPROVE, auditLines, BLOCK, CONTEXT, denyOf, REVISE, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
+import { APPROVE, auditLines, BLOCK, CONTEXT, denyOf, KEEP_BLOCKED, REVISE, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
 
 const ALL: Enabled = { gandalf: true, legolas: true, aragorn: true }
 
@@ -142,7 +142,7 @@ describe('in the pipeline', () => {
   })
 
   test('with the member and Gandalf off, the call comes to the user', { options: { aragornEnabled: false, gandalfEnabled: false } }, async ($, on) => {
-    const w = world(on, { answer: 'Keep blocked' })
+    const w = world(on, { answer: KEEP_BLOCKED })
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'git rebase main' }))).toContain('(keep blocked)')
     expect(w.modelRequests).toEqual([])
     expect(w.asked[0]?.question).toContain('Its reviewer is switched off.')
@@ -158,8 +158,8 @@ describe('in the pipeline', () => {
   })
 
   test('a failed review names the member in the question', async ($, on) => {
-    const w = world(on, { replies: [{ isAnswered: true, text: 'nope', usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }], answer: 'Keep blocked' })
+    const w = world(on, { replies: [{ isAnswered: true, text: 'nope', usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }], answer: KEEP_BLOCKED })
     await $.tool.call({ tool: 'Bash', command: 'git rebase main' })
-    expect(w.asked[0]?.question).toContain('the git reviewer: no verdict (malformed verdict')
+    expect(w.asked[0]?.question).toContain('Aragorn (git): no verdict (malformed verdict')
   })
 })
