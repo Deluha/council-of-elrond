@@ -1,4 +1,5 @@
-import { globToRegExp, slashRegex, toolMatcher } from '../rules/globs.js'
+import { globToRegExp, protectedMatcher, slashRegex, toolMatcher } from '../rules/globs.js'
+import type { ProtectedMatcher } from '../rules/globs.js'
 import { SHIPPED } from './defaults.js'
 import {
   BIG_CHECKS,
@@ -44,7 +45,7 @@ export type CompiledConfig = {
   config: Config
   /** Project rules first, in file order, then the enabled shipped rules. */
   rules: readonly CompiledRule[]
-  protectedPaths: readonly { glob: string; re: RegExp }[]
+  protectedPaths: readonly ProtectedMatcher[]
   protectedBranches: readonly RegExp[]
   production: readonly RegExp[]
   bigOperations: readonly BigOperation[]
@@ -484,7 +485,7 @@ export function compileConfig(config: Config, projectRuleIds: ReadonlySet<string
   return {
     config,
     rules,
-    protectedPaths: config.protectedPaths.map(glob => ({ glob, re: globToRegExp(glob) })),
+    protectedPaths: config.protectedPaths.map(protectedMatcher),
     protectedBranches: config.protectedBranches.map(branchToRegExp),
     production: config.productionPatterns.map(pattern => new RegExp(pattern, 'i')),
     bigOperations: config.bigOperations.map(compileBigOperation),

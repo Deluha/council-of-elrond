@@ -196,6 +196,33 @@ describe('git configuration and environment-variable injection', () => {
   })
 })
 
+describe('protected paths: the directory itself, globs and letter case', () => {
+  test('the protected directory itself, not only its contents', () => {
+    for (const command of ['rm -rf .git', 'rm -rf .claude/council-of-elrond', 'rm -rf .claude', 'mv .git /tmp', 'rm -rf .github/workflows', 'cp -r .git /tmp', 'tar czf x.tgz .git']) {
+      expect(tierOf(command), command).toBe('ask')
+    }
+  })
+
+  test('a glob that could name a protected file', () => {
+    for (const command of ['cat .en*', 'cat .e*', 'cat .??v']) {
+      expect(tierOf(command), command).toBe('ask')
+    }
+  })
+
+  test('a different letter case (case-insensitive file systems)', () => {
+    expect(tierOf('cat .ENV')).toBe('ask')
+    expect(tierOf('cat .GIT/config')).toBe('ask')
+  })
+
+  test('broad globs and unrelated names are not treated as protected', () => {
+    expect(tierOf('rm -rf ./*')).toBe('review')
+    expect(tierOf('rm -rf build')).toBe('review')
+    expect(tierOf('cat *.md')).toBe('allow')
+    expect(tierOf('ls *.ts')).toBe('allow')
+    expect(tierOf('psql -h db -c "select 1"')).toBe('review') // db is a host, not db/migrate
+  })
+})
+
 describe('tiers', () => {
   test('allow: read-only commands and unmatched calls pass', () => {
     for (const command of ['ls -la', 'git status', 'git log --oneline -5', 'cat src/app.ts', 'npm test', 'grep -r foo src', 'ls 2>/dev/null', 'make 2>&1']) {
