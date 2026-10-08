@@ -73,4 +73,5 @@ passes the gate when it should not is a security report: please use
 
 ## Licence
 
-[MIT](LICENSE).
+[MIT](LICENSE), except `mods/types/claude-code.d.ts`, which is Claude Code's generated API
+declaration file redistributed unchanged for typechecking; see [its notice](mods/types/NOTICE.md).

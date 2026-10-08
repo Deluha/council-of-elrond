@@ -21,7 +21,10 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   release workflow, git hooks, CODEOWNERS, a marketplace manifest, `docs/`.
 
 ### Changed
-- Nothing yet.
+- The review's rules-tier section is published as categories only until the hardening release;
+  the triggering inputs are held in a private security advisory.
+- `mods/types/NOTICE.md` states what the vendored API declarations are and that the MIT licence
+  makes no claim over them.
 
 ### Notes
 - The manifest still says 0.4.0; Stage 5 did not bump it. The next release should be 0.5.0.
