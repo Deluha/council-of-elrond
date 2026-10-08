@@ -166,6 +166,36 @@ describe('global options before a subcommand do not defeat the rule', () => {
   })
 })
 
+describe('git configuration and environment-variable injection', () => {
+  test('git config writes and dangerous -c keys are reviewed', () => {
+    expect(ruleOf('git config alias.p "push --force origin main"')).toBe('git-config-write')
+    expect(ruleOf('git config core.hooksPath /tmp/h')).toBe('git-config-write')
+    for (const command of [
+      'git -c alias.p="push --force origin main" p',
+      'git -c core.sshCommand="x" fetch',
+      'git -c core.pager="x" log',
+      'git bisect run ./x.sh',
+      'git --exec-path=/tmp status',
+    ]) {
+      expect(ruleOf(command), command).toBe('git-config-injection')
+    }
+  })
+
+  test('read-only config and harmless -c keys still pass', () => {
+    for (const command of ['git config --get user.email', 'git config -l', 'git config --list', 'git -c color.ui=always status', 'git -c user.name=x commit -m y']) {
+      expect(tierOf(command), command).toBe('allow')
+    }
+  })
+
+  test('environment variables that change what runs are reviewed', () => {
+    for (const command of ['LD_PRELOAD=/tmp/x.so ls', 'GIT_SSH_COMMAND="x" git fetch', 'NODE_OPTIONS="--require /tmp/x.js" node -v', 'PYTHONSTARTUP=/tmp/x.py python3']) {
+      expect(bash(command).decided?.ruleId, command).toBe('dangerous-env-assignment')
+    }
+    expect(tierOf('PATH=/usr/bin ls')).toBe('allow')
+    expect(tierOf('FOO=1 make')).toBe('allow')
+  })
+})
+
 describe('tiers', () => {
   test('allow: read-only commands and unmatched calls pass', () => {
     for (const command of ['ls -la', 'git status', 'git log --oneline -5', 'cat src/app.ts', 'npm test', 'grep -r foo src', 'ls 2>/dev/null', 'make 2>&1']) {

@@ -107,6 +107,45 @@ function redirectWrite(part: ShellPart): boolean {
   return part.redirects.some(({ op, target }) => WRITE_OPS.has(op) && !HARMLESS_TARGET.test(target))
 }
 
+const GIT_READONLY_CONFIG = new Set(['--get', '--get-all', '--get-regexp', '--get-urlmatch', '-l', '--list', '--show-origin', '--show-scope'])
+
+/** `git config` writing a value (`.git/config` is a protected path). */
+function gitConfigWrite(part: ShellPart): boolean {
+  if (part.coreWords[0] !== 'git' || part.coreWords[1] !== 'config') return false
+  const rest = part.coreWords.slice(2)
+  if (rest.length === 0) return false // bare `git config` prints usage
+  return !rest.some(word => GIT_READONLY_CONFIG.has(word))
+}
+
+// Config keys whose value is a command or a path to code git will execute.
+const DANGEROUS_GIT_KEY = /^(alias\.|core\.(hookspath|sshcommand|pager|editor|fsmonitor|askpass)|credential\.helper|diff\.external|sequence\.editor|uploadpack\.|receive\.|protocol\.|http\.proxy)|\.(textconv|driver|command)$/i
+
+/** The `key` of a `key=value` (or bare key) config token. */
+const configKey = (token: string): string => (token.includes('=') ? token.slice(0, token.indexOf('=')) : token).trim()
+
+/** `git -c key=value`, `--config-env`, `--exec-path` or `bisect run` that can run code. */
+function gitConfigInjection(part: ShellPart): boolean {
+  if (part.coreWords[0] !== 'git') return false
+  if (part.coreWords[1] === 'bisect' && part.coreWords[2] === 'run') return true
+  for (let i = 0; i < part.words.length; i++) {
+    const word = part.words[i] as string
+    if (word === 'git') continue
+    if (word === '-c' && DANGEROUS_GIT_KEY.test(configKey(part.words[i + 1] ?? ''))) return true
+    if (word.startsWith('-c') && word.length > 2 && DANGEROUS_GIT_KEY.test(configKey(word.slice(2)))) return true
+    if (word.startsWith('--config-env=') || word.startsWith('--exec-path')) return true
+  }
+  return false
+}
+
+// Environment variables that change what a later program loads or runs.
+const DANGEROUS_ENV =
+  /^(LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|GIT_SSH|GIT_SSH_COMMAND|GIT_CONFIG(_[A-Z]+)?|GIT_EXTERNAL_DIFF|GIT_PROXY_COMMAND|GIT_PAGER|GIT_EDITOR|GIT_SEQUENCE_EDITOR|BASH_ENV|ENV|PERL5OPT|PERL5LIB|RUBYOPT|RUBYLIB|PYTHONSTARTUP|PYTHONPATH|NODE_OPTIONS|PROMPT_COMMAND|PS4)\+?=/
+
+/** A leading assignment of an environment variable that can run arbitrary code. */
+function dangerousEnvAssignment(part: ShellPart): boolean {
+  return part.words.some(word => DANGEROUS_ENV.test(word))
+}
+
 export function runCheck(check: CheckName, part: ShellPart, context: CheckContext): boolean {
   switch (check) {
     case 'rm-outside-repo':
@@ -119,5 +158,11 @@ export function runCheck(check: CheckName, part: ShellPart, context: CheckContex
       return privileged(part)
     case 'redirect-write':
       return redirectWrite(part)
+    case 'git-config-write':
+      return gitConfigWrite(part)
+    case 'git-config-injection':
+      return gitConfigInjection(part)
+    case 'dangerous-env-assignment':
+      return dangerousEnvAssignment(part)
   }
 }
