@@ -153,7 +153,7 @@ export function suggestRule(
     id: idFor(first ?? (FILE_PATH_FIELDS[call.tool] !== undefined ? `${call.tool}-${classification.findings[0]?.subject ?? ''}` : call.tool), taken),
     tier: 'allow',
     ...pattern,
-    reason: text('suggest.reason'),
+    reason: text('suggest.reason', {}, 'plain'),
   }
   if (validateOverrides({ schemaVersion: 1, rules: [rule] }).overrides === undefined) return none('not-allowed')
   const applied = withRule(compiled, rule)

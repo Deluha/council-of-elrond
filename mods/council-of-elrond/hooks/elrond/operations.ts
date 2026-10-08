@@ -200,6 +200,20 @@ export function noteRound<T extends OpsState>(state: T, key: string, isApprove: 
 
 export const roundsLeft = (state: OpsState, key: string): number => Math.max(0, ROUND_CAP - opOf(state, key).rounds)
 
+/**
+ * Failed attempts since the user last wrote, for the status and the debate
+ * pane: how many (the per-verb counter, which only a new prompt clears), over
+ * how many operations, and how many of those are locked out.
+ */
+export function attemptsOf(state: OpsState): { count: number; ops: number; locked: number } {
+  const ops = Object.values(state.ops)
+  return {
+    count: Object.values(state.verbWipes).reduce((sum, n) => sum + n, 0),
+    ops: ops.length,
+    locked: ops.filter(op => op.wipes >= KEY_WIPE_CAP).length,
+  }
+}
+
 /** Out of rounds: the next attempt goes to the user, with no model call. */
 export const isOutOfRounds = (state: OpsState, key: string): boolean => opOf(state, key).rounds >= ROUND_CAP
 

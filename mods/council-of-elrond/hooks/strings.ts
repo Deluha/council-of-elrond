@@ -1,7 +1,12 @@
 /**
- * Every user-facing string, in one table: a plain variant and, from stage 6,
- * a themed one. Logic picks an entry by key; no text lives in logic.
- * Until an entry has a themed variant, both modes read the plain one.
+ * Every user-facing string, in one table: a plain variant and, for some, a
+ * themed one. Logic picks an entry by key; no text lives in logic. Where an
+ * entry has no themed variant, both modes read the plain one.
+ *
+ * The mode is set once, at registration (`setMode`), and `text()` follows it.
+ * Text Claude reads (refusals, the full council's reason and alternative, the
+ * rule reason written to rules.json) is always asked for in 'plain' and has
+ * no themed variant, so no setting can put theme text in front of the model.
  */
 
 export type Mode = 'plain' | 'themed'
@@ -10,18 +15,18 @@ type Entry = { plain: string; themed?: string }
 
 const TABLE = {
   // Who decided
-  'who.rules': { plain: 'the rules' },
-  'who.gandalf': { plain: 'the destructive-operations reviewer' },
-  'who.legolas': { plain: 'the diff reviewer' },
-  'who.aragorn': { plain: 'the git and database reviewer' },
-  'who.aragorn.git': { plain: 'the git reviewer' },
-  'who.aragorn.database': { plain: 'the database reviewer' },
+  'who.rules': { plain: 'the rules', themed: 'the rules of Rivendell' },
+  'who.gandalf': { plain: 'the destructive-operations reviewer', themed: 'Gandalf' },
+  'who.legolas': { plain: 'the diff reviewer', themed: 'Legolas' },
+  'who.aragorn': { plain: 'the git and database reviewer', themed: 'Aragorn' },
+  'who.aragorn.git': { plain: 'the git reviewer', themed: 'Aragorn (git)' },
+  'who.aragorn.database': { plain: 'the database reviewer', themed: 'Aragorn (databases)' },
   'who.user': { plain: 'the user' },
-  'who.council': { plain: 'the council' },
-  'who.gollum': { plain: 'the secrets scan' },
-  'who.galadriel': { plain: 'the read-only preview' },
-  'who.gimli': { plain: 'the project checks' },
-  'who.fullCouncil': { plain: 'the full council' },
+  'who.council': { plain: 'the council', themed: 'Elrond' },
+  'who.gollum': { plain: 'the secrets scan', themed: 'Gollum' },
+  'who.galadriel': { plain: 'the read-only preview', themed: 'Galadriel' },
+  'who.gimli': { plain: 'the project checks', themed: 'Gimli' },
+  'who.fullCouncil': { plain: 'the full council', themed: 'the Council of Elrond' },
 
   // The full council's combined verdict, each voice labelled
   'council.voice': { plain: '{who} ({verdict}): {reason}' },
@@ -71,18 +76,20 @@ const TABLE = {
 
   // Escalation (the question the user answers)
   'ask.header': { plain: 'Council' },
-  'ask.title': { plain: 'A gated call needs your decision.' },
+  // The escalation's header: the dialog caps it at 12 characters.
+  'ask.rollHeader': { plain: 'Council', themed: 'Loot roll' },
+  'ask.title': { plain: 'A gated call needs your decision.', themed: 'Loot roll: a gated call needs your decision.' },
   'ask.call': { plain: 'Call: {call}' },
   'ask.rule': { plain: 'Why it was gated: {reason}' },
   'ask.verdict': { plain: '{who}: {verdict}. {reason}' },
   'ask.failed': { plain: '{who}: no verdict ({problem}).' },
   'ask.preview': { plain: 'What it would touch:\n{preview}' },
   'ask.secret': { plain: 'Possible {label}: {snippet}' },
-  'ask.close': { plain: 'Allow it once, keep it blocked, or type an instruction for Claude.' },
-  'ask.closeSecret': { plain: 'Allow it once, add the secret to the allowlist, keep it blocked, or type an instruction for Claude.' },
-  'ask.allowOnce': { plain: 'Allow once' },
-  'ask.keepBlocked': { plain: 'Keep blocked' },
-  'ask.allowlist': { plain: 'Add to allowlist' },
+  'ask.close': { plain: 'Allow it once, keep it blocked, or type an instruction for Claude.', themed: 'Need allows it once, Pass keeps it blocked, or type an instruction for Claude.' },
+  'ask.closeSecret': { plain: 'Allow it once, add the secret to the allowlist, keep it blocked, or type an instruction for Claude.', themed: 'Need allows it once, Greed adds the secret to the allowlist, Pass keeps it blocked, or type an instruction for Claude.' },
+  'ask.allowOnce': { plain: 'Allow once', themed: 'Need: allow once' },
+  'ask.keepBlocked': { plain: 'Keep blocked', themed: 'Pass: keep blocked' },
+  'ask.allowlist': { plain: 'Add to allowlist', themed: 'Greed: add to allowlist' },
   'ask.confirmAllowlist': {
     plain: 'The allowlist entry for this {label} is {entry}. It is written to {path} under {field}, and the scan then allows that secret in every later call in this project. Add it and allow this call?',
   },
@@ -123,19 +130,19 @@ const TABLE = {
   'notice.commandFailed': { plain: 'Council: /council could not be registered ({problem})' },
 
   // Mode labels by the prompt
-  'mode.bypass': { plain: 'council: bypass' },
+  'mode.bypass': { plain: 'council: bypass', themed: 'council: Leeroy mode' },
   'mode.shadow': { plain: 'council: shadow' },
 
   // /council output (shown to the user, never to Claude)
   'cmd.title': { plain: 'Council' },
   'cmd.help': {
-    plain: 'Usage: /council [on | off | shadow on|off | log [n] | rules | test "<command>" | model [<member> <model> [--save]] | reload | report]',
+    plain: 'Usage: /council [on | off | shadow on|off | log [n] | rules | test "<command>" | model [<member> <model> [--save]] | reload | report | debate]',
   },
   'cmd.unknown': { plain: 'Unknown subcommand "{sub}".' },
   'cmd.mode': { plain: 'Mode: {mode}' },
   'cmd.mode.enforcing': { plain: 'enforcing' },
   'cmd.mode.shadow': { plain: 'shadow (reviewers log verdicts and never refuse)' },
-  'cmd.mode.bypass': { plain: 'bypass (gated calls pass without review)' },
+  'cmd.mode.bypass': { plain: 'bypass (gated calls pass without review)', themed: 'Leeroy mode (gated calls pass without review)' },
   'cmd.members': { plain: 'Members:' },
   'cmd.member': { plain: '  {who} [{id}]: {state}, model {model} ({source}); approved {approved}, revised {revised}, blocked {blocked}, no verdict {failed}' },
   'cmd.memberCode': { plain: '  {who}: {state}' },
@@ -147,11 +154,11 @@ const TABLE = {
   'cmd.gimli': { plain: '  {who}, for big operations: {state}, {count} commands configured; passed {approved}, failed {blocked}' },
   'cmd.on': { plain: 'on' },
   'cmd.off': { plain: 'off' },
-  'cmd.attempts': { plain: 'Since your last prompt: {count} refused or failed attempts over {ops} operations, {locked} locked out' },
+  'cmd.attempts': { plain: 'Since your last prompt: {count} refused or failed attempts over {ops} operations, {locked} locked out', themed: 'Since your last prompt: {count} wipes over {ops} operations, {locked} locked out' },
   'cmd.tokens': { plain: 'Review tokens this session: {spent} of {budget}' },
   'cmd.median': { plain: 'Median review time: {time} over {reviews} reviews' },
   'cmd.noReviews': { plain: 'No model reviews yet this session' },
-  'cmd.bypassOn': { plain: 'Bypass is on for this session: gated calls pass without review, and are logged. /council on ends it.' },
+  'cmd.bypassOn': { plain: 'Bypass is on for this session: gated calls pass without review, and are logged. /council on ends it.', themed: 'Leeroy mode is on for this session: gated calls pass without review, and are logged. /council on ends it.' },
   'cmd.bypassOff': { plain: 'The council is on: gated calls are reviewed again.' },
   'cmd.shadowOn': { plain: 'Shadow mode is on for this session: reviewers log verdicts and never refuse. Rules, protected paths and the secrets scan still enforce.' },
   'cmd.shadowOff': { plain: 'Shadow mode is off for this session: reviewer verdicts enforce.' },
@@ -233,11 +240,74 @@ const TABLE = {
   'report.costMember': { plain: '  {who}: {reviews} reviews alone, {tokens} tokens ({inCouncil} of them in the full council), median {time}' },
   'report.costCouncil': { plain: '  {who}: {sittings} sittings, {tokens} tokens, median {time}' },
   'report.noTimes': { plain: '  (Review times are logged from this version on; older lines have none.)' },
+  // The debate pane and the council check band (drawn for the user only)
+  'debate.title': { plain: 'Council review', themed: 'The debate' },
+  'debate.empty': { plain: 'No reviews yet in this view.' },
+  'debate.proposal': { plain: '{tool}: {call}' },
+  'debate.voice': { plain: '{who}: {status}' },
+  'debate.check': { plain: 'Check "{name}": {status}' },
+  'debate.reason': { plain: '  Reason: {reason}' },
+  'debate.alternative': { plain: '  Safer alternative: {alternative}' },
+  'debate.flavour': { plain: '  {line}' },
+  'debate.verdict': { plain: 'Verdict: {verdict}' },
+  'debate.status.approve': { plain: '✓ approve' },
+  'debate.status.revise': { plain: '✗ revise' },
+  'debate.status.block': { plain: '✗ block' },
+  'debate.status.failed': { plain: '✗ no verdict' },
+  'debate.status.waiting': { plain: '… reviewing' },
+  'debate.status.skipped': { plain: '– sat out' },
+  'debate.check.running': { plain: '… running' },
+  'debate.check.passed': { plain: '✓ passed' },
+  'debate.check.failed': { plain: '✗ failed' },
+  'debate.check.timed-out': { plain: '✗ timed out' },
+  'debate.check.error': { plain: '✗ could not start' },
+  'debate.check.stopped': { plain: '– stopped' },
+  'debate.wipes': {
+    plain: 'Refused or failed attempts since your last prompt: {count} over {ops} operations, {locked} locked out',
+    themed: 'Wipes since your last prompt: {count} over {ops} operations, {locked} locked out',
+  },
+  'debate.threatHeader': { plain: 'Refusals per reviewer', themed: 'Threat meter' },
+  // One block of the threat meter's bar.
+  'debate.bar': { plain: '█' },
+  'debate.threatNone': { plain: 'No blocks yet.' },
+  'debate.threatOne': { plain: '{who} {bar} 1 block' },
+  'debate.threatMany': { plain: '{who} {bar} {count} blocks' },
+  'band.header': { plain: 'Full council review', themed: 'Ready check' },
+  'band.line': { plain: '{header}: {call}' },
+  // The epic drop shows in the themed mode only; plain mode never reads these.
+  'epic.toast': { plain: '', themed: 'Legendary commit acquired' },
+  'epic.row': { plain: '', themed: '✦ Legendary commit acquired' },
+
+  // One line a member says in the debate pane, by member and verdict. Plain
+  // mode shows none, so the plain variant is empty (see flavourOf).
+  'flavour.gandalf.approve': { plain: '', themed: 'The bridge holds. Go on.' },
+  'flavour.gandalf.revise': { plain: '', themed: 'Not this way. There is a narrower path.' },
+  'flavour.gandalf.block': { plain: '', themed: 'You shall not pass.' },
+  'flavour.legolas.approve': { plain: '', themed: 'The diff is clean, as far as elf-eyes see.' },
+  'flavour.legolas.revise': { plain: '', themed: 'Something stirs in this diff. Trim it.' },
+  'flavour.legolas.block': { plain: '', themed: "They're taking the tests to Isengard! Blocked." },
+  'flavour.aragorn.approve': { plain: '', themed: 'You have my sword. The history holds.' },
+  'flavour.aragorn.revise': { plain: '', themed: 'Not this road. Take a safer one.' },
+  'flavour.aragorn.block': { plain: '', themed: 'It is not this day. This history does not fall.' },
+  'flavour.council.approve': { plain: '', themed: 'The council is agreed. Ready check passed.' },
+  'flavour.council.revise': { plain: '', themed: 'The council is divided. Reforge it.' },
+  'flavour.council.block': { plain: '', themed: 'The council has spoken: no.' },
+  'flavour.gimli.block': { plain: '', themed: 'And my axe says no: the checks failed.' },
+  'flavour.gollum.block': { plain: '', themed: 'It has a secret, precious. Not this one.' },
 } as const satisfies Record<string, Entry>
 
 export type StringKey = keyof typeof TABLE
 
-export function text(key: StringKey, params: Readonly<Record<string, string | number>> = {}, mode: Mode = 'plain'): string {
+/** Set once at registration from the plainMode option; until then, plain. */
+let current: Mode = 'plain'
+
+export const setMode = (mode: Mode): void => {
+  current = mode
+}
+
+export const currentMode = (): Mode => current
+
+export function text(key: StringKey, params: Readonly<Record<string, string | number>> = {}, mode: Mode = current): string {
   const entry: Entry = TABLE[key]
   const template = mode === 'themed' ? (entry.themed ?? entry.plain) : entry.plain
   return template.replace(/\{(\w+)\}/g, (whole, name: string) =>
@@ -248,3 +318,18 @@ export function text(key: StringKey, params: Readonly<Record<string, string | nu
 /** Every string in a mode, for the plain-mode test. */
 export const allStrings = (mode: Mode): string[] =>
   Object.values(TABLE).map((entry: Entry) => (mode === 'themed' ? (entry.themed ?? entry.plain) : entry.plain))
+
+/** The keys that have a themed variant, so a test can hold the Claude-facing families to none. */
+export const themedKeys = (): string[] =>
+  Object.entries(TABLE as Record<string, Entry>).flatMap(([key, entry]) => (entry.themed === undefined ? [] : [key]))
+
+/**
+ * The line a member says in the debate pane for a verdict, or undefined: in
+ * plain mode, and for any member and verdict without one. Never throws.
+ */
+export function flavourOf(member: string, verdict: string, mode: Mode = current): string | undefined {
+  const key = `flavour.${member}.${verdict}`
+  if (mode !== 'themed' || !Object.prototype.hasOwnProperty.call(TABLE, key)) return undefined
+  const line = (TABLE as Record<string, Entry>)[key]?.themed
+  return line === '' ? undefined : line
+}

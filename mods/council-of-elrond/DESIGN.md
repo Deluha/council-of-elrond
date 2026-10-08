@@ -1,13 +1,20 @@
 # council-of-elrond: design
 
-Status: **Stage 5, hardened in 0.5.0** (Stage 4 plus allow rules offered after "allow once", and
-`/council report`; then the 0.5.0 hardening of §10; plain mode).
+Status: **Stage 6** (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
-Built against Claude Code **2.1.289**, and checked against **2.1.291** from Stage 5. The generated API types are
-vendored at `mods/types/claude-code.d.ts` (now 2.1.291's) and are the source of truth over docs,
-samples and the spec. The 2.1.289 → 2.1.291 drift is additive and touches nothing the mod calls: a
+Built against Claude Code **2.1.289**, checked against **2.1.291** from Stage 5 and **2.1.294** from
+Stage 6. The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.294's) and
+are the source of truth over docs, samples and the spec. The 2.1.289 → 2.1.291 drift was additive: a
 new `prompt.mention` event, a `Color` type (theme keys or raw colours) for paint props, a `ceiling`
-on tool-check inputs, teammate record fields, and doc wording.
+on tool-check inputs, teammate record fields, and doc wording. The 2.1.291 → 2.1.294 drift is
+additive for every signature the mod calls: a `prompt.autocomplete` event, text blocks (with
+caching) accepted as a model request's `prompt` and `system` beside plain strings, a registered
+tool's spec type, a `workflow` field on agent records, and a test-kit `mock.session`. One semantic
+addition: a `.catch` handler is now also asked, with `next.error.kind` `re-entry` and `called`
+false, where the engine does not run a hook because the event was raised beneath that hook's own
+frame. Elrond's handler refuses whenever `called` is false, so such a call fails closed; whether
+the mod's own `$.ui.ask` (an `AskUserQuestion` call) ever arrives this way is unverified live (the
+test kit's escalation tests pass unchanged). Tracked in ROADMAP.md, "Known follow-ups".
 
 ## 1. Step 0 findings
 
@@ -26,8 +33,8 @@ settings. The interactive `/plugin` "mods active" line can't be read from a head
 | g | Subagents, MCP | `e.agentId` is set inside a subagent's loop. MCP tools are `mcp__<server>__<tool>`. A chain raised through `$` skips the calling hook; model calls and processes raise their own events, never `tool.call`. `$.ui.ask` is an `AskUserQuestion` tool call that skips the calling hook. |
 | h | Error flag | After `next(e)`: `{ isError: true, text, result }`, or `{ deny }` from beneath, or `isReadOnly`. |
 | i | Commands | `$.command.register({ name, description, argumentHint, immediate })`; the handler gets `e.args` as a raw string; no subcommands. `{ text }` is shown **and read by Claude**. |
-| j | UI surfaces | Pane (all surfaces; unasked only from 144 columns), band above the prompt and mode labels (terminal + desktop), status line, toast, transcript log line, a notice line under the permission dialog, the AskUserQuestion dialog. Terminal only: progress, turn-duration and info-notice sites; raster and image elements. A mod cannot draw the permission dialog. |
-| k | Where nothing draws | Hooks run; drawings don't show (VS Code panel, `-p`, SDK, cloud). `$.session.surfaces()` is empty in plain `-p`. `$.ui.ask` rejects when dismissed, on "Chat about this", and in `-p`. |
+| j | UI surfaces | Pane (raised on every surface: terminal, desktop, VS Code and mobile; unasked only from 144 columns), band above the prompt (`AbovePrompt`) and mode labels (`SessionMode`) (terminal + desktop only), status line, toast, transcript log line, a notice line under the permission dialog, the AskUserQuestion dialog. Terminal only: progress, turn-duration and info-notice sites; raster and image elements. A mod cannot draw the permission dialog. |
+| k | Where nothing draws | Hooks run; what a surface doesn't raise doesn't show: the band and the mode label on VS Code and mobile, and every drawing in `-p`, the SDK and cloud. The types, which win, list `vscode` as a surface that draws a `Pane`, so the Step 0 note that VS Code shows no drawings at all is superseded; whether VS Code paints the pane is for the maintainer's live check. `$.session.surfaces()` is empty in plain `-p`. `$.ui.ask` rejects when dismissed, on "Chat about this", and in `-p`. |
 | l | Imports, reload | Static relative imports of plugin files work. Passing `$` to an imported function fails validation. `$.state` survives hot reload and `/reload-plugins`; `/clear`, `/resume`, `/branch` reset it. Module variables and timers don't survive a reload. |
 | m | userConfig | Flat fields: string, number, boolean, directory, file; `options`, `multiple` (string list), `default`, `min`, `max`. No objects or nesting. |
 | n | Tests | `claude plugin test` runs `*.test.ts`; the test's `on` hooks sit beneath the plugin and stand for the engine. Fake a model with `on('model.complete')`, a process with `on('process.run')`, a user answer with a `tool.call` hook on `AskUserQuestion`, the clock with `mock.clock(on)`. Each test gets 5 s by default. |
@@ -36,17 +43,19 @@ settings. The interactive `/plugin` "mods active" line can't be read from a head
 
 ```
 hooks: session.start, prompt.submit, command.run{command=council},
-       ui.render{component=Pane, requestId=council}, ui.render{component=SessionMode}, tool.call
-calls: $.clock.after (via runCheck), $.clock.now (via convene, runCheck), $.command.register,
+       ui.render{component=Pane, requestId=council}, ui.render{component=Pane, requestId=council-debate},
+       ui.render{component=AbovePrompt}, ui.render{component=SessionMode}, tool.call
+calls: $.clock.after (via epicDrop, runCheck), $.clock.now, $.command.register,
        $.config.set (via councilModel), $.env.get (via loadContext), $.fs.exists,
        $.fs.list (via previewOf), $.fs.read (via appendAudit, councilOutput, fileDiffOf, loadContext,
        reportFrom, scriptsOf, sqlFilesOf, writeOverrides), $.fs.stat (via loadContext, previewOf,
        realPathOf, sqlFilesOf), $.fs.write (via appendAudit, writeOverrides),
        $.model.complete (via probeModel, review), $.process.run (via currentBranchOf, previewOf,
        rangeDiffOf), $.process.spawn (via runCheck), $.session.cwd, $.session.root (via loadContext),
-       $.session.surfaces (via escalate, offerRule, show, syncIndicator), $.state.get, $.state.set,
-       $.ui.ask (via confirmAllowlist, escalate, offerRule), $.ui.log, $.ui.notice, $.ui.open (via show),
-       $.ui.resolve, $.ui.status (via syncIndicator), $.ui.toast (via warnOnce)
+       $.session.surfaces (via escalate, offerRule, openDebatePane, show, showDebate, syncIndicator),
+       $.state.get, $.state.set, $.ui.ask (via confirmAllowlist, escalate, offerRule), $.ui.log,
+       $.ui.notice, $.ui.open (via openDebatePane, show, showDebate), $.ui.resolve,
+       $.ui.status (via syncIndicator), $.ui.toast (via epicDrop, warnOnce)
 env reads: HOME
 state: council-of-elrond.session, council-of-elrond.panel
 ```
@@ -94,13 +103,20 @@ tool.call ─► classify (pure, rules only)
              │ after next(e): ran ─► clears its operation; error ─► failed attempt (setting);
              │                you refuse at Claude Code's prompt ─► failed attempt;
              │                automatic denial (nobody asked) ─► recorded, not counted
+             │ debate record (watching only, never alters a decision): openDebate before a model
+             │   review or the council sits; noteVoice / noteCheck as each answers; closeDebate with
+             │   the verdict (aborted on Esc)
              └─ any throw before next ─► .catch ─► refuse
 /council ─► parse (pure) ─► output lines ─► pane (where a surface draws) or ui.log; never Claude
+/council debate ─► the council-debate pane (opened at any width), else its rows as ui.log lines
+ui.render Pane council-debate ─► state ─► debateRows(view.agentId) (pure) ─► Text rows   (reads only)
+ui.render AbovePrompt ─► survey? pass · state + clock ─► bandRows (pure) ─► rows, or pass when idle
+finish() ─► ran, full council approved, push or merge, themed ─► epicUntil + toast + timer (redraw only)
 /council report ─► audit.jsonl.2, .1, current (read) ─► report (pure) ─► the same
 ```
 
-- **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`: one file per member, `brief.ts` pairing each member and profile with its prompts, `gimli.ts` the checks' outcomes), routing, the full council's seats (`elrond/council.ts`) and its verdict (`elrond/combine.ts`), escalation, refusal, model choice, the allow rule offered after "allow once" (`elrond/suggest.ts`) and the report (`elrond/report.ts`) (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
-- **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 3), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt you send (composer, bridge or SDK origin): it clears rounds, failed attempts, lockouts and the cache.
+- **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`: one file per member, `brief.ts` pairing each member and profile with its prompts, `gimli.ts` the checks' outcomes), routing, the full council's seats (`elrond/council.ts`) and its verdict (`elrond/combine.ts`), escalation, refusal, model choice, the allow rule offered after "allow once" (`elrond/suggest.ts`), the report (`elrond/report.ts`) and the rows the debate pane and the band draw (`elrond/view.ts`) (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
+- **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 4), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt you send (composer, bridge or SDK origin): it clears rounds, failed attempts, lockouts and the cache.
 - **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load, after the mod's own writes (an allowlist entry, an allow rule), and on `/council reload` (never by watching the file). Both writes go through `editOverrides` (`config/write.ts`).
 
 ## 4. Failure modes
@@ -125,6 +141,10 @@ tool.call ─► classify (pure, rules only)
 | An audit file can't be read for `/council report` | Named in the report and left out; the other files are reported. Unparseable lines are counted and skipped. |
 | `/council` registration refused (32-command cap) | A transcript line; the gate is unaffected. |
 | `/council` handler throws | The usage line is logged; the command returns no text. |
+| A debate write fails (the state write, the pane open) | Dropped: every one is caught where it is made, and none can delay or alter `proceed()`. The decision, the audit line and the result are the same; the pane shows less. |
+| A dispatch throws or is cut off while a review sits | Its debate stays `sitting` (the band keeps its rows) until the next prompt you send, when `resetForPrompt` settles it as aborted. |
+| The epic drop's state write, toast or timer fails | Caught in `finish()`; the call's result is unchanged. A reload that cancels the timer leaves the row to hide itself by its time at the next draw. |
+| The debate pane is refused (no room, a hook, no surface) | Ignored and not retried; `/council debate` falls back to transcript lines. |
 | A council member errors, times out or answers malformed | Counts as that member's block. With no real objection and every check passed, the call comes to you; beside a real block, Claude is refused. |
 | The council's deadline has passed before a member is asked (one at a time) | That member gives no verdict (a block); no request is sent. |
 | A project check fails, times out or can't start | A block, with its last 20 lines (redacted) for Claude; none of its output in the audit log. |
@@ -284,3 +304,117 @@ inline script still resolves against the root (review, not block); two-sided glo
 not computed; and the breadth of the shipped rule set (which cloud, database and interpreter
 programs are named by default) is left to grow as real reports come in, with project rules as the
 workaround. These are in the README's "Known gaps" and the review's §4.9.
+
+## 11. Decisions the spec did not cover (Stage 6)
+
+1. **One mode, set at registration.** `strings.ts` holds a module-level mode, `setMode` sets it
+   from the `plainMode` option as `register` starts, and `text()` defaults to it. No user-facing call site
+   passes a mode, so a new string cannot forget to follow the setting; only the Claude-facing builders pass 'plain'. The mode never changes
+   within a session.
+2. **What Claude reads is plain in both modes, enforced twice.** A themed refusal would put
+   character names into the model's context and invite it to role-play, and a themed reason would
+   be written into the audit log and the rules file. So `refusalText`, `combine` and `suggest`
+   ask for `'plain'` explicitly, and the key families Claude can read, plus the notices and the report, which stay plain by choice (`refusal.`, `reason.`,
+   `alternative.`, `council.`, `gimli.`, `escalate.`, `route.`, `suggest.`, `notice.`, `report.`,
+   and the dialog lines that confirm exact data) have no themed variant, which a test asserts.
+   `escalate.*` is shown in the dialog but is also embedded in the "nobody to ask" refusal, so it
+   stays plain too.
+3. **What is themed** is only what the user reads and the spec names: the `who.*` names, the
+   loot roll (header, title, closing line and the three labels), Leeroy mode (label, status and
+   the `/council off` line), wipes in the status, and one flavour line per member and verdict
+   (plain variant empty; read through `flavourOf`, which is undefined in plain mode and for an
+   unknown pair). The dialogs that confirm exact data (the allowlist entry, an allow rule) keep
+   the plain header and text.
+4. **Ids and "council" are not theme text** (§6.16 stands). Plain mode still prints the member ids a
+   user types (`[gandalf]`), because they are config keys, and "council" is the product's plain
+   name. The plain-mode tests strip bracketed ids before scanning for theme words.
+5. **The loot roll's labels compare exactly in the mode in use.** `escalate` reads the mode once
+   and uses that one value both to offer the options and to interpret the answer. Reading it twice,
+   or interpreting in plain while offering themed labels, would turn "Need: allow once" into an
+   instruction for Claude and refuse the call; a test covers it, and the other direction (plain
+   labels typed in themed mode are an instruction, not a decision) is tested too.
+6. **No `ui.render` hook on `AskUserQuestion`.** The review's amendment (§5 item 5) drops it: the
+   dialog is themed through the question, options and header passed to `$.ui.ask`, which already
+   fit the tool's schema, and a rewrite hook would add a second path to keep in step with them.
+7. **One state value, shape version 4.** The debate pane, the band, the epic drop and the
+   open-once rule all read the one session value, so there is no second atom to keep in step with
+   `resetForPrompt` and no way for two views of a review to disagree. It gained `debates` (the
+   newest eight, newest last; a review is a few hundred characters, so the cap bounds the value),
+   `epicUntil` and `debateOpened`. Version 4 means an older value reads as a fresh session, as
+   every earlier bump did. The updaters in `state.ts` are pure and applied only as
+   `update($, session, value => fn(sessionOf(value), …))`, which retries on a miss, so two
+   calls in flight cannot overwrite each other's debate. `resetForPrompt` settles any debate
+   still `sitting` as `aborted` but keeps the history (the pane is a record, not a per-prompt
+   scratch) and leaves `epicUntil` alone (the row hides itself by its time). A voice that is
+   still waiting when a debate closes becomes "no verdict" and a check still running becomes
+   "stopped", so no row says "reviewing" for a review that is over. Reasons are redacted in
+   register.ts before they are stored, then cut to 400 characters on one line in `state.ts`; the
+   call text is redacted by `callText` and cut to 300.
+8. **What is drawn is data first** (`elrond/view.ts`). The pane and the band are built from rows
+   (`text`, a theme colour key, bold, dim) by two pure functions, so every case is tested without
+   mounting and register.ts only turns a row into a `Text`. Colours are theme keys, never raw
+   colours, and every symbol comes with a word (`✓ approve`, `✗ no verdict`, `… reviewing`), so a
+   terminal without colour loses nothing. Decisions the brief left open, taken as the safer
+   reading: a council debate that is done also gets a plain `Verdict:` row (the combined verdict
+   is the one fact the member rows don't carry, and plain mode would otherwise show no verdict at
+   all); a failed, timed-out or unstartable check gets Gimli's flavour line in themed mode; the
+   blank rows between sections are empty `Text` rows, which the mount accepts.
+9. **The debate pane is its own pane id, `council-debate`,** so the `/council` command's output
+   (id `council`) keeps the user's last command and the two show as tabs. A single hook per pane
+   id draws it, and it reads state only: a pane that wrote while drawing would be refused, and a
+   draw may run many times a second. It draws for `view.agentId`, because the engine keeps one
+   pane instance across a switch of the transcript in view; without the filter a subagent's
+   review would sit in the main conversation's pane, and the other way round. It is opened
+   unasked once per session, at the first model review or full council, with no `focus` (the
+   person's keys are not ours to take) and `rows: 12` for inline placement; the mod never
+   measures the terminal, because the engine already keeps an unasked open undrawn below 144
+   columns. The flag is claimed before the open, so a parallel call does not open it too, and a
+   refused open is not retried: a pane the person closed by hand stays closed. `/council debate`
+   answers the person's command, so it is placed at any width; where nothing draws or places it,
+   the same rows go to `ui.log`, as every other `/council` output does.
+10. **Recording a review is watching, never deciding.** Everything is keyed by the call's
+    `tool_use_id`, with the call's `agentId`, so two calls in flight (batched calls, subagents)
+    each keep their own debate. A single review opens its debate just before `review()` and
+    settles it when the verdict, the failure or Esc is known. A full council opens its debate
+    before `convene`, which reports each voice and each check as it resolves through a callback
+    and waits for those writes before it returns, so `closeDebate` always lands last. Every write
+    is caught where it is made, none touches `proceed()` or the order of the pipeline's
+    decisions, and the `.catch` of `tool.call` is as it was; a test breaks the state write on
+    purpose and confirms the verdicts and results do not change.
+11. **The wipe counter and the threat meter are in the pane, not the band.** A permanent band row
+    would take a row of the screen all session for a number that rarely matters; in the pane it
+    is read when asked for. The counter uses the same three numbers `/council` shows (the
+    per-verb wipes, the operations they fell on, those locked out), through one helper
+    (`attemptsOf`) used by both, so the two can't disagree after a success clears an operation.
+    The meter lists only reviewers that have blocked, most first, as a bar of up to ten blocks
+    with the exact number beside it.
+12. **What is themed here.** Plain variants describe; themed variants only for the band header
+    ("Ready check"), the pane title ("The debate"), the wipe counter, the threat meter and the
+    epic drop. The new keys are `debate.*`, `band.*` and `epic.*`, none in a family Claude reads,
+    which the existing test holds to no themed variant. The epic's plain variants are empty,
+    because plain mode never reads them (and a plain string may not hold the theme's words).
+13. **The epic drop is cosmetic, themed only, and cannot touch a result.** It needs all of: the
+    call ran, a full council sat for this very call and approved it (a cached approve, a failed
+    council allowed once, and a shadow-mode block do not count), it was a push or a merge
+    (`rangeOf`), and the mode is themed. `finish()` stores `epicUntil` (the clock reading plus
+    eight seconds), raises the toast and arms a timer that clears it. The timer is only a redraw
+    trigger: a hot reload cancels pending timers, so the band hides the row on any draw at or
+    after `epicUntil`, and `clearEpic` clears the stored time only once it has passed (an early
+    timer cannot cancel a newer drop). All of it is caught, so a failure never changes what
+    `finish()` returns. No flash primitive exists, so none is faked.
+14. **The band is the full council's, and passes otherwise.** The `AbovePrompt` hook returns
+    `next(e)` while a survey holds the band, when no council of this view sits, and when no epic
+    row is due, so it takes no row it does not need. Single-member reviews never draw there. It
+    reads the clock, which is a `$` call and costs no hook budget, and the band is the same under
+    either transcript, so the sitting is matched to `view.agentId` like the pane; the epic row
+    belongs to the session, so either view shows it.
+15. **Surfaces, from the types.** `Pane` is raised on every surface; `AbovePrompt` and
+    `SessionMode` on terminal and desktop only (§1 rows j and k are corrected to say so). The
+    tests mount the pane on all four surfaces and the band on terminal and desktop. A mounted
+    drawing re-reads on its own after a `$.state` write (the `read` in a render hook subscribes
+    it), so a test mounts once and reads again. The kit mounts one instance per pane id.
+    Whether VS Code paints the pane is for the maintainer's live check.
+16. **No approval ahead of the permission check** (SPEC §22), as the review proposed (§5, item 8):
+    the mod registers no `tool.check` hook, which `claude plugin validate` shows and CI fails on,
+    and a test asserts that `$.tool.check` resolves to exactly what the bottom hook answers for an
+    allow, a review and a block call, with no review, question or process on the way.

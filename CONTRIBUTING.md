@@ -16,7 +16,7 @@ developer guide is [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Setup
 
-You need Claude Code 2.1.287 or later (the mod was built on 2.1.289 and checked on 2.1.291) and a
+You need Claude Code 2.1.287 or later (the mod was built on 2.1.289 and checked on 2.1.294) and a
 TypeScript compiler (`npm install -g typescript`, or use `npx tsc`). There are no runtime
 dependencies and no `node_modules`.
 

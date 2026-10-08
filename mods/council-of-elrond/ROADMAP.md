@@ -32,12 +32,12 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (273 after the 0.5.0 hardening)
+cd mods/council-of-elrond && claude plugin test .     # all tests (336 after Stage 6 part B)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
 
-- **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289** and checked on **2.1.291** from stage 5 (types regenerated then; the drift was additive, DESIGN.md header). If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts` under the skill's folder and names the path; don't write a mod folder, which would ask to hot-reload it into your session), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
+- **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289** and checked on **2.1.291** from stage 5 and **2.1.294** from stage 6 (types regenerated each time; the drift was additive, DESIGN.md header). If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts` under the skill's folder and names the path; don't write a mod folder, which would ask to hot-reload it into your session), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
 - **Keep the mod out of the session building it.** Don't load it into your own dev session (the skill's hot-reload folder, or `--plugin-dir` on the session you work in): it would gate your own tool calls.
 - **Live checks run headless.** Use `claude -p --plugin-dir ./mods/council-of-elrond "<prompt>"` with harmless commands, ideally in a throwaway `git init` folder, then clean it up along with the generated `.claude-plugin/types/` and `tsconfig.json` in the mod folder. `/council` output only shows with `--output-format stream-json --verbose` (as `system/ui_log`).
 
@@ -239,15 +239,15 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 
 ## Stage 6: theme, then UI (SPEC §17, in this order; drop what the API can't do)
 
-- [ ] **Theme strings:** add `themed` variants in `hooks/strings.ts`; a `plainMode` userConfig option (default off, i.e. themed). Themed messages: one line of flavour, then the plain reason and the safer alternative. Gandalf's block: "You shall not pass" style. Bypass is themed "Leeroy mode", and the escalation dialog is the "loot roll". Member names become the theme names (`who.*` entries).
-- [ ] **Debate pane:** `Pane` showing the proposal (the call) beside the reviewing member's verdict; reads `$.state`. Opened unasked only from 144 columns; `/council` opens it at any width.
-- [ ] **Council check:** for big operations, a ready-check row per member (tick or cross) in the `AbovePrompt` band (terminal + desktop).
-- [ ] **Wipe counter** in the band or the pane.
-- [ ] **Threat meter:** blocks per member (pane).
-- [ ] **Loot roll:** themed escalation text and labels (and optionally a `ui.render` hook on `AskUserQuestion`; a rewrite must still fit the tool's schema).
-- [ ] **Epic drop:** after a merge or push succeeds following a passed council check, a short magenta band row plus a toast saying "Legendary commit acquired", cleared by `$.clock.after`. No flash primitive exists. Cosmetic only.
-- [ ] Degrade cleanly: no colour dependence, and nothing drawn where nothing draws (VS Code, `-p`, SDK, cloud).
-- [ ] Tests: plain mode shows no theme text anywhere (extend the stage 1 test to every string and every drawn tree); mount UI through `$.ui.mount` on both `'terminal'` and `'desktop'`.
+- [x] **Theme strings:** add `themed` variants in `hooks/strings.ts`; a `plainMode` userConfig option (default off, i.e. themed). Themed messages: one line of flavour, then the plain reason and the safer alternative. Gandalf's block: "You shall not pass" style. Bypass is themed "Leeroy mode", and the escalation dialog is the "loot roll". Member names become the theme names (`who.*` entries).
+- [x] **Debate pane:** `Pane` showing the proposal (the call) beside the reviewing member's verdict; reads `$.state`. Opened unasked only from 144 columns; `/council` opens it at any width. *(Done: the pane is its own id, `council-debate`, a tab beside `/council`'s; `/council debate` opens it at any width; it draws per `view.agentId`; DESIGN §11.7-10.)*
+- [x] **Council check:** for big operations, a ready-check row per member (tick or cross) in the `AbovePrompt` band (terminal + desktop). *(Done: a row per member and per check while a full council sits; each symbol has a word.)*
+- [x] **Wipe counter** in the band or the pane. *(Done: in the pane only, so the band takes no row all session.)*
+- [x] **Threat meter:** blocks per member (pane). *(Done: a bar of up to ten blocks with the number as text.)*
+- [x] **Loot roll:** themed escalation text and labels (and optionally a `ui.render` hook on `AskUserQuestion`; a rewrite must still fit the tool's schema). The optional ui.render hook is dropped (review §5 item 5).
+- [x] **Epic drop:** after a merge or push succeeds following a passed council check, a short magenta band row plus a toast saying "Legendary commit acquired", cleared by `$.clock.after`. No flash primitive exists. Cosmetic only. *(Done: themed mode only; the row hides itself by `epicUntil` in state, and the timer is only a redraw trigger, since a hot reload cancels timers.)*
+- [x] Degrade cleanly: no colour dependence, and nothing drawn where nothing draws (VS Code, `-p`, SDK, cloud). *(Done: every symbol has a word; the pane is raised on every surface and the band on terminal and desktop, per the types; `/council debate` logs where nothing places it. Whether VS Code paints the pane is a live check.)*
+- [x] Tests: plain mode shows no theme text anywhere (extend the stage 1 test to every string and every drawn tree); mount UI through `$.ui.mount` on both `'terminal'` and `'desktop'`. *(Done: `tests/view.test.ts` and `tests/debate.test.ts`; the pane is mounted on terminal, desktop, VS Code and mobile, the band on terminal and desktop; three mutation checks recorded at the checkpoint.)*
 
 ## Final deliverables (SPEC §21–22)
 
@@ -260,16 +260,41 @@ ask → **Galadriel** → route → act → **after the tool runs**.
   - limits;
   - **glossary** of theme terms and plain names.
 - [ ] DESIGN.md: final `hooks:`/`calls:` lines, data flow, failure modes, and every decision.
-- [ ] Definition of done (§22):
-  - [ ] every §19 test passes;
-  - [ ] no path where a gated call runs after a reviewer failure without the user's answer;
-  - [ ] no path where the mod approves ahead of the permission check (no `tool.check` hook; assert in a test);
-  - [ ] plain mode shows no theme text;
+- [ ] Definition of done (§22, with the end-of-Stage-5 review's amendments):
+  - [ ] every §19 test passes, with a table in DESIGN.md mapping each §19 bullet to the test names that cover it ("fallback where nothing draws" and "no re-entry from the mod's own calls" each need a named owner test);
+  - [ ] in enforcing mode, no path where a gated call runs after a reviewer failure without the user's answer (shadow mode passes by design);
+  - [x] no path where the mod approves ahead of the permission check: CI fails if `claude plugin validate` lists a `tool.check` hook, and a behavioural test shows `$.tool.check` resolves to exactly the engine's own decision (Stage 6, `tests/debate.test.ts`);
+  - [x] plain mode shows no theme text: the string table, `/council` output, the dialog and the mounted pane and band trees (Stage 6);
   - [ ] with every model member disabled, rules, Gollum and escalation still work;
   - [ ] the README states the limits plainly.
-- [ ] Live interactive check by the user in a terminal: the dialog, the pane, the band, the indicator.
+- [ ] Live interactive check by the user in a terminal, screen by screen: the loot roll (Need, Pass, typed instruction, "Chat about this", dismiss) and its "allowed once" notice under Claude Code's prompt; the allow-rule offer after "allow once"; the secrets dialog with Greed and its confirm; the debate pane opening on its own at 144 columns and through `/council debate` below that, with a subagent's review in its view; the ready-check band during a `git push` with a project check; the epic drop row and toast after an approved push; the `council: Leeroy mode` and `council: shadow` labels; every `/council` subcommand in its pane; plain mode on the same screens; and whether VS Code paints the pane.
 
 ## Known follow-ups
+
+### Recommendations on the open items (end of Stage 6, pending the maintainer's decision)
+
+| Item | Recommendation |
+| :- | :- |
+| `.catch` and re-entry (2.1.294) | First, before any release: the live check above. If the mod's own `AskUserQuestion` arrives as re-entry, pass exactly that through (a guard on the tool name and the pending ask) and keep refusing every other re-entry. |
+| The ~40-case live eval | Run it once before 1.0, as a `claude plugin eval` suite under `mods/council-of-elrond/evals/` (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injections inside diffs, plus a council set). Roughly 40 to 120 reviews at about 1,000 tokens each. Record the results in DESIGN.md; keep it out of CI. Make it a definition-of-done item. |
+| Live UI checks (stages 2 to 6) | Fold them into the one screen-by-screen check above and run it once, at the end of Stage 6. |
+| Prompt-refusal wording | Re-check against the 2.1.294 binary (`/upgrade-types` step 5) as part of that live check; this session could not read the binary. |
+| A new branch's push has no range | Do it: diff against `<remote>/HEAD` when it exists. It is one more entry in Galadriel's fixed table, and first pushes of feature branches are the common case. |
+| Scan allowed calls for secrets | Do it for high-confidence findings only (refuse), never asking on an allowed call. The cost is a pattern scan of the command text. A literal token in an allowed `curl` currently reaches the network unscanned. Behaviour change: 0.6.0. |
+| An `exact` field in the rule schema | Not now. The `input` pin works and is tested; a schema change waits for a user asking to hand-edit such rules. |
+| The allow-rule offer after every "allow once" | Wait for feedback. If it is noisy, add a `/config` switch for the offer (smallest change). |
+| An allow rule pins text, not the folder | Document only (README, "What it does not protect against"); pinning the cwd needs a schema change. |
+| Migration tools' own files | Defer. Name the gap in the README; add per-tool lookups (Prisma first) only on request. |
+| Review time per council member | Drop: the sitting's time is what the user waits for. |
+| `auditMaxKb` above 4,096 | Nothing to do: the `/config` row's `max` is 3072, under the 4 MiB read cap. |
+| The council's cost (about 3 Opus reviews per push) | Keep the default; the README's cost section already names the knobs. |
+| `isReadOnly` unused | Leave it unused: trusting it to skip work would let the tool's own claim lower the gate. |
+| `$.ui.ask` in SDK and cloud hosts | Covered by the live check; until then the mod refuses where no surface is attached. |
+| Windows | Declare it unsupported in INSTALL.md (POSIX shell parsing, `HOME` only). |
+| Versioning | Release Stage 6 as 0.6.0 (a minor bump: the default text changed). |
+
+From the 2.1.294 types (Stage 6):
+- **`.catch` and re-entry.** 2.1.294 asks a hook's `.catch` handler, with `next.error.kind === 're-entry'` and `next.called` false, when the engine skips the hook because the event was raised beneath its own frame. Elrond's handler then refuses (fails closed). Verify live, in a terminal, that an escalation's "Allow once" still runs the call (the mod's own `$.ui.ask` must not be refused this way), and that a subagent's gated calls are still reviewed rather than refused. Only then decide whether the handler should pass the mod's own `AskUserQuestion` through.
 
 From stage 5:
 - **Live UI check (user):** the allow-rule offer after "allow once" (it can't show in `-p`: nobody to ask), "Add the rule" then the same call passing silently, "Not now" not re-offered, and `/council report` in the pane, in a terminal.
@@ -281,7 +306,7 @@ From stage 5:
 
 From stage 4:
 - **A push of a branch the remote doesn't have yet** has no range: the diff reviewer sits out, and Galadriel shows no commits. Diffing against `<remote>/HEAD` (the remote's default branch) when it exists would cover the common case.
-- **Esc during any review** (single or council) aborts the model calls, which then read as failures and may put a question to the user after they pressed Esc. Refusing at once when `next.signal.aborted` would be quieter.
+- ~~**Esc during any review** puts a question to the user after they pressed Esc~~ Done in 0.5.0 (DESIGN §10.9): Esc refuses plainly, with no failed attempt, round or dialog.
 - **The council's cost.** Every push now costs about three Opus reviews (~3,000 tokens). If that's too much, the knobs are the `/config` council model, "Full council for big operations", or `disableRules`-style removal of a default entry (not offered: lists only add).
 - **Live UI check (user):** the new `/config` rows (full council on/off, model, one at a time, project checks) and the council lines in `/council` and `/council test`, in a terminal.
 - **The ~40-case live eval** is still not run (needs the user's go-ahead); a council-specific set (pushes of unrelated commits, migrations without rollback, failing checks) could join it.

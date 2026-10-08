@@ -15,7 +15,7 @@ Public, MIT-licensed, open-source repository.
 
 ## Rules
 
-- `mods/types/claude-code.d.ts` (Claude Code 2.1.291) is the API's source of truth, ahead of docs
+- `mods/types/claude-code.d.ts` (Claude Code 2.1.294) is the API's source of truth, ahead of docs
   and the spec. Don't invent APIs. Don't edit that file; regenerate it (`/upgrade-types`).
 - Only `hooks/register.ts` touches `$`; everything else is pure and tested directly.
 - Every user-facing string lives in `hooks/strings.ts`. No text in logic.

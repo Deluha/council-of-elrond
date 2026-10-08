@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { APPROVE, auditLines, BLOCK, denyOf, REVISE, world } from './fixtures.js'
+import { APPROVE, auditLines, BLOCK, denyOf, KEEP_BLOCKED, REVISE, world } from './fixtures.js'
 
 const submit = ($: { prompt: { submit: (e: never) => Promise<unknown> } }, text: string) =>
   $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } } as never)
 
 describe('rounds', () => {
   test('two refusals use the rounds; a rephrased retry then goes to the user, not the model', async ($, on) => {
-    const w = world(on, { replies: [REVISE, BLOCK], answer: 'Keep blocked' })
+    const w = world(on, { replies: [REVISE, BLOCK], answer: KEEP_BLOCKED })
     on('prompt.submit', ($$, e) => ({ text: e.text }))
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf ./build' }))).toContain('Review rounds left on this operation: 1.')
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -r build/' }))).toContain('Review rounds left on this operation: 0.')
@@ -33,7 +33,7 @@ describe('rounds', () => {
 
 describe('failed attempts and lockout', () => {
   test('three failed attempts lock the operation out, with no model call or question', async ($, on) => {
-    const w = world(on, { replies: [BLOCK, BLOCK], answer: 'Keep blocked' })
+    const w = world(on, { replies: [BLOCK, BLOCK], answer: KEEP_BLOCKED })
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }) // block: 1
     await $.tool.call({ tool: 'Bash', command: 'rm -r build' }) // block: 2
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build/' }) // out of rounds, keep blocked: 3

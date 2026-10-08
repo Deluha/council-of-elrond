@@ -13,6 +13,13 @@ import type { ClassifyContext } from '../hooks/rules/classify.js'
  * `tool.call` chain (what runs is recorded, nothing executes).
  */
 
+/** The theme's own words: none may reach plain mode or anything Claude reads. */
+export const THEME =
+  /gandalf|legolas|aragorn|gimli|gollum|galadriel|elrond|boromir|mordor|middle-earth|shall not pass|leeroy|wipe|loot|raid|\bneed:|\bpass:|greed|legendary|epic|threat|ready check|precious|isengard|rivendell|\belf\b/i
+
+/** Member ids (`[gandalf]`, `[aragorn/git]`) are config keys the user types, not theme text. */
+export const withoutIds = (shown: string): string => shown.replace(/\[[a-z/]+\]/g, '')
+
 export const ROOT = '/work'
 export const HOME = '/home/me'
 
@@ -50,6 +57,11 @@ export const APPROVE = verdict('approve', 'Proportionate and requested.')
 export const BLOCK = verdict('block', 'Deletes the whole build cache.', 'Delete only build/tmp with rm -r build/tmp.')
 export const REVISE = verdict('revise', 'Too wide.', 'Run rm -r build/out instead.')
 
+/** The loot roll's labels, as the default (themed) mode offers them. */
+export const ALLOW_ONCE = 'Need: allow once'
+export const KEEP_BLOCKED = 'Pass: keep blocked'
+export const ALLOWLIST = 'Greed: add to allowlist'
+
 export type Asked = { question: string; options: readonly string[]; header: string | undefined }
 
 export type ProcessReply = { exitCode: number; stdout: string } | 'timeout'
@@ -73,6 +85,8 @@ export type World = {
   answers: string[]
   /** Model replies, in order; the last one repeats. */
   replies: ModelReply[]
+  /** A reply chosen by the request itself (its prompt), asked before `replies`; undefined falls through. */
+  replyFor: ((request: Record<string, unknown>) => ModelReply | undefined) | undefined
   /** What reached the tool (the bottom of the chain), envelope stripped. */
   ran: Record<string, unknown>[]
   asked: Asked[]
@@ -94,6 +108,12 @@ export type World = {
   ended: number
   notices: { id: string; text: string | undefined }[]
   panes: string[]
+  /** Every pane the mod opened, as it asked. */
+  opens: { id: string; title?: string; rows?: number; focus?: true }[]
+  /** Whether a surface draws the pane an open asks for (`isPlaced`). */
+  isPlaced: boolean
+  /** Whether an open is refused outright (the call rejects). */
+  isOpenRefused: boolean
   statuses: (string | undefined)[]
   configSets: { key: string; value: unknown }[]
   commands: string[]
@@ -110,6 +130,8 @@ export function world(
     cwdFails?: boolean
     /** A mocked clock (`w.clock`) answers `$.clock`; else `$.clock.now` reads real time. */
     isClockMocked?: boolean
+    /** The engine's own band above the prompt, beneath the plugin: it draws "engine band". */
+    isBandDrawn?: boolean
   } = {},
 ): World {
   const w: World = {
@@ -121,9 +143,10 @@ export function world(
     dirs: new Set([ROOT, `${ROOT}/src`, `${ROOT}/build`, HOME, '/', '/etc', `${ROOT}/.claude`]),
     links: new Map(),
     surfaces: setup.surfaces ?? ['terminal'],
-    answer: setup.answer ?? 'Keep blocked',
+    answer: setup.answer ?? KEEP_BLOCKED,
     answers: setup.answers ?? [],
     replies: setup.replies ?? [APPROVE],
+    replyFor: undefined,
     ran: [],
     asked: [],
     modelRequests: [],
@@ -139,6 +162,9 @@ export function world(
     ended: 0,
     notices: [],
     panes: [],
+    opens: [],
+    isPlaced: true,
+    isOpenRefused: false,
     statuses: [],
     configSets: [],
     commands: [],
@@ -218,13 +244,21 @@ export function world(
       if (!isDone) w.ended++
     }
   })
+  if (setup.isBandDrawn === true) {
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return h(Text, null, 'engine band') as never
+    })
+  }
   on('ui.notice', ($, e) => {
     w.notices.push({ id: e.tool_use_id, text: e.text })
     return { value: undefined }
   })
   on('ui.open', ($, e) => {
     w.panes.push(e.id)
-    return { value: { isPlaced: true } }
+    w.opens.push({ id: e.id, ...(e.title !== undefined && { title: e.title }), ...(e.rows !== undefined && { rows: e.rows }), ...(e.focus !== undefined && { focus: e.focus }) })
+    if (w.isOpenRefused) return { deny: 'no room' }
+    return { value: w.isPlaced ? { isPlaced: true } : ({ isPlaced: false, reason: 'narrow' } as never) }
   })
   on('ui.status', ($, e) => {
     w.statuses.push(e.text)
@@ -254,7 +288,8 @@ export function world(
       // Past its own timeout, the request is abandoned.
       if (typeof e.timeoutMs === 'number' && delay >= e.timeoutMs) return { value: { isAnswered: false, reason: 'aborted', usage: USAGE } as never }
     }
-    const reply = w.replies.length > 1 ? w.replies.shift() : w.replies[0]
+    const chosen = w.replyFor?.(e as unknown as Record<string, unknown>)
+    const reply = chosen ?? (w.replies.length > 1 ? w.replies.shift() : w.replies[0])
     if (reply === undefined || reply === 'refuse-request') return { deny: 'model is blocked by policy' }
     return { value: reply as never }
   })

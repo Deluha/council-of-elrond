@@ -11,7 +11,7 @@ import { text } from '../strings.js'
 import type { StringKey } from '../strings.js'
 import type { ModelChoice } from './models.js'
 import type { Operation } from './operations.js'
-import { KEY_WIPE_CAP } from './operations.js'
+import { attemptsOf } from './operations.js'
 import type { Route, Seat } from './routing.js'
 
 /**
@@ -31,6 +31,7 @@ export type CouncilCommand =
   | { kind: 'model'; slot: string; model: string; save: boolean }
   | { kind: 'reload' }
   | { kind: 'report' }
+  | { kind: 'debate' }
   | { kind: 'usage'; key: StringKey; params?: Record<string, string> }
 
 export type Output = { title: string; lines: string[] }
@@ -85,6 +86,8 @@ export function parseCouncil(args: string): CouncilCommand {
       return { kind: 'reload' }
     case 'report':
       return { kind: 'report' }
+    case 'debate':
+      return { kind: 'debate' }
     default:
       return { kind: 'usage', key: 'cmd.unknown', params: { sub } }
   }
@@ -114,8 +117,7 @@ const ZERO_COUNTS = { approved: 0, revised: 0, blocked: 0, failed: 0 }
 
 export function statusOutput(input: StatusInput): Output {
   const { session } = input
-  const ops = Object.values(session.ops)
-  const wipes = Object.values(session.verbWipes).reduce((sum, n) => sum + n, 0)
+  const attempts = attemptsOf(session)
   const typical = median(session.reviewMs)
   const onOff = (on: boolean): string => text(on ? 'cmd.on' : 'cmd.off')
   return {
@@ -149,7 +151,7 @@ export function statusOutput(input: StatusInput): Output {
       }),
       text('cmd.memberCode', { who: text('who.gollum'), state: onOff(input.gollumEnabled) }),
       text('cmd.memberCode', { who: text('who.galadriel'), state: onOff(input.galadrielEnabled) }),
-      text('cmd.attempts', { count: wipes, ops: ops.length, locked: ops.filter(op => op.wipes >= KEY_WIPE_CAP).length }),
+      text('cmd.attempts', attempts),
       text('cmd.tokens', { spent: session.tokensSpent, budget: input.tokenBudget }),
       typical === undefined
         ? text('cmd.noReviews')

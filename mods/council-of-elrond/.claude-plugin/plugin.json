@@ -193,6 +193,13 @@
       "default": 1024,
       "min": 16,
       "max": 3072
+    },
+    "plainMode": {
+      "type": "boolean",
+      "title": "Plain mode",
+      "description": "On: no theme text anywhere (names, flavour, the loot roll). Off: themed. Claude always reads plain refusals.",
+      "required": false,
+      "default": false
     }
   }
 }

@@ -9,7 +9,7 @@ import { suggestRule } from '../hooks/elrond/suggest.js'
 import type { Suggested } from '../hooks/elrond/suggest.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
-import { auditLines, CONTEXT, denyOf, ROOT, SHIPPED_COMPILED, USAGE, world } from './fixtures.js'
+import { ALLOW_ONCE, auditLines, CONTEXT, denyOf, KEEP_BLOCKED, ROOT, SHIPPED_COMPILED, USAGE, world } from './fixtures.js'
 
 const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
 const NONE = { hadSecret: false, declined: [] as string[] }
@@ -156,12 +156,14 @@ describe('writing a rule to the rules file', () => {
 
 describe('the offer after "allow once"', () => {
   test('shows the exact JSON; written only on "Add the rule", then reloaded and honoured', async ($, on) => {
-    const w = world(on, { answers: ['Allow once', 'Add the rule'], answer: 'Keep blocked' })
+    const w = world(on, { answers: [ALLOW_ONCE, 'Add the rule'], answer: KEEP_BLOCKED })
     expect(await $.tool.call({ tool: 'Bash', command: 'sudo apt update' })).toEqual({ result: 'ran' })
     expect(w.asked).toHaveLength(2)
     expect(w.asked[1]?.options).toEqual(['Add the rule', 'Not now'])
     const rules = JSON.parse(w.files.get(RULES) ?? '{}') as { rules: Rule[] }
     expect(rules.rules).toHaveLength(1)
+    // Written to the project's file, so it reads plain in every mode.
+    expect(rules.rules[0]?.reason).toBe('You allowed this exact call after the council stopped it, and added this rule.')
     // The dialog showed the rule exactly as written.
     expect(w.asked[1]?.question).toContain(JSON.stringify(rules.rules[0], null, 2))
     expect(auditLines(w)[0]).toMatchObject({ decision: 'allow-once', outcome: 'ran', ruleAdded: 'allow-apt-update' })
@@ -175,58 +177,58 @@ describe('the offer after "allow once"', () => {
   })
 
   test('"Not now" writes nothing, and the same pattern is not offered again this session', async ($, on) => {
-    const w = world(on, { answers: ['Allow once', 'Not now', 'Allow once'], answer: 'Keep blocked' })
+    const w = world(on, { answers: [ALLOW_ONCE, 'Not now', ALLOW_ONCE], answer: KEEP_BLOCKED })
     await $.tool.call({ tool: 'Bash', command: 'sudo apt update' })
     expect(w.files.has(RULES)).toBe(false)
     await $.tool.call({ tool: 'Bash', command: 'sudo apt update' })
-    expect(w.asked.map(asked => asked.options[0])).toEqual(['Allow once', 'Add the rule', 'Allow once'])
+    expect(w.asked.map(asked => asked.options[0])).toEqual([ALLOW_ONCE, 'Add the rule', ALLOW_ONCE])
     expect(w.files.has(RULES)).toBe(false)
     expect(auditLines(w)[0]?.ruleAdded).toBeUndefined()
   })
 
   test('dismissing the offer writes nothing and the call still ran', async ($, on) => {
-    const w = world(on, { answers: ['Allow once', 'dismiss'] })
+    const w = world(on, { answers: [ALLOW_ONCE, 'dismiss'] })
     expect(await $.tool.call({ tool: 'Bash', command: 'sudo apt update' })).toEqual({ result: 'ran' })
     expect(w.files.has(RULES)).toBe(false)
   })
 
   test('after a reviewer failure and "allow once", the offer comes too', async ($, on) => {
-    const w = world(on, { answers: ['Allow once', 'Add the rule'], replies: [{ isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: USAGE }] })
+    const w = world(on, { answers: [ALLOW_ONCE, 'Add the rule'], replies: [{ isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: USAGE }] })
     await $.tool.call({ tool: 'Bash', command: 'rm -r build' })
     const rules = JSON.parse(w.files.get(RULES) ?? '{}') as { rules: Rule[] }
     expect(rules.rules[0]).toMatchObject({ id: 'allow-rm-r-build', command: '^rm -r build$' })
   })
 
   test('never for a protected path', async ($, on) => {
-    const w = world(on, { answer: 'Allow once' })
+    const w = world(on, { answer: ALLOW_ONCE })
     expect(await $.tool.call({ tool: 'Bash', command: 'cat .env' })).toEqual({ result: 'ran' })
     expect(w.asked).toHaveLength(1)
     expect(w.files.has(RULES)).toBe(false)
   })
 
   test('never for a call with a secrets finding, even a low one allowed once', async ($, on) => {
-    const w = world(on, { answer: 'Allow once' })
+    const w = world(on, { answer: ALLOW_ONCE })
     await $.tool.call({ tool: 'Bash', command: 'sudo deploy --password="hunter2xyz"' })
     expect(w.asked).toHaveLength(1)
     expect(w.files.has(RULES)).toBe(false)
   })
 
   test('never for a block-tier match: nothing is asked at all', async ($, on) => {
-    const w = world(on, { answer: 'Allow once' })
+    const w = world(on, { answer: ALLOW_ONCE })
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf ~' }))).toContain('(block)')
     expect(w.asked).toEqual([])
     expect(w.files.has(RULES)).toBe(false)
   })
 
   test('never when the person refused the call at Claude Code\'s own prompt', async ($, on) => {
-    const w = world(on, { answer: 'Allow once' })
+    const w = world(on, { answer: ALLOW_ONCE })
     w.toolResult = { result: 'refused', isError: true, text: "The user doesn't want to proceed with this tool use. The tool use was rejected." }
     await $.tool.call({ tool: 'Bash', command: 'sudo apt update' })
     expect(w.asked).toHaveLength(1)
   })
 
   test('a broken rules file is left alone: nothing written, the user told', async ($, on) => {
-    const w = world(on, { answers: ['Allow once', 'Add the rule'] })
+    const w = world(on, { answers: [ALLOW_ONCE, 'Add the rule'] })
     w.files.set(RULES, '{ "schemaVersion": 1, ')
     expect(await $.tool.call({ tool: 'Bash', command: 'sudo apt update' })).toEqual({ result: 'ran' })
     expect(w.files.get(RULES)).toBe('{ "schemaVersion": 1, ')
