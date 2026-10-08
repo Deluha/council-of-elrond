@@ -14,7 +14,8 @@ How to finish the mod from where it stands, written so a new dev session can pic
 | 3 | Legolas, Aragorn (git and database profiles), routing | ✅ Done: [Deluha/council-of-elrond#3](https://github.com/Deluha/council-of-elrond/pull/3) |
 | 4 | Full council with Gimli | ✅ Done: [Deluha/council-of-elrond#4](https://github.com/Deluha/council-of-elrond/pull/4) |
 | 5 | Rule and allowlist suggestions, `/council report` | ✅ Done: [Deluha/council-of-elrond#5](https://github.com/Deluha/council-of-elrond/pull/5) |
-| 6 | Theme strings, then UI features in order | ⬜ Next |
+| 6 | Theme strings, then UI features in order | ✅ Done: [Deluha/council-of-elrond#11](https://github.com/Deluha/council-of-elrond/pull/11) |
+| — | Final deliverables (SPEC §21–22) | ✅ At the checkpoint ([DESIGN.md §12](./DESIGN.md)); the terminal check is the maintainer's |
 
 **Review at the end of Stage 5:** [docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md) holds the
 findings (a 0.5.x hardening list) and proposed amendments to Stage 6 and the definition of done,
@@ -32,7 +33,7 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (336 after Stage 6 part B)
+cd mods/council-of-elrond && claude plugin test .     # all tests (413 after the final deliverables)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
@@ -251,7 +252,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 
 ## Final deliverables (SPEC §21–22)
 
-- [ ] README complete:
+- [x] README complete: *(done; a Modes section added, the rest was in place)*
   - loading (`--plugin-dir`, install);
   - editing rules with examples;
   - each mode and command;
@@ -259,14 +260,14 @@ ask → **Galadriel** → route → act → **after the tool runs**.
   - expected token cost (update with stage 3–4 figures);
   - limits;
   - **glossary** of theme terms and plain names.
-- [ ] DESIGN.md: final `hooks:`/`calls:` lines, data flow, failure modes, and every decision.
-- [ ] Definition of done (§22, with the end-of-Stage-5 review's amendments):
-  - [ ] every §19 test passes, with a table in DESIGN.md mapping each §19 bullet to the test names that cover it ("fallback where nothing draws" and "no re-entry from the mod's own calls" each need a named owner test);
-  - [ ] in enforcing mode, no path where a gated call runs after a reviewer failure without the user's answer (shadow mode passes by design);
+- [x] DESIGN.md: final `hooks:`/`calls:` lines, data flow, failure modes, and every decision. *(§2 re-run, §4 the re-entry row, §12)*
+- [x] Definition of done (§22, with the end-of-Stage-5 review's amendments): *(evidence in DESIGN.md §12.2)*
+  - [x] every §19 test passes, with a table in DESIGN.md mapping each §19 bullet to the test names that cover it ("fallback where nothing draws" and "no re-entry from the mod's own calls" each need a named owner test); *(DESIGN.md §12.3; owners in `tests/done.test.ts`)*
+  - [x] in enforcing mode, no path where a gated call runs after a reviewer failure without the user's answer (shadow mode passes by design); *(tests/done.test.ts, mutation-checked)*
   - [x] no path where the mod approves ahead of the permission check: CI fails if `claude plugin validate` lists a `tool.check` hook, and a behavioural test shows `$.tool.check` resolves to exactly the engine's own decision (Stage 6, `tests/debate.test.ts`);
   - [x] plain mode shows no theme text: the string table, `/council` output, the dialog and the mounted pane and band trees (Stage 6);
-  - [ ] with every model member disabled, rules, Gollum and escalation still work;
-  - [ ] the README states the limits plainly.
+  - [x] with every model member disabled, rules, Gollum and escalation still work; *(tests/done.test.ts, mutation-checked)*
+  - [x] the README states the limits plainly.
 - [ ] Live interactive check by the user in a terminal, screen by screen: the loot roll (Need, Pass, typed instruction, "Chat about this", dismiss) and its "allowed once" notice under Claude Code's prompt; the allow-rule offer after "allow once"; the secrets dialog with Greed and its confirm; the debate pane opening on its own at 144 columns and through `/council debate` below that, with a subagent's review in its view; the ready-check band during a `git push` with a project check; the epic drop row and toast after an approved push; the `council: Leeroy mode` and `council: shadow` labels; every `/council` subcommand in its pane; plain mode on the same screens; and whether VS Code paints the pane.
 
 ## Known follow-ups
@@ -275,7 +276,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 
 | Item | Recommendation |
 | :- | :- |
-| `.catch` and re-entry (2.1.294) | First, before any release: the live check above. If the mod's own `AskUserQuestion` arrives as re-entry, pass exactly that through (a guard on the tool name and the pending ask) and keep refusing every other re-entry. |
+| `.catch` and re-entry (2.1.294) | Half settled live (DESIGN §12.1): a subagent's gated calls are reviewed, in the background and the foreground, not refused. Left for the terminal check: whether the mod's own `AskUserQuestion` arrives as re-entry ("Allow once" must still run the call). If it does, pass exactly that through (a guard on the tool name and the pending ask) and keep refusing every other re-entry. |
 | The ~40-case live eval | Run it once before 1.0, as a `claude plugin eval` suite under `mods/council-of-elrond/evals/` (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injections inside diffs, plus a council set). Roughly 40 to 120 reviews at about 1,000 tokens each. Record the results in DESIGN.md; keep it out of CI. Make it a definition-of-done item. |
 | Live UI checks (stages 2 to 6) | Fold them into the one screen-by-screen check above and run it once, at the end of Stage 6. |
 | Prompt-refusal wording | Re-check against the 2.1.294 binary (`/upgrade-types` step 5) as part of that live check; this session could not read the binary. |
@@ -294,7 +295,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 | Versioning | Release Stage 6 as 0.6.0 (a minor bump: the default text changed). |
 
 From the 2.1.294 types (Stage 6):
-- **`.catch` and re-entry.** 2.1.294 asks a hook's `.catch` handler, with `next.error.kind === 're-entry'` and `next.called` false, when the engine skips the hook because the event was raised beneath its own frame. Elrond's handler then refuses (fails closed). Verify live, in a terminal, that an escalation's "Allow once" still runs the call (the mod's own `$.ui.ask` must not be refused this way), and that a subagent's gated calls are still reviewed rather than refused. Only then decide whether the handler should pass the mod's own `AskUserQuestion` through.
+- **`.catch` and re-entry.** 2.1.294 asks a hook's `.catch` handler, with `next.error.kind === 're-entry'` and `next.called` false, when the engine skips the hook because the event was raised beneath its own frame. Elrond's handler then refuses (fails closed). Verify live, in a terminal, that an escalation's "Allow once" still runs the call (the mod's own `$.ui.ask` must not be refused this way), and that a subagent's gated calls are still reviewed rather than refused. Only then decide whether the handler should pass the mod's own `AskUserQuestion` through. The subagent half is verified (DESIGN §12.1).
 
 From stage 5:
 - **Live UI check (user):** the allow-rule offer after "allow once" (it can't show in `-p`: nobody to ask), "Add the rule" then the same call passing silently, "Not now" not re-offered, and `/council report` in the pane, in a terminal.

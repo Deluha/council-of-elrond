@@ -1,6 +1,6 @@
 # council-of-elrond: design
 
-Status: **Stage 6** (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop).
+Status: **final deliverables** (SPEC §21–22, §12 below), after Stage 6 (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
 Built against Claude Code **2.1.289**, checked against **2.1.291** from Stage 5 and **2.1.294** from
 Stage 6. The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.294's) and
@@ -12,9 +12,9 @@ caching) accepted as a model request's `prompt` and `system` beside plain string
 tool's spec type, a `workflow` field on agent records, and a test-kit `mock.session`. One semantic
 addition: a `.catch` handler is now also asked, with `next.error.kind` `re-entry` and `called`
 false, where the engine does not run a hook because the event was raised beneath that hook's own
-frame. Elrond's handler refuses whenever `called` is false, so such a call fails closed; whether
-the mod's own `$.ui.ask` (an `AskUserQuestion` call) ever arrives this way is unverified live (the
-test kit's escalation tests pass unchanged). Tracked in ROADMAP.md, "Known follow-ups".
+frame. Elrond's handler refuses whenever `called` is false, so such a call fails closed; a
+subagent's gated call does not arrive this way: it is reviewed (verified live, §12.1). Whether the
+mod's own `$.ui.ask` (an `AskUserQuestion` call) ever does is for the maintainer's terminal check.
 
 ## 1. Step 0 findings
 
@@ -59,6 +59,8 @@ calls: $.clock.after (via epicDrop, runCheck), $.clock.now, $.command.register,
 env reads: HOME
 state: council-of-elrond.session, council-of-elrond.panel
 ```
+
+Re-run for the final deliverables on 2.1.294: the lines are unchanged.
 
 There is no `tool.check` hook: the mod never takes part in the permission decision. The processes it
 starts are read-only `git` commands from Galadriel's table (§6, §8), and, for a big operation, the
@@ -125,6 +127,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | :- | :- |
 | Hook throws before the call runs | `.catch` refuses ("fails closed"). |
 | Hook throws after the call ran | `.catch` replays the real result (`next.called`); the call is not re-run and Claude isn't told a call that ran was refused. |
+| A `tool.call` raised beneath the hook's own frame (`re-entry`, from 2.1.294) | `.catch` answers with `called` false and refuses. A subagent's calls do not arrive this way, in the background or the foreground (verified live, §12.1). |
 | Hook overruns its 10 s own-time budget | **Probe result: the engine did not cut the hook off in the test kit, even with `.catch`.** A hook that overran and then called `next(e)` ran the call. Elrond therefore passes calls only through `proceed()`, which refuses when `next.budget.remainingMs` < 1 s. The hook's own work is bounded to make this unlikely: commands over 20,000 characters aren't parsed (review), parse depth ≤ 4, ≤ 200 parts. |
 | Model error, timeout (`timeoutMs`), empty reply, malformed verdict, request refused | Escalate to you; "keep blocked" refuses. |
 | Token budget spent / no enabled member can take the call (the named one and Gandalf off) | Escalate without a model call. |
@@ -418,3 +421,70 @@ workaround. These are in the README's "Known gaps" and the review's §4.9.
     the mod registers no `tool.check` hook, which `claude plugin validate` shows and CI fails on,
     and a test asserts that `$.tool.check` resolves to exactly what the bottom hook answers for an
     allow, a review and a block call, with no review, question or process on the way.
+
+## 12. Final deliverables (SPEC §21–22)
+
+### 12.1 Live checks on 2.1.294 (headless)
+
+Run with `claude -p --plugin-dir … --output-format stream-json --verbose` in a throwaway
+`git init` repository, on Claude Code 2.1.294, with default permissions.
+
+1. **A subagent's gated call is reviewed, not refused by the `re-entry` path.** The main
+   conversation called the `Agent` tool (allowed, so Elrond passed it through `next(e)`); the
+   subagent ran `ls` and then `rm -r build`. `ls` ran. `rm -r build` reached Elrond's `tool.call`
+   hook, was classified (`shell-delete`, review), reviewed by the destructive-operations reviewer
+   on Sonnet (approve, 980 tokens, 1.9 s), passed to `next(e)`, and was then denied by Claude
+   Code's own permission check, as `-p` denies with nobody asked (`outcome:
+   "denied-by-permission"`). The audit line carries the subagent's `agentId`. The same held with
+   the subagent explicitly in the foreground (`run_in_background: false`, the engine reporting
+   `is_backgrounded: false`): reviewed (987 tokens, 2.5 s), then denied by the permission check.
+   So a subagent's call is not raised "beneath" the hook's own frame: the `.catch` handler's
+   refusal on `re-entry` did not fire, and nothing in the handler changes.
+2. Two model reviews ran in all (about 1,970 tokens).
+
+What this does **not** settle: whether the mod's own `$.ui.ask` (an `AskUserQuestion` call raised
+inside the hook) ever reaches the `.catch` as `re-entry`. `-p` has no surface, so the mod refuses
+before asking, and that path cannot be reached headless. The test kit runs the escalation tests
+unchanged, and `done.test.ts` proves the question never reaches the gate (a project rule blocking
+`AskUserQuestion` does not stop it). The maintainer's terminal check ("Allow once" runs the call)
+settles it live.
+
+### 12.2 Definition of done: evidence
+
+| Item (SPEC §22, with the end-of-Stage-5 amendments) | Evidence |
+| :- | :- |
+| Every §19 test passes | The table in §12.3; `claude plugin test` passes (413 tests across 18 files). |
+| No path where a gated call runs after a reviewer failure without your answer (enforcing) | `done.test.ts`, "in enforcing mode, a reviewer failure never runs a gated call without your answer": every failure kind × every answer that is not "allow once", the full council blocked only for want of verdicts, a spent budget and a switched-off reviewer with nobody to ask; plus `.catch` refusing before `next` (`pipeline.test.ts`, "the hook failing before the call runs refuses it") and Esc (§10.9). Mutation-checked: making the dismissed, chat and nobody-to-ask answers allow the call failed 41 tests, these among them. Shadow mode passes by design (§6.10). |
+| No approval ahead of the permission check | §11.16: no `tool.check` hook (CI), and `debate.test.ts`, "$.tool.check resolves to exactly what the bottom hook answers". |
+| Plain mode shows no theme text | §11.2–4: `theme.test.ts`, `view.test.ts`, `debate.test.ts` (plain mode). |
+| With every model member disabled, the rules, the secrets scan and escalation still work | `done.test.ts`, "with every model member disabled, …": block, allow, ask, protected path, review shell call, Edit, `psql`, `git push` (big operation), a high and a low secret, no model request. Mutation-checked: making "keep blocked" allow the call failed 37 tests, every keep-blocked case here among them. |
+| The README states the limits plainly | README "Known gaps in shell parsing" and "What it does not protect against" (bypass added). |
+
+### 12.3 SPEC §19, bullet by bullet
+
+Test names are given as `file › describe › test`. `done.test.ts` holds the owner tests added for
+the final deliverables.
+
+| §19 bullet | Covered by |
+| :- | :- |
+| Rules: allow, review, ask, block, compound, protected paths, unmatched calls, script execution | `rules.test.ts › tiers` (allow: read-only commands and unmatched calls pass; review: state-changing commands; review: script execution, inline code and evaluation; ask: privileges and protected paths; block: recursive deletes…, force pushes…, DROP or TRUNCATE…; compound: the strictest part wins, nested parts included); `rules.test.ts › protected paths: …` (4); `pipeline.test.ts › allow`, `› block` |
+| Routing: each member and profile gets its triggers, Gandalf as fallback | `routing.test.ts › each member gets its own triggers` (4), `› Gandalf is the fallback` (6), `› in the pipeline › a switched-off member falls back to Gandalf`, `› with the member and Gandalf off, the call comes to the user` |
+| Model members: approve, revise, block for each | `routing.test.ts › in the pipeline › <member>: approve runs the call unchanged`, `› <member>: revise and block refuse, naming the member` (per member and profile); `pipeline.test.ts › review by Gandalf` (approve, revise, block); `gandalf.test.ts › verdict parsing › approve, revise and block parse` |
+| Approve path goes through `next`, nothing pre-approved | `pipeline.test.ts › review by Gandalf › approve: the call goes through next with its arguments unchanged`; `› allow › the mod adds no permission decision of its own`; `debate.test.ts › no approval ahead of the permission check` |
+| Arguments never rewritten | `pipeline.test.ts › approve: … arguments unchanged`, `› escalation › ask tier: allow once runs the call unchanged`; `council.test.ts › every member sits on the council model, in parallel, and approve runs the call unchanged`; `routing.test.ts › <member>: approve runs the call unchanged` |
+| Refusal text contains every required field | `pipeline.test.ts` (`REFUSAL_FIELDS` asserted on block, revise and reviewer block); `rounds.test.ts › two refusals use the rounds…` (rounds left); `theme.test.ts › refusalText names the role, never the character` |
+| Rounds: 2-round cap and escalation, rephrased retry | `rounds.test.ts › rounds › two refusals use the rounds; a rephrased retry then goes to the user, not the model`, `› a typed instruction resets the rounds`; `operations.test.ts › two non-approve verdicts use up the rounds; approve uses none` |
+| Escalation: each answer; the rule suggestion written only on confirm | `pipeline.test.ts › escalation` (allow once, typed text, dismissed, nobody to ask); `done.test.ts › "Chat about this"`; `theme.test.ts › the loot roll` (Need, Pass); `suggest.test.ts › the offer after "allow once"` (written only on "Add the rule"; "Not now"; dismissing) |
+| Failure paths: reviewer error, timeout, malformed verdict, budget exhausted | `pipeline.test.ts › fail closed` (API error, timeout, empty reply, malformed verdict, refused request; token budget spent; budget of zero; Gandalf off; the hook failing); `done.test.ts › in enforcing mode, a reviewer failure never runs a gated call without your answer` (62) |
+| Full council: strictest wins, one member failing, Gimli failing, shared deadline | `council.test.ts › combining verdicts` (4), `› the full council in the pipeline › strictest wins…`, `› one member failing blocks…`, `› one member failing beside a real block refuses…`, `› the project checks › a failing check blocks…`, `› the shared deadline` (3) |
+| Gollum: high and low, redaction, allowlist, written only on confirm | `gollum.test.ts › the scan` (7), `› in the pipeline › a high finding is refused without asking anyone, and nothing leaks`, `› a low finding asks with a redacted snippet…`, `› the allowlist is written only after the second confirm, then honoured`, `› cancelling the confirm writes nothing and refuses` |
+| Galadriel: never runs the proposed command, timeout | `galadriel.test.ts › in the pipeline › never runs the proposed command; the preview reaches the reviewer`, `› a timeout gives no preview, and the review goes on`; `› the plan comes from the table alone` (7) |
+| Gimli: only configured commands, timeout | `council.test.ts › the project checks › only the configured commands run, by argv, in the project root, and only for big operations`, `› a check past its own timeout is ended and blocks…` |
+| Wipes: counting, lockout, resets | `rounds.test.ts › failed attempts and lockout` (7); `operations.test.ts › three failed attempts lock the key; five lock the verb`, `› success clears its own operation, and a new prompt clears them all` |
+| Cache: approve reused, block not reused | `rounds.test.ts › cache › an approve is reused for the identical call this prompt…`, `› a block or revise is never reused` |
+| Modes: shadow, bypass, plain | `commands.test.ts › shadow mode` (4), `› bypass › /council off passes gated calls unreviewed and logged…`; `theme.test.ts › the strings table › plain mode carries no theme text`, `› plain mode (the plainMode option)` (3); `debate.test.ts › plain mode`; `view.test.ts › plain rows carry no theme text…` |
+| Config: broken file, unknown schema version, overrides win | `config.test.ts › a file that is not JSON falls back…`, `› an unknown schema version is a broken config`, `› a valid file merges: project rules first…`; `pipeline.test.ts › config › a broken overrides file warns and the shipped rules still enforce`; `rules.test.ts › project overrides` (4) |
+| Fallback where nothing draws | **Owner:** `done.test.ts › fallback where nothing draws` (3). Also `pipeline.test.ts › where nothing draws, nobody is asked…`, `commands.test.ts › its output never reaches Claude…`, `debate.test.ts › where nothing draws it is not opened…` |
+| Audit log: fields, no contents, no secrets, rotation | `pipeline.test.ts › audit log › records every field, and never contents or secrets`, `› rotates by size`; `operations.test.ts › a secret in a target never reaches the key`; `council.test.ts › a failing check blocks… none of its output reaches the audit log` |
+| No re-entry from the mod's own calls | **Owner:** `done.test.ts › no re-entry from the mod's own calls` (3: questions; previews and model requests; project checks and writes), each with a project rule blocking `AskUserQuestion`. Also `pipeline.test.ts › the mod's own question does not re-enter the gate`. Live: §12.1. |
+| Commands: `/council test` runs nothing, `/council report` reads the log | `commands.test.ts › test classifies only: no process, no model, nothing runs`; `council.test.ts › /council test names the full council… and runs nothing`; `report.test.ts` (11, over rotated files, unparseable lines and an unreadable file) |
