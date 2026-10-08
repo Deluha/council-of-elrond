@@ -256,6 +256,8 @@ const USER_REFUSAL: readonly RegExp[] = [
  */
 const AUTOMATIC_DENIAL: readonly RegExp[] = [
   /needs? approval/i,
+  // Seen on 2.1.294: a `git push` in `-p` ("This command requires approval").
+  /\brequires? approval\b/i,
   /requested permissions? to (use|write|edit|read|run)/i,
   /haven'?t granted it yet/i,
   /permission to use .+ has been denied/i,

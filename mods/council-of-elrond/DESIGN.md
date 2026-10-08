@@ -188,7 +188,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 11. **`/council model`.** A one-request probe (16 tokens) checks the model first. `--save` writes only the `gandalf` row (the only `/config` model row so far) and only picker values; anything else stays session-only and says so.
 12. **`/council` output** is drawn in a pane (`$.ui.open` from the command, so it seats at any width) where a surface draws, else as `ui.log` lines. Verified live: a plain `claude -p "/council …"` prints nothing, and in stream-json the lines arrive as `system/ui_log` messages; the command's result carries no text.
 13. **The mode label** is added to `SessionMode` (terminal and desktop). `$.ui.status` carries it only when a surface without that site (VS Code, mobile) is attached, so the terminal doesn't show it twice.
-14. **Permission-check outcomes, told apart by wording** (ROADMAP decision 12). Your refusal at Claude Code's own prompt ("The user doesn't want to proceed with this tool use…", "…take this action right now", read from the 2.1.289 binary) is `refused-by-user` and counts as a failed attempt, whatever `toolErrorsAreWipes` says. An automatic denial ("… needs approval …", verified live in `-p`; deny-rule wording) is `denied-by-permission` and never counts. Text matching neither is an ordinary tool error. The user-refusal wording is checked first.
+14. **Permission-check outcomes, told apart by wording** (ROADMAP decision 12). Your refusal at Claude Code's own prompt ("The user doesn't want to proceed with this tool use…", "…take this action right now", read from the 2.1.289 binary) is `refused-by-user` and counts as a failed attempt, whatever `toolErrorsAreWipes` says. An automatic denial ("… needs approval …", verified live in `-p`; deny-rule wording; and "This command requires approval", seen on 2.1.294 for a `git push` in `-p`, §12.1 item 4) is `denied-by-permission` and never counts. Text matching neither is an ordinary tool error. The user-refusal wording is checked first.
 15. **Redaction fixes.** The assignment pattern now matches JSON-escaped quotes (`\"hunter2\"`), which Stage 1 missed in file-tool call text, and leaves an already-redacted value alone, so redacting twice is stable.
 16. **Identifiers stay as written.** Plain-mode output names member ids where you type them (`/council model gandalf …`, `[gandalf]` in the status), since they are config keys. The string table itself holds no theme text (tested).
 
@@ -456,8 +456,8 @@ Run with `claude -p --plugin-dir … --output-format stream-json --verbose` in a
    read "This command requires approval", which matches neither the user-refusal nor the
    automatic-denial patterns (§6.14), so the line's outcome is `error` rather than
    `denied-by-permission`, and it counts as a failed attempt under the default setting. The `rm`
-   probe above was denied with the known "needs approval" wording. Tracked in ROADMAP.md, "Known
-   follow-ups".
+   probe above was denied with the known "needs approval" wording. Fixed: the wording is now an
+   automatic denial (§6.14).
 5. Five model reviews ran in all (about 6,900 tokens).
 
 What this does **not** settle: whether the mod's own `$.ui.ask` (an `AskUserQuestion` call raised

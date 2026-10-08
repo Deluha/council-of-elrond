@@ -102,6 +102,14 @@ describe('failed attempts and lockout', () => {
     expect(w.ran).toHaveLength(6)
   })
 
+  test('a denial worded "requires approval" is never a failed attempt', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    w.toolResult = { result: 'denied', isError: true, text: 'This command requires approval' }
+    for (let i = 0; i < 4; i++) expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).not.toContain('locked out')
+    expect(auditLines(w)[0]).toMatchObject({ outcome: 'denied-by-permission' })
+    expect(w.ran).toHaveLength(4)
+  })
+
   test('a dismissed question is a failed attempt', async ($, on) => {
     world(on, { answer: 'dismiss' })
     for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Bash', command: 'sudo ls' })

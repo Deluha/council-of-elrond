@@ -125,6 +125,8 @@ describe('outcomes', () => {
     expect(outcomeOf({ isError: true, text: "The user doesn't want to take this action right now. STOP what you are doing." })).toBe('refused-by-user')
     expect(outcomeOf({ isError: true, text: AUTO })).toBe('denied-by-permission')
     expect(outcomeOf({ isError: true, text: 'Permission to use Bash has been denied.' })).toBe('denied-by-permission')
+    expect(outcomeOf({ isError: true, text: 'This command requires approval' })).toBe('denied-by-permission')
+    expect(outcomeOf({ isError: true, text: 'The build requires a newer compiler' })).toBe('error')
   })
 
   test('the person refusing counts; an automatic denial never does', () => {

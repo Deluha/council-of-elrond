@@ -48,6 +48,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   call, and logged with tier `allow` so `/council report` counts it. Low-confidence findings on an
   allowed call still pass: the mod never asks on an allowed call.
 
+### Fixed
+- **A third automatic-denial wording is recognised.** Claude Code's "This command requires approval" (seen on 2.1.294 in `-p`) now reads as `denied-by-permission`, so it never counts as a failed attempt, instead of as an ordinary tool error.
+
 ## [0.5.0] - 2026-10-08
 
 A hardening release closing the rules-tier and pipeline findings of the end-of-Stage-5 review
