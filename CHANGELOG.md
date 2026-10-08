@@ -11,6 +11,10 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 ## [Unreleased]
 
 ### Added
+- **A new branch's push has a range.** When the remote does not have the branch yet, the preview's
+  commits and the diff reviewer's diff are read against the remote's default branch
+  (`<remote>/HEAD`) instead of being left out. Only for a push that names a remote; a fixed fallback
+  that is tried once, never a fourth inspection.
 - **Themed strings and a plain mode.** Member names, the escalation dialog, bypass and the wipe
   count have themed variants (Gandalf, Legolas, Aragorn, Gimli, Gollum, Galadriel, Elrond, the
   Council of Elrond), and a "Plain mode" option in `/config` (default off) switches every theme

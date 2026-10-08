@@ -199,6 +199,31 @@ describe('the full council in the pipeline', () => {
     expect(w.modelRequests).toHaveLength(3)
   })
 
+  test('a new branch: the diff reviewer reads the remote default branch when its range is unreadable', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    w.processReply = argv => {
+      if (argv[1] !== 'diff') return { exitCode: 0, stdout: '' }
+      return argv.at(-2) === 'origin/feature..HEAD' ? { exitCode: 128, stdout: '' } : { exitCode: 0, stdout: '+export const started = true\n' }
+    }
+    expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })
+    expect(w.processes.filter(argv => argv[1] === 'diff').map(argv => argv.at(-2))).toEqual(['origin/feature..HEAD', 'origin/HEAD...HEAD'])
+    const prompt = String(w.modelRequests.find(request => String(request.system).includes('the commits a git push would send'))?.prompt)
+    expect(prompt).toContain('The changes the push would send: origin/HEAD...HEAD')
+    expect(prompt).toContain('+export const started = true')
+    expect(auditLines(w)[0]).toMatchObject({ council: { voices: [{ member: 'gandalf' }, { member: 'legolas', verdict: 'approve' }, { member: 'aragorn' }] } })
+    expect(w.processes.filter(argv => argv[1] === 'push')).toEqual([])
+  })
+
+  test('when both ranges are unreadable, the diff reviewer sits out', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    w.processReply = argv => (argv[1] === 'diff' ? { exitCode: 128, stdout: '' } : { exitCode: 0, stdout: '' })
+    expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })
+    expect(w.processes.filter(argv => argv[1] === 'diff')).toHaveLength(2)
+    expect(w.modelRequests).toHaveLength(2)
+    expect(w.modelRequests.map(request => String(request.system)).join('\n')).not.toContain('the commits a git push would send')
+    expect(auditLines(w)[0]).toMatchObject({ council: { voices: [{ member: 'gandalf' }, { member: 'legolas', verdict: 'skipped' }, { member: 'aragorn' }] } })
+  })
+
   test('strictest wins: one block among approvals refuses, every objection labelled', async ($, on) => {
     const w = world(on, { replies: [APPROVE, REVISE, verdict('block', 'Sends unrelated commits.', 'Push only the fix commit.')] })
     const deny = denyOf(await $.tool.call(PUSH))

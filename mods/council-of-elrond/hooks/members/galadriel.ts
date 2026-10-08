@@ -15,8 +15,11 @@ import { relativeTo, resolve } from '../rules/paths.js'
 export type Inspection =
   /** Lists a path the call names: `$.fs.stat`, then `$.fs.list` for a folder. No process. */
   | { kind: 'path'; label: string; path: string }
-  /** A read-only git command from the table. */
-  | { kind: 'git'; label: string; argv: readonly string[] }
+  /**
+   * A read-only git command from the table. `orElse` is a second table entry,
+   * tried only when the first fails; it is an alternative, not a step.
+   */
+  | { kind: 'git'; label: string; argv: readonly string[]; orElse?: { label: string; argv: readonly string[] } }
 
 export type InspectionResult =
   | { kind: 'path'; label: string; state: 'missing' }
@@ -48,8 +51,12 @@ function gitArgs(part: ShellPart): { sub: string; rest: readonly string[] } | un
   return sub === undefined ? undefined : { sub, rest: part.coreWords.slice(2) }
 }
 
-/** The remote a push names, and the commits it would send as a git range. */
-function pushRange(rest: readonly string[]): { remote?: string; range: string } {
+/**
+ * The remote a push names, and the commits it would send as a git range.
+ * `fallback` is the remote's default branch (`<remote>/HEAD`), for a branch
+ * the remote doesn't have yet; only a named remote has one.
+ */
+function pushRange(rest: readonly string[]): { remote?: string; range: string; fallback?: string } {
   const words = positionals(rest)
   const remote = words[0] !== undefined && SAFE_REF.test(words[0]) ? words[0] : undefined
   const refspec = words[1]
@@ -59,7 +66,7 @@ function pushRange(rest: readonly string[]): { remote?: string; range: string } 
     remote !== undefined && destination !== undefined && SAFE_REF.test(destination)
       ? `${remote}/${destination}..HEAD`
       : '@{upstream}..HEAD'
-  return { ...(remote !== undefined && { remote }), range }
+  return { ...(remote !== undefined && { remote, fallback: `${remote}/HEAD` }), range }
 }
 
 /** The ref a merge names, past the options that take a value. */
@@ -69,11 +76,21 @@ function mergeRef(rest: readonly string[]): string | undefined {
 }
 
 function pushInspections(rest: readonly string[]): Inspection[] {
-  const { remote, range } = pushRange(rest)
+  const { remote, range, fallback } = pushRange(rest)
   return [
     { kind: 'git', label: 'current branch', argv: ['git', 'rev-parse', '--abbrev-ref', 'HEAD'] },
     ...(remote !== undefined ? [{ kind: 'git' as const, label: `remote ${remote}`, argv: ['git', 'remote', 'get-url', remote] }] : []),
-    { kind: 'git', label: `commits it would send (${range})`, argv: ['git', 'log', '--oneline', '-n', '30', range, '--'] },
+    {
+      kind: 'git',
+      label: `commits it would send (${range})`,
+      argv: ['git', 'log', '--oneline', '-n', '30', range, '--'],
+      ...(fallback !== undefined && {
+        orElse: {
+          label: `commits it would send (${fallback}..HEAD: the remote has no such branch yet, so against its default branch)`,
+          argv: ['git', 'log', '--oneline', '-n', '30', `${fallback}..HEAD`, '--'],
+        },
+      }),
+    },
   ]
 }
 
@@ -182,10 +199,14 @@ export function formatPreview(results: readonly InspectionResult[], maxLines: nu
 export function rangeDiffInspection(kind: 'push' | 'merge', part: ShellPart): Inspection | undefined {
   const git = gitArgs(part)
   if (git === undefined) return undefined
-  const range = kind === 'push' ? pushRange(git.rest).range : (() => {
+  const pushed = kind === 'push' ? pushRange(git.rest) : undefined
+  const range = pushed !== undefined ? pushed.range : (() => {
     const ref = mergeRef(git.rest)
     return ref === undefined ? undefined : `HEAD...${ref}`
   })()
   if (range === undefined) return undefined
-  return { kind: 'git', label: range, argv: ['git', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', range, '--'] }
+  const diff = (against: string): string[] => ['git', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', against, '--']
+  // Three dots: the changes since the branch point, which is what a new branch adds to the remote.
+  const orElse = pushed?.fallback === undefined ? undefined : { label: `${pushed.fallback}...HEAD`, argv: diff(`${pushed.fallback}...HEAD`) }
+  return { kind: 'git', label: range, argv: diff(range), ...(orElse !== undefined && { orElse }) }
 }

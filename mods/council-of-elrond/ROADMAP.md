@@ -280,7 +280,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 | The ~40-case live eval | Run it once before 1.0, as a `claude plugin eval` suite under `mods/council-of-elrond/evals/` (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injections inside diffs, plus a council set). Roughly 40 to 120 reviews at about 1,000 tokens each. Record the results in DESIGN.md; keep it out of CI. Make it a definition-of-done item. |
 | Live UI checks (stages 2 to 6) | Fold them into the one screen-by-screen check above and run it once, at the end of Stage 6. |
 | Prompt-refusal wording | Re-check against the 2.1.294 binary (`/upgrade-types` step 5) as part of that live check; this session could not read the binary. |
-| A new branch's push has no range | Do it: diff against `<remote>/HEAD` when it exists. It is one more entry in Galadriel's fixed table, and first pushes of feature branches are the common case. |
+| A new branch's push has no range | Done (DESIGN §13.1): a fixed fallback against `<remote>/HEAD` when the push names a remote. |
 | Scan allowed calls for secrets | Do it for high-confidence findings only (refuse), never asking on an allowed call. The cost is a pattern scan of the command text. A literal token in an allowed `curl` currently reaches the network unscanned. Behaviour change: 0.6.0. |
 | An `exact` field in the rule schema | Not now. The `input` pin works and is tested; a schema change waits for a user asking to hand-edit such rules. |
 | The allow-rule offer after every "allow once" | Wait for feedback. If it is noisy, add a `/config` switch for the offer (smallest change). |
@@ -306,7 +306,7 @@ From stage 5:
 - **The report reads at most three 1 MiB files** in the hook's own time (fine: tens of milliseconds). An `auditMaxKb` above 4,096 would pass `$.fs.read`'s 4 MiB cap; the appender would fail first, as it reads the current file too.
 
 From stage 4:
-- **A push of a branch the remote doesn't have yet** has no range: the diff reviewer sits out, and Galadriel shows no commits. Diffing against `<remote>/HEAD` (the remote's default branch) when it exists would cover the common case.
+- ~~**A push of a branch the remote doesn't have yet** has no range: the diff reviewer sits out, and Galadriel shows no commits. Diffing against `<remote>/HEAD` (the remote's default branch) when it exists would cover the common case.~~ Done (DESIGN §13.1).
 - ~~**Esc during any review** puts a question to the user after they pressed Esc~~ Done in 0.5.0 (DESIGN §10.9): Esc refuses plainly, with no failed attempt, round or dialog.
 - **The council's cost.** Every push now costs about three Opus reviews (~3,000 tokens). If that's too much, the knobs are the `/config` council model, "Full council for big operations", or `disableRules`-style removal of a default entry (not offered: lists only add).
 - **Live UI check (user):** the new `/config` rows (full council on/off, model, one at a time, project checks) and the council lines in `/council` and `/council test`, in a terminal.

@@ -153,7 +153,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | A project check fails, times out or can't start | A block, with its last 20 lines (redacted) for Claude; none of its output in the audit log. |
 | A project check ignores being ended | The council stops waiting at its timeout and calls `return()` on the stream, which kills the child (verified live). |
 | The current branch can't be read for a `git merge` | The merge counts as one into a protected branch (full council). |
-| The range a push or merge would change can't be read (a new branch, a bad ref) | The diff reviewer sits out of that council; the others decide. |
+| The range a push or merge would change can't be read (a bad ref; a new branch with no remote named, or a remote with no `<remote>/HEAD`) | For a push that names a remote, the table's fallback against `<remote>/HEAD` is tried once (§13.1). If that can't be read either, the diff reviewer sits out of that council; the others decide. |
 | Esc during a council | The model requests abort and the check processes are killed with the dispatch. |
 | `/council model` probe gets an API error | The switch is refused. A timeout switches with a warning; a failing model then fails closed per review. |
 | `$.ui.notice` refused (no dialog open) | Ignored; the call still runs as allowed. |
@@ -217,6 +217,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
    - Legolas for a file tool's diff, or for a push or merge: the changes it would send (`<remote>/<branch>..HEAD`, or `@{upstream}..HEAD`) or bring in (`HEAD...<ref>`), read by one `git diff --no-color --no-ext-diff --no-textconv <range> --` from Galadriel's table (refs validated as before). It is cut to the diff limit and redacted, and only runs while the preview is on. A range git can't read (a branch the remote doesn't have yet) seats nobody: Legolas sits out.
    - Legolas's system prompt now names both kinds of change, and the prompt says which it is.
    - Each seat gets its own brief from the shared `briefOf`, and every seat runs on the `council` model slot.
+   - A new branch's push (a range git can't read) falls back to the remote's default branch: §13.1.
 4. **One deadline, by the clock's reading.** `convene` reads `$.clock.now()` (a `$` call, free of the hook's budget) and passes each request the deadline minus the time spent, so the deadline is never a timer.
    - In parallel, every member gets nearly the whole deadline.
    - One at a time ("Full council one at a time", off by default), each gets what is left, and the first block (a block verdict or a member without one), or a failed check, stops the rest. They read as skipped.
@@ -488,3 +489,14 @@ the final deliverables.
 | Audit log: fields, no contents, no secrets, rotation | `pipeline.test.ts › audit log › records every field, and never contents or secrets`, `› rotates by size`; `operations.test.ts › a secret in a target never reaches the key`; `council.test.ts › a failing check blocks… none of its output reaches the audit log` |
 | No re-entry from the mod's own calls | **Owner:** `done.test.ts › no re-entry from the mod's own calls` (3: questions; previews and model requests; project checks and writes), each with a project rule blocking `AskUserQuestion`. Also `pipeline.test.ts › the mod's own question does not re-enter the gate`. Live: §12.1. |
 | Commands: `/council test` runs nothing, `/council report` reads the log | `commands.test.ts › test classifies only: no process, no model, nothing runs`; `council.test.ts › /council test names the full council… and runs nothing`; `report.test.ts` (11, over rotated files, unparseable lines and an unreadable file) |
+
+## 13. Decisions after the final deliverables
+
+1. **A new branch's push has a range** (`orElse` in `members/galadriel.ts`, `runGitInspection` in `hooks/register.ts`). A push of a branch the remote doesn't have yet has no `<remote>/<branch>` ref, so `git log <remote>/<branch>..HEAD` and the council's `git diff` failed: no commits in the preview, and the diff reviewer sat out.
+   - **The table.** A git `Inspection` may carry `orElse`, a second fixed entry (label and argv) tried only when the first exits non-zero or fails. Nothing else is ever run; the fallback is as fixed as the first entry.
+   - **Why `<remote>/HEAD`.** It is the remote's default branch, which a new branch is almost always cut from, so it is the nearest range git can read that says what the push adds. It exists only if the clone set it (a normal `git clone` does).
+   - **Two dots for the log, three for the diff.** The log is `<remote>/HEAD..HEAD`: the commits on this branch that the default branch lacks. The diff is `<remote>/HEAD...HEAD`: the changes since the branch point, which is what the push adds, and it does not show unrelated work the default branch has gained since.
+   - **Only with a named remote.** `pushRange` returns the fallback only when the push names a remote that passes the ref check. A push with no remote has no known remote (the upstream could be anywhere), so it has none, and a name that would read as an option gets neither range nor fallback. A merge gets none.
+   - **Not a fourth step.** The fallback is an alternative to one step, not a step: it does not count against the three-inspection cap, so a preview starts at most one extra process. `previewOf` and `rangeDiffOf` share `runGitInspection`, which runs the first argv, then (when it exits non-zero or throws) `orElse.argv` once with the same working folder, environment and 5 s timeout. The fallback's label stands only if it succeeds; if it fails too, the outcome is as before (no commits in the preview; the diff reviewer sits out, "the changes could not be read").
+   - **Legolas's brief** carries the range that was read as its `path`, so the reviewer sees `origin/HEAD...HEAD`; its prompt needed no change.
+   - `/council test` runs nothing and is unchanged.

@@ -168,8 +168,9 @@ Galadriel's table in `hooks/members/galadriel.ts` is the only place a process is
 takes the call's targets as data; the proposed command never runs. Validate anything that becomes
 an argument (refs: no leading `-`, no `..`), keep it read-only (`git` runs with
 `GIT_OPTIONAL_LOCKS=0`, no pager, no prompts), and remember each inspection has 5 s and the
-preview at most 3. Test in `tests/galadriel.test.ts` that the proposed command is never among
-`w.processes`.
+preview at most 3. A git inspection may carry an `orElse` fallback (a second fixed entry, tried only
+when the first fails); it is an alternative, not a fourth step. Test in `tests/galadriel.test.ts`
+that the proposed command is never among `w.processes`.
 
 ### Add a `/config` option
 

@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PluginOptions, ProcessSpawnResult, Register, RenderElement, ToolCallResult } from 'claude-code'
+import type { EngineInterface, PluginOptions, ProcessRunResult, ProcessSpawnResult, Register, RenderElement, ToolCallResult } from 'claude-code'
 
 import type { CouncilPanel } from '../types'
 import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, ROTATED_FILES } from './audit.js'
@@ -331,6 +331,37 @@ async function scriptsOf(
 }
 
 /**
+ * Runs one git inspection from the table: its argv, then, only if that exits
+ * non-zero or throws and the table gives one, its fixed `orElse` argv, once.
+ * The fallback's result (and label) stands only if it succeeds; otherwise the
+ * first attempt's outcome is kept, as if there were no fallback.
+ */
+async function runGitInspection(
+  $: EngineInterface,
+  step: { label: string; argv: readonly string[]; orElse?: { label: string; argv: readonly string[] } },
+  ctx: Context,
+): Promise<{ label: string; run: ProcessRunResult }> {
+  const attempt = (argv: readonly string[]): Promise<ProcessRunResult> => $.process.run(argv, { cwd: ctx.root, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
+  let first: ProcessRunResult | undefined
+  let failure: unknown
+  try {
+    first = await attempt(step.argv)
+    if (first.exitCode === 0 || step.orElse === undefined) return { label: step.label, run: first }
+  } catch (error) {
+    if (step.orElse === undefined) throw error
+    failure = error
+  }
+  try {
+    const second = await attempt(step.orElse.argv)
+    if (second.exitCode === 0) return { label: step.orElse.label, run: second }
+  } catch {
+    // The fallback failing leaves the first attempt's outcome.
+  }
+  if (first === undefined) throw failure
+  return { label: step.label, run: first }
+}
+
+/**
  * Runs Galadriel's inspections: only what the table planned, read-only, each
  * on its own timeout. A failure is no preview, never a decision.
  */
@@ -350,8 +381,8 @@ async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: C
           results.push({ kind: 'path', label: step.label, state: 'file', size: stat.size })
         }
       } else {
-        const run = await $.process.run(step.argv, { cwd: ctx.root, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
-        results.push({ kind: 'git', label: step.label, exitCode: run.exitCode, stdout: run.stdout.slice(0, 50_000) })
+        const { label, run } = await runGitInspection($, step, ctx)
+        results.push({ kind: 'git', label, exitCode: run.exitCode, stdout: run.stdout.slice(0, 50_000) })
       }
     } catch {
       results.push({ kind: 'failed', label: step.label })
@@ -505,14 +536,15 @@ async function currentBranchOf($: EngineInterface, root: string): Promise<string
 /**
  * What a push would send or a merge bring in, for the diff reviewer: one
  * read-only `git diff` from Galadriel's table, cut to the diff limit and
- * redacted. Undefined when git can't say.
+ * redacted, with the range that was read (the table's fallback range when the
+ * first can't be read). Undefined when git can't say.
  */
-async function rangeDiffOf($: EngineInterface, argv: readonly string[], ctx: Context): Promise<string | undefined> {
+async function rangeDiffOf($: EngineInterface, step: Extract<Inspection, { kind: 'git' }>, ctx: Context): Promise<{ label: string; diff: string } | undefined> {
   try {
-    const run = await $.process.run(argv, { cwd: ctx.root, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
+    const { label, run } = await runGitInspection($, step, ctx)
     if (run.exitCode !== 0) return undefined
     const diff = run.stdout.slice(0, LEGOLAS_LIMITS.diffChars * 4).trimEnd()
-    return redact(truncate(diff === '' ? '(no changes)' : diff, settings.diffLines, LEGOLAS_LIMITS.diffChars), ctx.patterns)
+    return { label, diff: redact(truncate(diff === '' ? '(no changes)' : diff, settings.diffLines, LEGOLAS_LIMITS.diffChars), ctx.patterns) }
   } catch {
     return undefined
   }
@@ -1392,16 +1424,16 @@ export const register: Register = (on, options) => {
         const who = whoOf(seat.member, seat.member === 'aragorn' ? seat.profile : undefined)
         if (seat.member === 'legolas' && seat.range !== undefined) {
           const inspection = range === undefined ? undefined : rangeDiffInspection(range.kind, range.part)
-          const diff = inspection?.kind === 'git' ? await rangeDiffOf($, inspection.argv, ctx) : undefined
+          const read = inspection?.kind === 'git' ? await rangeDiffOf($, inspection, ctx) : undefined
           sittings.push(
-            inspection === undefined || diff === undefined
+            read === undefined
               ? { seat, who, skip: text('council.noRange') }
               : {
                   seat,
                   who,
                   brief: {
                     member: 'legolas',
-                    context: { tool: call.tool, path: inspection.label, range: { kind: seat.range, call: callText(call, ctx.patterns) }, diff: { diff, isNew: false }, ruleReasons, latestPrompt: state.latestPrompt },
+                    context: { tool: call.tool, path: read.label, range: { kind: seat.range, call: callText(call, ctx.patterns) }, diff: { diff: read.diff, isNew: false }, ruleReasons, latestPrompt: state.latestPrompt },
                   },
                 },
           )

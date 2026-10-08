@@ -107,7 +107,7 @@ why.
 - **Who sits:** every enabled reviewer with something of the call to review.
   - The destructive-operations reviewer always sits.
   - The git and database reviewer sits once for each profile the call touches, so `git push && psql …` gets both.
-  - The diff reviewer sits for a file change, and for a push or merge. There it reviews the changes the push would send or the merge would bring in, read by one fixed, read-only `git diff`.
+  - The diff reviewer sits for a file change, and for a push or merge. There it reviews the changes the push would send or the merge would bring in, read by one fixed, read-only `git diff`. When the remote does not have the branch yet, the diff is against the remote's default branch (`<remote>/HEAD`), the changes since the branch point.
 - **One model:** every member sits on the council's model (`opus` by default), not its own.
 - **One deadline:** every member runs under one shared deadline from that model (Opus 45 s, or "Review deadline" in `/config`). By default they run in parallel. "Full council one at a time" asks them in turn instead, each getting what is left of the deadline, and stops at the first block.
 - **Strictest wins:** block, then revise, then approve. Every objection is labelled with the reviewer who raised it. A reviewer that errors, times out or answers malformed counts as a block from that reviewer.
@@ -350,7 +350,7 @@ reviewer and to you. The commands come from a table in the mod; the call's targe
 data, and the proposed command never runs.
 
 - **Deletes** (`rm`, `find -delete`): what each target is, and a folder's entries (no process).
-- **`git push`:** the current branch, the remote's URL (redacted) and the commits it would send.
+- **`git push`:** the current branch, the remote's URL (redacted) and the commits it would send. When the remote does not have the branch yet, the commits are shown against the remote's default branch (`<remote>/HEAD`).
 - **`git merge`:** the current branch and the commits it would bring in.
 - **`git reset`, `git rebase`, `git commit --amend`:** recent commits, marked with the remote branches that point at them, and uncommitted changes.
 - **Write, Edit:** the file's diff stat against `HEAD`, and whether git tracks it.
@@ -466,7 +466,7 @@ hold is classified (0.5.0); the gaps that remain:
 - **Bypass.** While `/council off` is on, every gated call passes, block-tier calls and the secrets scan included, until `/council on` or the session ends.
 - **Diffs are built from the call, not from git.** The diff reviewer sees the change the call describes against the file as it stands when the hook runs; a file over 4 MiB, or one it can't read, is shown as the call's own text only, and the prompt says so.
 - **The project checks run your project's code.** Claude can edit the tests and scripts they run (file edits go to the diff reviewer, not to you), so a passing check is only as good as the code it runs. They run as you, with your environment.
-- **A push of a branch the remote doesn't have yet** has no range to diff: the diff reviewer sits out of that council, and the preview shows no commits.
+- **A push with no range to read.** A push that names no remote, or a remote with no default branch (`<remote>/HEAD` unset), has no range for a branch the remote doesn't have yet: the diff reviewer sits out of that council, and the preview shows no commits.
 - **The database reviewer sees only the SQL it can find**: inline `-c`/`-e`, heredocs, and `.sql` files named in the command and inside the project. A migration tool's own migration files (`prisma migrate deploy`) are not looked up.
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.
 - Rules you loosen, and calls you allow. An allow rule you add skips review, the ask tier and the secrets scan for that exact command; it does not follow a `cd` earlier in another command, so `rm -r build` is allowed in whichever folder Claude runs it.
