@@ -96,6 +96,7 @@ const WRAPPERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['setpriv', new Set(['--reuid', '--regid', '--groups', '--inh-caps', '--ambient-caps', '--bounding-set'])],
   ['run0', new Set(['--uid', '--gid', '-u', '-g', '--setenv', '--chdir', '-D'])],
   ['chpst', new Set(['-u', '-U', '-e', '-/', '-n', '-l', '-L'])],
+  ['pkexec', new Set(['--user'])],
 ])
 
 /**
@@ -125,7 +126,7 @@ const TWO_WORD_RUNNERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
 const ONE_WORD_RUNNERS: ReadonlySet<string> = new Set(['npx', 'bunx', 'pnpx', 'uvx'])
 
 /** Wrappers that run their command with changed privileges (ask, not allow). */
-export const PRIVILEGE_WRAPPERS: ReadonlySet<string> = new Set(['sudo', 'doas', 'gosu', 'runuser', 'setpriv', 'run0', 'chpst'])
+export const PRIVILEGE_WRAPPERS: ReadonlySet<string> = new Set(['sudo', 'doas', 'gosu', 'runuser', 'setpriv', 'run0', 'chpst', 'pkexec'])
 
 const GIT_GLOBALS_WITH_ARG = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'])
 
@@ -312,7 +313,8 @@ function inlineScriptOf(coreWords: readonly string[]): string | undefined {
   for (let i = 1; i < coreWords.length; i++) {
     const word = coreWords[i] as string
     if (word === '-c' || /^-[a-zA-Z]*c[a-zA-Z]*$/.test(word) || word === '--command') {
-      return coreWords[i + 1]
+      // `--` ends option parsing: `sh -c -- 'cmd'` runs `cmd`, not `--`.
+      return coreWords[i + 1] === '--' ? coreWords[i + 2] : coreWords[i + 1]
     }
   }
   return undefined

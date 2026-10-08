@@ -30,6 +30,7 @@ export const CHECKS = [
   'git-config-write',
   'git-config-injection',
   'dangerous-env-assignment',
+  'raw-disk-write',
 ] as const
 export type CheckName = (typeof CHECKS)[number]
 

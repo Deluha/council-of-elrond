@@ -40,7 +40,7 @@ const BLOCK: readonly Rule[] = [
     id: 'raw-disk-write',
     tier: 'block',
     tools: SHELL,
-    command: String.raw`^(dd\b.*\bof=/dev/(sd|hd|vd|xvd|nvme|disk|mmcblk)|mkfs(\.\w+)?\s+/dev/|wipefs\b.*\s/dev/)`,
+    check: 'raw-disk-write',
     reason: 'Writes directly to a disk device.',
   },
 ]

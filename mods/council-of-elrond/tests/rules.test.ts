@@ -358,6 +358,36 @@ describe('tiers', () => {
   })
 })
 
+describe('block rules that previously stopped one tier short', () => {
+  test('mirror, prune and glob-destination pushes block', () => {
+    for (const command of ['git push --mirror origin', 'git push --prune origin', 'git push -f origin "refs/heads/*:refs/heads/*"']) {
+      expect(ruleOf(command), command).toBe('force-push-protected-branch')
+    }
+    expect(tierOf('git push origin feature')).toBe('review')
+  })
+
+  test('brace expansion in rm flags blocks', () => {
+    for (const command of ['rm -{r,f} /', 'rm --{recursive,force} /']) {
+      expect(ruleOf(command), command).toBe('rm-recursive-outside-repo')
+    }
+  })
+
+  test('raw-disk writes by a tool, a redirect or cp/tee/shred block', () => {
+    for (const command of ['mkfs.ext4 -F /dev/sda1', 'cat x > /dev/sda', 'tee /dev/sda', 'shred /dev/sda', 'cp x /dev/sda', 'dd if=/dev/zero of=/dev/sda', 'blkdiscard /dev/nvme0n1']) {
+      expect(ruleOf(command), command).toBe('raw-disk-write')
+    }
+    for (const command of ['dd if=a of=b', 'cat x > out.txt', 'tee log.txt', 'cp a b', 'echo x > /dev/null', 'shred secret.txt']) {
+      expect(tierOf(command), command).not.toBe('block')
+    }
+  })
+
+  test('sh -c -- and pkexec reveal the inner command', () => {
+    expect(ruleOf("sh -c -- 'rm -rf /'")).toBe('rm-recursive-outside-repo')
+    expect(ruleOf('pkexec rm -rf /')).toBe('rm-recursive-outside-repo')
+    expect(ruleOf('pkexec whoami')).toBe('privileged')
+  })
+})
+
 describe('project overrides', () => {
   const withRules = (overrides: unknown) => loadConfig(JSON.stringify({ schemaVersion: 1, ...(overrides as object) }))
 

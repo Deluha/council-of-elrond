@@ -31,7 +31,14 @@ function rmOutsideRepo(part: ShellPart, context: CheckContext): boolean {
   if (part.coreWords[0] !== 'rm') return false
   const { flags, args } = flagsAndArgs(part.coreWords.slice(1))
   if (flags.includes('--no-preserve-root')) return true
-  const isRecursive = flags.some(flag => /^-[a-zA-Z]*[rR]/.test(flag) || flag === '--recursive')
+  // Brace expansion in a flag: `-{r,f}` is `-r -f`, `--{recursive,force}` is
+  // `--recursive --force`.
+  const expand = (flag: string): string[] => {
+    const brace = /^(.*)\{([^{}]*)\}(.*)$/.exec(flag)
+    return brace === null ? [flag] : brace[2]!.split(',').map(part => `${brace[1]}${part}${brace[3]}`)
+  }
+  const expanded = flags.flatMap(expand)
+  const isRecursive = expanded.some(flag => /^-[a-zA-Z]*[rR]/.test(flag) || flag === '--recursive')
   if (!isRecursive) return false
   return args.some(target => {
     if (/^\/+\*?$/.test(target)) return true
@@ -72,16 +79,40 @@ function forcePushProtected(part: ShellPart, context: CheckContext): boolean {
       positional.push(word)
     }
   }
+  // --mirror force-overwrites every ref and deletes refs the local lacks;
+  // --prune deletes remote branches with no local match. Either can destroy a
+  // protected branch, with or without an explicit force flag.
+  if (isEvery) return true
   const refspecs = positional.slice(1)
-  if ((isForce || isDelete) && isEvery) return true
   return refspecs.some(spec => {
     const isPlus = spec.startsWith('+')
     const bare = isPlus ? spec.slice(1) : spec
     const isEmptySource = bare.startsWith(':')
     const destination = (bare.includes(':') ? bare.slice(bare.indexOf(':') + 1) : bare).replace(/^refs\/heads\//, '')
     const isDestructive = isForce || isDelete || isPlus || isEmptySource
-    return isDestructive && context.protectedBranches.some(branch => branch.test(destination))
+    if (!isDestructive) return false
+    // A glob destination (refs/heads/*) can land on a protected branch.
+    if (/[*?]/.test(destination)) return true
+    return context.protectedBranches.some(branch => branch.test(destination))
   })
+}
+
+const RAW_DEVICE = /^\/dev\/(sd|hd|vd|xvd|nvme|disk\d|rdisk|mmcblk|loop|md\d|dm-|mapper\/)/
+const DISK_WRITERS = new Set(['mkfs', 'mke2fs', 'mkswap', 'wipefs', 'blkdiscard', 'sgdisk', 'sfdisk', 'dd', 'shred', 'tee', 'cp', 'dd'])
+
+/** Writes directly to a disk device, by a disk tool, a redirect or cp/tee/shred. */
+function rawDiskWrite(part: ShellPart): boolean {
+  const program = (part.coreWords[0] ?? '').replace(/\..*/, '') // mkfs.ext4 -> mkfs
+  const targets = [
+    ...part.coreWords.slice(1).map(word => (word.startsWith('of=') ? word.slice(3) : word)),
+    ...part.redirects.filter(r => WRITE_OPS.has(r.op)).map(r => r.target),
+  ]
+  const hitsDevice = targets.some(target => RAW_DEVICE.test(target))
+  if (!hitsDevice) return false
+  // A redirect to a device is a write whatever the program; otherwise the
+  // program must be one that writes its target.
+  if (part.redirects.some(r => WRITE_OPS.has(r.op) && RAW_DEVICE.test(r.target))) return true
+  return DISK_WRITERS.has(program)
 }
 
 const DESTRUCTIVE_SQL = /\b(DROP\s+(TABLE|DATABASE|SCHEMA|VIEW|INDEX|COLUMN|USER|ROLE|OWNED)|TRUNCATE(\s+TABLE)?\s)/i
@@ -164,5 +195,7 @@ export function runCheck(check: CheckName, part: ShellPart, context: CheckContex
       return gitConfigInjection(part)
     case 'dangerous-env-assignment':
       return dangerousEnvAssignment(part)
+    case 'raw-disk-write':
+      return rawDiskWrite(part)
   }
 }
