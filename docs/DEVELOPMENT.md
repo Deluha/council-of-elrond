@@ -8,7 +8,7 @@ taken, and [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for how it works and
 
 ```sh
 cd council-of-elrond
-claude plugin test mods/council-of-elrond       # 336 tests, about 15 s
+claude plugin test mods/council-of-elrond       # 426 tests, about 40 s
 tsc -p mods                                    # strict, against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
 ```
@@ -106,7 +106,8 @@ Patterns to keep:
 
 - **Pure modules get direct tests** (`rules.test.ts`, `operations.test.ts`, `report.test.ts`).
   Integration through register.ts goes in `pipeline.test.ts`, `council.test.ts`,
-  `commands.test.ts`, `suggest.test.ts`.
+  `commands.test.ts`, `suggest.test.ts`. `done.test.ts` holds the definition-of-done evidence and
+  the owner tests SPEC §19 names (DESIGN.md §12); keep its names in step with that table.
 - **Safety tests are mutation-checked.** For a path that decides whether a call runs, break the
   code on purpose and confirm the test fails. Say so in the pull request.
 - **One registration per event per test.** Registering the same event twice fails the load; use
@@ -123,7 +124,7 @@ Patterns to keep:
   `process.spawn`) are in the ROADMAP's API facts, item 12 and 14.
 
 Run one file while iterating: `claude plugin test` has no filter, so comment with `test.only` if the
-kit supports it, or keep the suite fast enough that it doesn't matter (it is about 15 s today).
+kit supports it, or keep the suite fast enough that it doesn't matter (it is about 40 s today).
 
 ## Live checks
 
@@ -167,8 +168,9 @@ Galadriel's table in `hooks/members/galadriel.ts` is the only place a process is
 takes the call's targets as data; the proposed command never runs. Validate anything that becomes
 an argument (refs: no leading `-`, no `..`), keep it read-only (`git` runs with
 `GIT_OPTIONAL_LOCKS=0`, no pager, no prompts), and remember each inspection has 5 s and the
-preview at most 3. Test in `tests/galadriel.test.ts` that the proposed command is never among
-`w.processes`.
+preview at most 3. A git inspection may carry an `orElse` fallback (a second fixed entry, tried only
+when the first fails); it is an alternative, not a fourth step. Test in `tests/galadriel.test.ts`
+that the proposed command is never among `w.processes`.
 
 ### Add a `/config` option
 

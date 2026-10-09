@@ -14,8 +14,9 @@ the mod never takes part in Claude Code's own permission decision.
 > security product. The limits are stated plainly in the
 > [user manual](mods/council-of-elrond/README.md#what-it-does-not-protect-against).
 
-**Status:** Stage 5 of 6 (version 0.4.0). Everything but the theme and its UI is in place, in
-plain mode. See [ROADMAP.md](mods/council-of-elrond/ROADMAP.md).
+**Status:** all six stages and the final deliverables are done (version 0.5.0; 0.6.0 follows the
+maintainer's terminal check). See [ROADMAP.md](mods/council-of-elrond/ROADMAP.md) for what is
+decided, deferred and declined.
 
 ## Quick start
 
@@ -43,7 +44,7 @@ Full instructions, configuration, updating and removal: [docs/INSTALL.md](docs/I
 | :- | :- |
 | Users | [User manual](mods/council-of-elrond/README.md): tiers, reviewers, the full council, rules, models, options, commands, the secrets scan, escalation, the audit log, limits. [Installing and using](docs/INSTALL.md). |
 | Contributors | [CONTRIBUTING.md](CONTRIBUTING.md), [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (layout, conventions, tests, live checks, recipes), [ROADMAP.md](mods/council-of-elrond/ROADMAP.md) (status, next tasks, decisions, API facts). |
-| Maintainers | [docs/MAINTENANCE.md](docs/MAINTENANCE.md) (Claude Code updates, releases, review, triage), [docs/GITHUB.md](docs/GITHUB.md) (workflows, hooks, repository settings), [docs/REVIEW-2026-10.md](docs/REVIEW-2026-10.md) (the Stage 5 review: findings and proposed amendments). |
+| Maintainers | [docs/MAINTENANCE.md](docs/MAINTENANCE.md) (Claude Code updates, releases, review, triage), [docs/GITHUB.md](docs/GITHUB.md) (workflows, hooks, repository settings), [docs/REVIEW-2026-10.md](docs/REVIEW-2026-10.md) (the Stage 5 review: findings, since fixed in 0.5.0, and amendments, since decided). |
 | Design | [DESIGN.md](mods/council-of-elrond/DESIGN.md) (how it works, failure modes, every decision), [SPEC.md](mods/council-of-elrond/SPEC.md) (the original spec). |
 | Security | [SECURITY.md](SECURITY.md): what counts as a bypass and how to report one privately. [SUPPORT.md](SUPPORT.md) for everything else. |
 

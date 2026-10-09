@@ -13,6 +13,8 @@ options) is in the [user manual](../mods/council-of-elrond/README.md).
   else changes.
 - Model access for the reviewers. They use your Claude Code account through the plugin API; no
   separate key.
+- **A POSIX system** (Linux, macOS, WSL). Windows is unsupported: the shell parser reads POSIX
+  shells only, paths are resolved against `HOME`, and PowerShell is not parsed.
 
 ## Try it for one session
 

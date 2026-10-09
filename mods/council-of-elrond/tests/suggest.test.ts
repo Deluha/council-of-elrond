@@ -104,7 +104,7 @@ describe('never offered', () => {
     expect(why({ tool: 'Edit', input: { file_path: `${ROOT}/.github/workflows/ci.yml`, old_string: 'a', new_string: 'b' } })).toBe('protected')
   })
 
-  test('for a call the secrets scan flagged: an allow rule would skip the scan', () => {
+  test('for a call the secrets scan flagged: an allow rule would skip the low-confidence scan', () => {
     expect(why(bash('rm -r build'), { hadSecret: true, declined: [] })).toBe('secret')
   })
 

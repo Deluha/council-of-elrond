@@ -19,7 +19,7 @@ rest.
 | `.githooks/pre-commit` | Runs the hygiene script on every commit, and the three gates when anything under `hooks/`, `tests/`, `types/` or the manifest is staged. |
 | `.githooks/commit-msg` | Summary under 72 characters, imperative, no trailing full stop, blank line after it. |
 | `scripts/setup.sh` | One-time contributor setup: tool check, `git config core.hooksPath .githooks`, the gates once. |
-| `scripts/check-hygiene.sh` | Shared by the hook and CI: no generated files committed, no plugin-root `CLAUDE.md`, no session links or attribution trailers in files, no local paths or real emails, a warning on well-formed fake tokens, and every relative markdown link resolves. |
+| `scripts/check-hygiene.sh` | Shared by the hook and CI: no generated files committed, no plugin-root `CLAUDE.md`, no session links or attribution trailers in files, no local paths or real emails, a warning on any well-formed fake token (the test fixtures build theirs from two halves, so there is none), and every relative markdown link resolves. |
 | `.claude-plugin/marketplace.json` | Makes the repository a plugin marketplace, so `claude plugin marketplace add Deluha/council-of-elrond` works. Validated in CI. |
 | `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md` | Shown by GitHub in the repository's community profile and when someone opens an issue or pull request. |
 
@@ -43,7 +43,7 @@ Repository → Settings. None of this can be committed as a file.
 
 **Code security and analysis**
 - Private vulnerability reporting: **on**. `SECURITY.md`, the issue template config and `SUPPORT.md` all point at it.
-- Secret scanning and push protection: on. Note the test fixtures hold fake tokens with a real shape (`ghp_` plus 36 characters); if push protection flags one, replace it with an invalid length rather than bypassing the block.
+- Secret scanning and push protection: on. The test fixtures build their fake tokens from two halves at run time (`FAKE_AWS_KEY`, `FAKE_GITHUB_TOKEN` in `tests/fixtures.ts`), so no committed line holds a well-formed token; keep new fakes to that pattern rather than bypassing a block.
 - Dependabot alerts and security updates: on (actions only).
 - Code scanning: CodeQL supports TypeScript; optional. The mod has no build, so the default setup works.
 

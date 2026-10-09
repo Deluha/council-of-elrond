@@ -11,6 +11,10 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 ## [Unreleased]
 
 ### Added
+- **A new branch's push has a range.** When the remote does not have the branch yet, the preview's
+  commits and the diff reviewer's diff are read against the remote's default branch
+  (`<remote>/HEAD`) instead of being left out. Only for a push that names a remote; a fixed fallback
+  that is tried once, never a fourth inspection.
 - **Themed strings and a plain mode.** Member names, the escalation dialog, bypass and the wipe
   count have themed variants (Gandalf, Legolas, Aragorn, Gimli, Gollum, Galadriel, Elrond, the
   Council of Elrond), and a "Plain mode" option in `/config` (default off) switches every theme
@@ -35,6 +39,22 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - The default is now themed: `/council`, the dialog and the report name the characters, and the
   dialog's options read "Need: allow once" and "Pass: keep blocked". Turn on "Plain mode" in
   `/config` to keep the old text ("Allow once", "Keep blocked", role names).
+- **README.** A "Modes" section (enforcing, shadow, bypass, plain), the install command under
+  "Loading it", a note that subagents' calls are gated too, and bypass named among the limits.
+- **Test fixtures.** Fake secrets in tests are built at run time from two halves, so no committed line holds a well-formed token.
+- **Documentation.** The repository README, the maintainer and contributor guides, the GitHub
+  notes and the three project skills are brought in step with the final deliverables: test
+  counts, the three denial wordings, the fixtures' two-half fake tokens, and when 0.6.0 and 1.0
+  happen.
+
+### Security
+- **Allowed calls are scanned for high-confidence secrets.** A literal key in an allowed `curl` or
+  `echo` used to reach the network or the transcript unscanned; it is now refused, as on a gated
+  call, and logged with tier `allow` so `/council report` counts it. Low-confidence findings on an
+  allowed call still pass: the mod never asks on an allowed call.
+
+### Fixed
+- **A third automatic-denial wording is recognised.** Claude Code's "This command requires approval" (seen on 2.1.294 in `-p`) now reads as `denied-by-permission`, so it never counts as a failed attempt, instead of as an ordinary tool error.
 
 ## [0.5.0] - 2026-10-08
 

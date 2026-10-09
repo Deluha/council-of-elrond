@@ -14,7 +14,8 @@ How to finish the mod from where it stands, written so a new dev session can pic
 | 3 | Legolas, Aragorn (git and database profiles), routing | ✅ Done: [Deluha/council-of-elrond#3](https://github.com/Deluha/council-of-elrond/pull/3) |
 | 4 | Full council with Gimli | ✅ Done: [Deluha/council-of-elrond#4](https://github.com/Deluha/council-of-elrond/pull/4) |
 | 5 | Rule and allowlist suggestions, `/council report` | ✅ Done: [Deluha/council-of-elrond#5](https://github.com/Deluha/council-of-elrond/pull/5) |
-| 6 | Theme strings, then UI features in order | ⬜ Next |
+| 6 | Theme strings, then UI features in order | ✅ Done: [Deluha/council-of-elrond#11](https://github.com/Deluha/council-of-elrond/pull/11) |
+| — | Final deliverables (SPEC §21–22) | ✅ At the checkpoint ([DESIGN.md §12](./DESIGN.md)); the terminal check is the maintainer's |
 
 **Review at the end of Stage 5:** [docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md) holds the
 findings (a 0.5.x hardening list) and proposed amendments to Stage 6 and the definition of done,
@@ -32,7 +33,7 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (336 after Stage 6 part B)
+cd mods/council-of-elrond && claude plugin test .     # all tests (426 after the final deliverables)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
@@ -214,7 +215,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 - [x] Generalise `reviewByGandalf` into one top-level `review($, brief, model, deadline, signal)` in register.ts; the `Brief` (`members/brief.ts`) carries member, profile and context together. Members only supply `system(nonce)` and `prompt(context, nonce)`.
 - [x] Tests (§19 Routing, Model members): each member and profile gets its triggers, with Gandalf as fallback; approve, revise and block for each member (`tests/routing.test.ts`, `tests/members.test.ts`).
 - [x] `/council` status lists all three members; `/council test` names the routed member, profile and any fallback.
-- [ ] Optional, **not run yet** (waiting on the user's approval because it costs real tokens): a ~40-case labelled eval (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injection attempts inside diffs) run live against the default models, to confirm prompt quality.
+- [ ] Optional, **not run yet** (a 1.0 item: "Decisions on the open items" and "Before 1.0" below): a ~40-case labelled eval (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injection attempts inside diffs) run live against the default models, to confirm prompt quality.
 
 ## Stage 4: full council with Gimli ✅
 
@@ -251,7 +252,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 
 ## Final deliverables (SPEC §21–22)
 
-- [ ] README complete:
+- [x] README complete: *(done; a Modes section added, the rest was in place)*
   - loading (`--plugin-dir`, install);
   - editing rules with examples;
   - each mode and command;
@@ -259,53 +260,66 @@ ask → **Galadriel** → route → act → **after the tool runs**.
   - expected token cost (update with stage 3–4 figures);
   - limits;
   - **glossary** of theme terms and plain names.
-- [ ] DESIGN.md: final `hooks:`/`calls:` lines, data flow, failure modes, and every decision.
-- [ ] Definition of done (§22, with the end-of-Stage-5 review's amendments):
-  - [ ] every §19 test passes, with a table in DESIGN.md mapping each §19 bullet to the test names that cover it ("fallback where nothing draws" and "no re-entry from the mod's own calls" each need a named owner test);
-  - [ ] in enforcing mode, no path where a gated call runs after a reviewer failure without the user's answer (shadow mode passes by design);
+- [x] DESIGN.md: final `hooks:`/`calls:` lines, data flow, failure modes, and every decision. *(§2 re-run, §4 the re-entry row, §12)*
+- [x] Definition of done (§22, with the end-of-Stage-5 review's amendments): *(evidence in DESIGN.md §12.2)*
+  - [x] every §19 test passes, with a table in DESIGN.md mapping each §19 bullet to the test names that cover it ("fallback where nothing draws" and "no re-entry from the mod's own calls" each need a named owner test); *(DESIGN.md §12.3; owners in `tests/done.test.ts`)*
+  - [x] in enforcing mode, no path where a gated call runs after a reviewer failure without the user's answer (shadow mode passes by design); *(tests/done.test.ts, mutation-checked)*
   - [x] no path where the mod approves ahead of the permission check: CI fails if `claude plugin validate` lists a `tool.check` hook, and a behavioural test shows `$.tool.check` resolves to exactly the engine's own decision (Stage 6, `tests/debate.test.ts`);
   - [x] plain mode shows no theme text: the string table, `/council` output, the dialog and the mounted pane and band trees (Stage 6);
-  - [ ] with every model member disabled, rules, Gollum and escalation still work;
-  - [ ] the README states the limits plainly.
-- [ ] Live interactive check by the user in a terminal, screen by screen: the loot roll (Need, Pass, typed instruction, "Chat about this", dismiss) and its "allowed once" notice under Claude Code's prompt; the allow-rule offer after "allow once"; the secrets dialog with Greed and its confirm; the debate pane opening on its own at 144 columns and through `/council debate` below that, with a subagent's review in its view; the ready-check band during a `git push` with a project check; the epic drop row and toast after an approved push; the `council: Leeroy mode` and `council: shadow` labels; every `/council` subcommand in its pane; plain mode on the same screens; and whether VS Code paints the pane.
+  - [x] with every model member disabled, rules, Gollum and escalation still work; *(tests/done.test.ts, mutation-checked)*
+  - [x] the README states the limits plainly.
+- [ ] Live interactive check by the user in a terminal, screen by screen: the loot roll (Need, which must run the call, since the mod's own question could arrive at the hook's `.catch` as re-entry on 2.1.294; Pass; a typed instruction; "Chat about this", after which `/council log` must show `decision: chat`, not `dismissed`, since the wording `interpretRejection` matches is unverified; dismiss) and its "allowed once" notice under Claude Code's prompt; the allow-rule offer after "allow once"; the secrets dialog with Greed and its confirm; the debate pane opening on its own at 144 columns and through `/council debate` below that, with a subagent's review in its view; the ready-check band during a `git push` with a project check; the epic drop row and toast after an approved push; the `council: Leeroy mode` and `council: shadow` labels; every `/council` subcommand in its pane; plain mode on the same screens; and whether VS Code paints the pane.
 
 ## Known follow-ups
 
-### Recommendations on the open items (end of Stage 6, pending the maintainer's decision)
+### Decisions on the open items (after the final deliverables)
 
 | Item | Recommendation |
 | :- | :- |
-| `.catch` and re-entry (2.1.294) | First, before any release: the live check above. If the mod's own `AskUserQuestion` arrives as re-entry, pass exactly that through (a guard on the tool name and the pending ask) and keep refusing every other re-entry. |
-| The ~40-case live eval | Run it once before 1.0, as a `claude plugin eval` suite under `mods/council-of-elrond/evals/` (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injections inside diffs, plus a council set). Roughly 40 to 120 reviews at about 1,000 tokens each. Record the results in DESIGN.md; keep it out of CI. Make it a definition-of-done item. |
-| Live UI checks (stages 2 to 6) | Fold them into the one screen-by-screen check above and run it once, at the end of Stage 6. |
-| Prompt-refusal wording | Re-check against the 2.1.294 binary (`/upgrade-types` step 5) as part of that live check; this session could not read the binary. |
-| A new branch's push has no range | Do it: diff against `<remote>/HEAD` when it exists. It is one more entry in Galadriel's fixed table, and first pushes of feature branches are the common case. |
-| Scan allowed calls for secrets | Do it for high-confidence findings only (refuse), never asking on an allowed call. The cost is a pattern scan of the command text. A literal token in an allowed `curl` currently reaches the network unscanned. Behaviour change: 0.6.0. |
-| An `exact` field in the rule schema | Not now. The `input` pin works and is tested; a schema change waits for a user asking to hand-edit such rules. |
-| The allow-rule offer after every "allow once" | Wait for feedback. If it is noisy, add a `/config` switch for the offer (smallest change). |
-| An allow rule pins text, not the folder | Document only (README, "What it does not protect against"); pinning the cwd needs a schema change. |
-| Migration tools' own files | Defer. Name the gap in the README; add per-tool lookups (Prisma first) only on request. |
-| Review time per council member | Drop: the sitting's time is what the user waits for. |
+| `.catch` and re-entry (2.1.294) | Half settled live (DESIGN §12.1): a subagent's gated calls are reviewed, in the background and the foreground, not refused. **Terminal check:** whether the mod's own `AskUserQuestion` arrives as re-entry ("Allow once" must still run the call). If it does, pass exactly that through (a guard on the tool name and the pending ask) and keep refusing every other re-entry. |
+| The ~40-case live eval | **Before 1.0, not before 0.6.0.** A `claude plugin eval` suite under `mods/council-of-elrond/evals/` (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injections inside diffs, plus a council set), about 40 to 120 reviews at about 1,000 tokens each, run once after the prompts are final, results in DESIGN.md, out of CI. A definition-of-done item for 1.0 (below). |
+| Live UI checks (stages 2 to 6) | **Terminal check:** the one screen-by-screen pass above, once, before 0.6.0. |
+| Prompt-refusal wording | The third automatic-denial wording, "This command requires approval" (a `git push` in `-p` on 2.1.294), is now recognised (DESIGN §6.14). **Terminal check:** re-check the two user-refusal wordings against the 2.1.294 binary (`/upgrade-types` step 5). |
+| A new branch's push has no range | Done (DESIGN §13.1): a fixed fallback against `<remote>/HEAD` when the push names a remote; it needs `<remote>/HEAD`, which `git clone` sets and `git remote add` does not. |
+| Scan allowed calls for secrets | Do it for high-confidence findings only (refuse), never asking on an allowed call. The cost is a pattern scan of the command text. A literal token in an allowed `curl` used to reach the network unscanned. Behaviour change: 0.6.0. Done (DESIGN §13.2). |
+| An `exact` field in the rule schema | Declined. The `input` pin works and is tested; add the field only if someone hand-editing `rules.json` asks. |
+| The allow-rule offer after every "allow once" | Wait for feedback from real use. If it is noisy, a `/config` switch for the offer is the smallest change. |
+| An allow rule pins text, not the folder | Documented (README, "What it does not protect against"); pinning the cwd needs a schema change, declined. |
+| Migration tools' own files | Deferred; the gap is named in the README. Per-tool lookups (Prisma first) only on request. |
+| Review time per council member | Dropped: the sitting's time is what the user waits for. |
 | `auditMaxKb` above 4,096 | Nothing to do: the `/config` row's `max` is 3072, under the 4 MiB read cap. |
-| The council's cost (about 3 Opus reviews per push) | Keep the default; the README's cost section already names the knobs. |
-| `isReadOnly` unused | Leave it unused: trusting it to skip work would let the tool's own claim lower the gate. |
-| `$.ui.ask` in SDK and cloud hosts | Covered by the live check; until then the mod refuses where no surface is attached. |
-| Windows | Declare it unsupported in INSTALL.md (POSIX shell parsing, `HOME` only). |
-| Versioning | Release Stage 6 as 0.6.0 (a minor bump: the default text changed). |
+| The council's cost (about 3 Opus reviews per push) | Default kept; the README's cost section names the knobs. |
+| `isReadOnly` unused | Left unused: trusting it to skip work would let the tool's own claim lower the gate. |
+| `$.ui.ask` in SDK and cloud hosts | Left as is: the mod refuses where no surface is attached, which is the safe default. The terminal check covers the terminal only. |
+| Windows | Declared unsupported in `docs/INSTALL.md` (POSIX shells, `HOME` only). |
+| Versioning | Release as **0.6.0** once the terminal check passes: the default text changed, allowed calls are scanned, and a push's range changed, each a behaviour change under a minor bump. Move the `[Unreleased]` entries to `[0.6.0]` and bump `plugin.json` then, not before. |
+
+Also decided after the final deliverables: the fake secrets in tests are built at run time from two halves (`tests/fixtures.ts`), so no committed line holds a well-formed token and `scripts/check-hygiene.sh` reports none; the audit appender's whole-file re-read stays (tens of milliseconds at 1 MiB; revisit only if latency shows).
+
+### Before 1.0
+
+- [ ] The ~40-case live eval (above), recorded in DESIGN.md: a definition-of-done item for 1.0.
+- [ ] A `/config` switch for the allow-rule offer, only if feedback says the offer is noisy.
+- [ ] The two terminal-check items above resolved: the `AskUserQuestion` re-entry path, and the user-refusal wordings against the binary.
+- [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), not yet decided: performance notes and the concurrency model for DESIGN.md; the `register.ts` reducer refactor; the two-session audit race; the allowlist-oracle note in the README.
+
+The per-stage lists below are the follow-ups as each stage left them. The table above decides
+every one that was still open; a struck item was done in the stage named. They stay for the
+reasoning they carry.
 
 From the 2.1.294 types (Stage 6):
-- **`.catch` and re-entry.** 2.1.294 asks a hook's `.catch` handler, with `next.error.kind === 're-entry'` and `next.called` false, when the engine skips the hook because the event was raised beneath its own frame. Elrond's handler then refuses (fails closed). Verify live, in a terminal, that an escalation's "Allow once" still runs the call (the mod's own `$.ui.ask` must not be refused this way), and that a subagent's gated calls are still reviewed rather than refused. Only then decide whether the handler should pass the mod's own `AskUserQuestion` through.
+- **`.catch` and re-entry.** 2.1.294 asks a hook's `.catch` handler, with `next.error.kind === 're-entry'` and `next.called` false, when the engine skips the hook because the event was raised beneath its own frame. Elrond's handler then refuses (fails closed). Verify live, in a terminal, that an escalation's "Allow once" still runs the call (the mod's own `$.ui.ask` must not be refused this way), and that a subagent's gated calls are still reviewed rather than refused. Only then decide whether the handler should pass the mod's own `AskUserQuestion` through. The subagent half is verified (DESIGN §12.1).
 
 From stage 5:
 - **Live UI check (user):** the allow-rule offer after "allow once" (it can't show in `-p`: nobody to ask), "Add the rule" then the same call passing silently, "Not now" not re-offered, and `/council report` in the pane, in a terminal.
 - **The offer comes after every "allow once"** for a new pattern. "Not now" lasts the session only. If it's noisy, a persistent "never offer for this rule" list, or a `/config` switch for the offer, would be small additions.
 - **An allow rule pins the command text, not the folder.** `rm -r build` added from the project root is also allowed after a `cd` in an earlier, separate call. A `cd x && …` in the same command is part of the pinned text.
-- **Rules can't express "exact command" directly**, hence the `input` pattern over the call's JSON. A dedicated `exact` field in the rule schema would read better in `rules.json`; it's a schema change, so it waits for the user's say-so.
+- **Rules can't express "exact command" directly**, hence the `input` pattern over the call's JSON. A dedicated `exact` field in the rule schema would read better in `rules.json`; it's a schema change; declined (the table above).
 - **Review time per council member** isn't recorded (the sitting's time is); the report shows each member's median from its single reviews only.
 - **The report reads at most three 1 MiB files** in the hook's own time (fine: tens of milliseconds). An `auditMaxKb` above 4,096 would pass `$.fs.read`'s 4 MiB cap; the appender would fail first, as it reads the current file too.
 
 From stage 4:
-- **A push of a branch the remote doesn't have yet** has no range: the diff reviewer sits out, and Galadriel shows no commits. Diffing against `<remote>/HEAD` (the remote's default branch) when it exists would cover the common case.
+- ~~**A push of a branch the remote doesn't have yet** has no range: the diff reviewer sits out, and Galadriel shows no commits. Diffing against `<remote>/HEAD` (the remote's default branch) when it exists would cover the common case.~~ Done (DESIGN §13.1).
 - ~~**Esc during any review** puts a question to the user after they pressed Esc~~ Done in 0.5.0 (DESIGN §10.9): Esc refuses plainly, with no failed attempt, round or dialog.
 - **The council's cost.** Every push now costs about three Opus reviews (~3,000 tokens). If that's too much, the knobs are the `/config` council model, "Full council for big operations", or `disableRules`-style removal of a default entry (not offered: lists only add).
 - **Live UI check (user):** the new `/config` rows (full council on/off, model, one at a time, project checks) and the council lines in `/council` and `/council test`, in a terminal.
@@ -318,10 +332,10 @@ From stage 3:
 - **Live UI check (user):** the new `/config` rows (Legolas and Aragorn enabled and model, diff line limit) in a terminal.
 
 From stage 2:
-- **Verify the prompt-refusal wording live** in a terminal. The patterns come from the 2.1.289 binary ("The user doesn't want to proceed with this tool use", "…take this action right now"); after a Claude Code update, re-check them (`grep -a` the binary) or a refusal reads as an ordinary tool error.
+- **Verify the prompt-refusal wording live** in a terminal. The patterns come from the 2.1.289 binary ("The user doesn't want to proceed with this tool use", "…take this action right now"); after a Claude Code update, re-check them (`grep -a` the binary) or a refusal reads as an ordinary tool error. The final live check found a third automatic wording, "This command requires approval" (DESIGN §12.1 item 4), now in `outcomeOf`.
 - **Live UI check in a terminal (user):** the `/council` pane, the `council: shadow` / `council: bypass` label, the "Council: you allowed this once" line under the permission dialog, the secrets dialog with three options and the allowlist confirm.
-- **Scan allowed calls too?** The secrets scan follows SPEC §4 and reads gated calls only (DESIGN §6.1). Scanning every call is cheap; it needs the user's say-so since it changes the pipeline order.
-- **Plain-mode identifiers.** `/council` prints member ids such as `gandalf` where you type them (DESIGN §6.16); stage 6's plain-mode test should decide whether ids count as theme text.
+- ~~**Scan allowed calls too?** The secrets scan follows SPEC §4 and reads gated calls only (DESIGN §6.1). Scanning every call is cheap; it needs the user's say-so since it changes the pipeline order.~~ Done, high confidence only (DESIGN §13.2).
+- **Plain-mode identifiers.** `/council` prints member ids such as `gandalf` where you type them (DESIGN §6.16); decided in stage 6: ids are config keys, not theme text (DESIGN §11.4).
 - ~~`/config` has no model row for the full council~~ Added in stage 4.
 
 From stage 1:

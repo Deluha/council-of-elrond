@@ -16,7 +16,7 @@ import type { OpsState } from '../hooks/elrond/operations.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
 import { INITIAL_SESSION, resetForPrompt } from '../hooks/state.js'
-import { CONTEXT, ROOT, SHIPPED_COMPILED } from './fixtures.js'
+import { CONTEXT, FAKE_GITHUB_TOKEN, ROOT, SHIPPED_COMPILED } from './fixtures.js'
 
 const opOf = (call: Call, cwd = ROOT) => {
   const where = { ...CONTEXT, cwd }
@@ -59,7 +59,7 @@ describe('operation keys', () => {
   })
 
   test('a secret in a target never reaches the key (it is written to the audit log)', () => {
-    const token = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789' // the established fixture token
+    const token = FAKE_GITHUB_TOKEN // the established fixture token
     const key = bash(`git push https://user:${token}@github.com/o/r main`).key
     expect(key).not.toContain(token)
   })
@@ -125,6 +125,8 @@ describe('outcomes', () => {
     expect(outcomeOf({ isError: true, text: "The user doesn't want to take this action right now. STOP what you are doing." })).toBe('refused-by-user')
     expect(outcomeOf({ isError: true, text: AUTO })).toBe('denied-by-permission')
     expect(outcomeOf({ isError: true, text: 'Permission to use Bash has been denied.' })).toBe('denied-by-permission')
+    expect(outcomeOf({ isError: true, text: 'This command requires approval' })).toBe('denied-by-permission')
+    expect(outcomeOf({ isError: true, text: 'The build requires a newer compiler' })).toBe('error')
   })
 
   test('the person refusing counts; an automatic denial never does', () => {

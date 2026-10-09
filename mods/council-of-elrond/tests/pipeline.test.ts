@@ -7,6 +7,8 @@ import {
   auditLines,
   BLOCK,
   denyOf,
+  FAKE_AWS_KEY,
+  FAKE_GITHUB_TOKEN,
   KEEP_BLOCKED,
   REVISE,
   ROOT,
@@ -96,14 +98,14 @@ describe('review by Gandalf', () => {
   test("the user's latest prompt and session scripts reach the reviewer, redacted", async ($, on) => {
     const w = world(on, { replies: [APPROVE] })
     on('prompt.submit', ($$, e) => ({ text: e.text }))
-    await $.prompt.submit({ text: 'deploy with token ghp_abcdefghijklmnopqrstuvwxyz0123456789', wait: false, origin: { kind: 'composer' } })
+    await $.prompt.submit({ text: `deploy with token ${FAKE_GITHUB_TOKEN}`, wait: false, origin: { kind: 'composer' } })
     await $.tool.call({ tool: 'Write', file_path: `${ROOT}/deploy.sh`, content: 'rm -rf build\n' })
     w.files.set(`${ROOT}/deploy.sh`, 'rm -rf build\n')
     await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh' })
     const prompt = String(w.modelRequests[1]?.prompt)
     expect(prompt).toContain('Script it runs, written in this session (/work/deploy.sh)')
     expect(prompt).toContain('rm -rf build')
-    expect(JSON.stringify(w.modelRequests)).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789')
+    expect(JSON.stringify(w.modelRequests)).not.toContain(FAKE_GITHUB_TOKEN)
   })
 })
 
@@ -233,15 +235,15 @@ describe('config', () => {
 
 describe('audit log', () => {
   test('records every field, and never contents or secrets', async ($, on) => {
-    const w = world(on, { replies: [verdict('block', 'Writes key AKIAABCDEFGHIJKLMNOP to disk.', 'Use the vault.')] })
-    await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/keys.ts`, content: 'const k = "AKIAABCDEFGHIJKLMNOP" // FILE BODY' })
+    const w = world(on, { replies: [verdict('block', `Writes key ${FAKE_AWS_KEY} to disk.`, 'Use the vault.')] })
+    await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/keys.ts`, content: `const k = "${FAKE_AWS_KEY}" // FILE BODY` })
     const raw = w.files.get(`${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`) ?? ''
     const [line] = auditLines(w)
     for (const field of ['ts', 'tool', 'fingerprint', 'opKey', 'tier', 'member', 'profile', 'verdict', 'reason', 'shadow', 'decision', 'latencyMs', 'tokens']) {
       expect(line, field).toHaveProperty(field)
     }
     expect(raw).not.toContain('FILE BODY')
-    expect(raw).not.toContain('AKIAABCDEFGHIJKLMNOP')
+    expect(raw).not.toContain(FAKE_AWS_KEY)
     expect(w.files.get(`${ROOT}/.claude/council-of-elrond/audit/.gitignore`)).toContain('*')
   })
 

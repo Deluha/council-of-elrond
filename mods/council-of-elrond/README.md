@@ -7,15 +7,17 @@ Calls that need a second opinion go to a model reviewer, and anything uncertain 
 > catch what a pattern misses, but they never widen what the rules allow. This is not a sandbox or a
 > security product (see [What it does not protect against](#what-it-does-not-protect-against)).
 
-Status: **Stage 6 of 6, after the 0.5.0 hardening.** Available now: the rules; three model reviewers
-(destructive operations, diffs, and git and databases) with routing between them; the full council
-with your project's own checks for big operations; the secrets scan, read-only previews, review
-rounds and lockout, the approve cache, escalation to you, allow rules offered after "allow once",
-`/council` and `/council report`, shadow mode and bypass, fail-closed handling and the audit log,
-the theme (with a plain mode), and the debate pane, the council check band, the wipe counter, the
-threat meter and the epic drop. The 0.5.0 release closed the rules-tier and pipeline findings of the
-Stage 5 review ([docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md)). A live check in a terminal
-is still to come.
+Status: **all six stages done, with the final deliverables (SPEC §21–22), after the 0.5.0
+hardening.** Available now: the rules; three model reviewers (destructive operations, diffs, and
+git and databases) with routing between them; the full council with your project's own checks for
+big operations; the secrets scan, read-only previews, review rounds and lockout, the approve cache,
+escalation to you, allow rules offered after "allow once", `/council` and `/council report`, shadow
+mode and bypass, fail-closed handling and the audit log, the theme (with a plain mode), and the
+debate pane, the council check band, the wipe counter, the threat meter and the epic drop. The
+0.5.0 release closed the rules-tier and pipeline findings of the Stage 5 review
+([docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md)). Headless live checks ran on Claude Code
+2.1.294; the interactive screens (the dialogs, the pane, the band, the mode label) still await a
+check in a terminal.
 See [ROADMAP.md](./ROADMAP.md) for what's left, [SPEC.md](./SPEC.md) for the original spec and
 [DESIGN.md](./DESIGN.md) for how it works.
 
@@ -32,6 +34,7 @@ toast at session start suggests it.
 Requires Claude Code 2.1.287 or later (mods are on by default).
 
 - **One session:** `claude --plugin-dir ./mods/council-of-elrond`
+- **For good:** `claude plugin marketplace add Deluha/council-of-elrond`, then `claude plugin install council-of-elrond@council-of-elrond`. Other ways, updating and removing: [docs/INSTALL.md](../../docs/INSTALL.md).
 - **Where no flag can be given** (desktop app, SDK host): set `CLAUDE_CODE_PLUGIN_DIRS` to the folder's absolute path in the environment or in `~/.claude/settings.json` under `env`.
 
 Check it loaded: `/plugin` shows the mods line, and `claude plugin validate ./mods/council-of-elrond`
@@ -72,6 +75,10 @@ Shipped defaults:
 **Approve never pre-approves.** An approved call still goes through Claude Code's normal permission
 check and prompt. The mod never takes part in the permission decision.
 
+**Subagents are gated too.** A subagent's tool calls go through the same pipeline as the main
+conversation's, and their audit lines carry the subagent's `agentId` (checked live on Claude Code
+2.1.294, with the subagent in the background and in the foreground).
+
 ## Reviewers
 
 A review-tier call goes to exactly one model reviewer, the one its rule names (`member` and
@@ -100,7 +107,7 @@ why.
 - **Who sits:** every enabled reviewer with something of the call to review.
   - The destructive-operations reviewer always sits.
   - The git and database reviewer sits once for each profile the call touches, so `git push && psql …` gets both.
-  - The diff reviewer sits for a file change, and for a push or merge. There it reviews the changes the push would send or the merge would bring in, read by one fixed, read-only `git diff`.
+  - The diff reviewer sits for a file change, and for a push or merge. There it reviews the changes the push would send or the merge would bring in, read by one fixed, read-only `git diff`. When the remote does not have the branch yet, the diff is against the remote's default branch (`<remote>/HEAD`), the changes since the branch point.
 - **One model:** every member sits on the council's model (`opus` by default), not its own.
 - **One deadline:** every member runs under one shared deadline from that model (Opus 45 s, or "Review deadline" in `/config`). By default they run in parallel. "Full council one at a time" asks them in turn instead, each getting what is left of the deadline, and stops at the first block.
 - **Strictest wins:** block, then revise, then approve. Every objection is labelled with the reviewer who raised it. A reviewer that errors, times out or answers malformed counts as a block from that reviewer.
@@ -237,6 +244,15 @@ overrides the deadline.
 | Diff line limit | 200 |
 | Tool errors count as failed attempts | on |
 
+## Modes
+
+| Mode | What it does | How to set it |
+| :- | :- | :- |
+| Enforcing (the default) | Every tier applies. A reviewer's revise or block refuses the call; a reviewer that fails, or none being on, brings it to you. | Nothing to set. |
+| Shadow | Reviewers and the full council (its project checks included) log their verdicts and never refuse; a failed review passes, logged. The block tier, the ask tier, protected paths, the secrets scan and lockouts still enforce. | `/council shadow on` for the session, or "Shadow mode" in `/config`. Label: `council: shadow`. |
+| Bypass (themed: Leeroy mode) | Every gated call passes unreviewed, block-tier calls and the secrets scan included, and each is logged. | `/council off`, for this session only and never saved; `/council on` ends it. Label: `council: bypass` (`council: Leeroy mode` themed). |
+| Plain | Every string in its plain variant, with no theme text anywhere; behaviour is identical. It combines with any mode above. | "Plain mode" in `/config`. |
+
 ## Theme and plain mode
 
 By default the council speaks in its theme. The "Plain mode" option in `/config` switches every
@@ -306,10 +322,12 @@ What draws where: the pane on every surface Claude Code draws panes for (termina
 
 ## Secrets scan
 
-Every gated call is scanned for secrets in what it would write or run: the shell command (heredocs
-included), Write content, an Edit's new text, a notebook cell, an MCP call's input.
+Every call is scanned for secrets in what it would write or run: the shell command (heredocs
+included), Write content, an Edit's new text, a notebook cell, an MCP call's input. A high-confidence
+finding refuses the call whatever its tier, allowed calls included. A low-confidence finding comes to
+you only on a gated call: an allowed call never gets a question.
 
-- **High confidence** (private keys, AWS, GitHub, Anthropic, OpenAI, Slack, Google and Stripe keys, passwords in connection strings): refused without asking you. Claude is told to remove the secret.
+- **High confidence** (private keys, AWS, GitHub, Anthropic, OpenAI, Slack, Google and Stripe keys, passwords in connection strings): refused without asking you, on an allowed call too (it is logged, with tier `allow`). Claude is told to remove the secret.
 - **Low confidence** (`password=…`-style assignments, long random-looking tokens): comes to you with a redacted snippet. Allow once, keep blocked, type an instruction, or **add to allowlist**. The allowlist asks a second time, showing the exact entry: a `sha256:` fingerprint of the secret, never the secret. Only then is it written to `rules.json` under `gollum.allowlist`.
 
 Add your own patterns in `rules.json`:
@@ -334,7 +352,7 @@ reviewer and to you. The commands come from a table in the mod; the call's targe
 data, and the proposed command never runs.
 
 - **Deletes** (`rm`, `find -delete`): what each target is, and a folder's entries (no process).
-- **`git push`:** the current branch, the remote's URL (redacted) and the commits it would send.
+- **`git push`:** the current branch, the remote's URL (redacted) and the commits it would send. When the remote does not have the branch yet, the commits are shown against the remote's default branch (`<remote>/HEAD`).
 - **`git merge`:** the current branch and the commits it would bring in.
 - **`git reset`, `git rebase`, `git commit --amend`:** recent commits, marked with the remote branches that point at them, and uncommitted changes.
 - **Write, Edit:** the file's diff stat against `HEAD`, and whether git tracks it.
@@ -393,7 +411,7 @@ this call through. If one of your own rules would still decide first, nothing is
 No rule is offered for:
 
 - a call the rules block, or one touching a protected path;
-- a call the secrets scan flagged at any level (an allow rule would skip the scan);
+- a call the secrets scan flagged at any level (an allow rule would skip the low-confidence scan);
 - a script or inline code (what runs isn't in the command);
 - a command whose words expand when it runs (`$VAR`, `$(…)`, backticks), one over several lines, or one over 300 characters;
 - a call you then refused at Claude Code's own prompt, or one that didn't run.
@@ -419,6 +437,8 @@ the preview, your latest prompt) and receives roughly 100–300 output tokens, p
 Sonnet, Opus and Fable at low effort. In a live check, small reviews took about 1,000 tokens each:
 a one-line file write (diffs, Sonnet) in 1.6 s, a `git tag` (git, Opus) in 2.8 s and a `psql -c`
 (database, Opus) in 2.4 s.
+In the final live check, a subagent's `rm -r build` was reviewed like any other call: about 980
+tokens in 1.9–2.5 s on Sonnet.
 
 A **full council** costs one review per seat, on the council's model (Opus by default): typically
 three for a push (about 3,000 tokens in all, about 2 s in a live check, in parallel), two for a
@@ -438,20 +458,21 @@ hold is classified (0.5.0); the gaps that remain:
 - **Shell symbolic links aren't resolved.** File-tool paths are resolved to their real path; paths in shell commands are not.
 - **Two-sided glob intersection isn't computed.** A glob that names a protected file directly (`cat .en*`) is caught, but a glob with a wildcard in a middle segment against a protected `**` glob (`cat .github/*/ci.yml`) may not be.
 - **Not every program that changes things is named.** The shipped rules cover the common ones; a cloud or database CLI, an HTTP write or an interpreter route they don't list may pass. Add a project rule, or propose a default.
-- **POSIX only:** no Windows paths or PowerShell parsing.
+- **POSIX only:** no Windows paths or PowerShell parsing. Windows is unsupported ([docs/INSTALL.md](../../docs/INSTALL.md)).
 - **Long commands aren't parsed.** Commands longer than 20,000 characters, or nested more than four levels deep, go to review.
 
 ## What it does not protect against
 
 - Anything outside tool calls: what Claude says, files it reads, network requests other tools make.
 - A mod that fails to load, a disabled mod, `disableAllHooks`, `--safe-mode` or `--bare`: then nothing is gated.
+- **Bypass.** While `/council off` is on, every gated call passes, block-tier calls and the secrets scan included, until `/council on` or the session ends.
 - **Diffs are built from the call, not from git.** The diff reviewer sees the change the call describes against the file as it stands when the hook runs; a file over 4 MiB, or one it can't read, is shown as the call's own text only, and the prompt says so.
 - **The project checks run your project's code.** Claude can edit the tests and scripts they run (file edits go to the diff reviewer, not to you), so a passing check is only as good as the code it runs. They run as you, with your environment.
-- **A push of a branch the remote doesn't have yet** has no range to diff: the diff reviewer sits out of that council, and the preview shows no commits.
+- **A push with no range to read.** For a branch the remote doesn't have yet, the range is read against the remote's default branch, which needs `<remote>/HEAD`: `git clone` sets it, `git remote add` does not (`git remote set-head origin -a` sets it). Without it, or for a push that names no remote, the diff reviewer sits out of that council and the preview shows no commits.
 - **The database reviewer sees only the SQL it can find**: inline `-c`/`-e`, heredocs, and `.sql` files named in the command and inside the project. A migration tool's own migration files (`prisma migrate deploy`) are not looked up.
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.
 - Rules you loosen, and calls you allow. An allow rule you add skips review, the ask tier and the secrets scan for that exact command; it does not follow a `cd` earlier in another command, so `rm -r build` is allowed in whichever folder Claude runs it.
-- **Secrets in allowed calls.** The secrets scan reads gated calls only: it sits after the allow step, as the spec orders it. A `curl` GET with a key in a header, or a `git commit`, is not scanned.
+- **Low-confidence secrets in allowed calls.** An allowed call is scanned for high-confidence secrets only: a `password=…`-style assignment or a random-looking token in an allowed `curl` or `echo` passes without a question.
 - **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`) and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through.
 - **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb.
 - A hook that overruns its time limit. The engine may run the call; Elrond refuses rather than pass with its budget nearly spent, but it can't act once it has run out.
