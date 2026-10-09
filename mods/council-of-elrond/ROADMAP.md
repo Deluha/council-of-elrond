@@ -299,6 +299,7 @@ Also decided after the final deliverables: the fake secrets in tests are built a
 ### Before 1.0
 
 - [ ] The ~40-case live eval (above), recorded in DESIGN.md: a definition-of-done item for 1.0.
+- [ ] Cloud sessions: try a setup-script install (`claude plugin marketplace add` and `claude plugin install`) in a throwaway cloud environment, and record in DESIGN.md whether the mod loads, whether it needs a restart, and what `$.ui.ask` does there. Repository settings do not load plugins in the cloud (docs/INSTALL.md, "Cloud sessions").
 - [ ] A `/config` switch for the allow-rule offer, only if feedback says the offer is noisy.
 - [ ] The two terminal-check items above resolved: the `AskUserQuestion` re-entry path, and the user-refusal wordings against the binary.
 - [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), not yet decided: performance notes and the concurrency model for DESIGN.md; the `register.ts` reducer refactor; the two-session audit race; the allowlist-oracle note in the README.

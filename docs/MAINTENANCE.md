@@ -109,6 +109,9 @@ time. If a contributor adds a field, check it against this list.
 
 Tested: `claude -p` (headless, in the live checks); the terminal's interactive screens await the
 maintainer's check (ROADMAP "Final deliverables"). Expected to work with no drawing: the desktop
-app, VS Code and JetBrains panels, the Agent SDK, cloud sessions, where `$.ui.ask` may or may not
-be answerable (it rejects where it can't be shown, which refuses the call). Windows shells are not
-parsed (POSIX only). Say so in issues rather than guessing.
+app, VS Code and JetBrains panels and the Agent SDK. Cloud sessions are not tested: a repository's
+settings do not load plugins there (Anthropic's documentation, and an attempt to load the mod from
+repository settings in a cloud session that did not load it), so the mod reaches a cloud session
+only through organization managed settings or a setup script (docs/INSTALL.md, "Cloud sessions").
+Where `$.ui.ask` can't be shown it rejects, which refuses the call. Windows shells are not parsed
+(POSIX only). Say so in issues rather than guessing.
