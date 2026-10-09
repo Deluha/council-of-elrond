@@ -318,7 +318,7 @@ Three things show you a review as it happens, none of them read by Claude:
 
 The pane has its own tab (`council-debate`), beside the `/council` output pane. It opens on its own once per session, the first time a model review or a full council starts; Claude Code keeps an unasked pane hidden below 144 terminal columns, so on a narrow terminal it stays hidden. `/council debate` opens it at any width, and is the way back after you close it. It follows the agent in view: with a subagent's transcript on screen, it shows that subagent's reviews.
 
-What draws where: the pane on every surface Claude Code draws panes for (terminal, desktop, VS Code, mobile; whether VS Code paints it is for a live check to say), and the band on the terminal and desktop only. Where a surface draws nothing (a `claude -p` run, the SDK, cloud), nothing is drawn and nothing is lost: `/council debate` prints the rows as transcript lines, and the audit log and `/council` keep the full record.
+What draws where: the pane on every surface Claude Code draws panes for (terminal, desktop, VS Code, mobile; whether VS Code paints it is for a live check to say), and the band on the terminal and desktop only. Where a surface draws nothing (a `claude -p` run, the SDK, cloud), nothing is drawn and nothing is lost: `/council debate` prints the rows as transcript lines, and the audit log and `/council` keep the full record. The mod does not reach a cloud session from repository settings; see [Cloud sessions](../../docs/INSTALL.md#cloud-sessions).
 
 ## Secrets scan
 

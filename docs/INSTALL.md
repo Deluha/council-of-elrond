@@ -46,9 +46,7 @@ claude plugin marketplace update council-of-elrond
 claude plugin update council-of-elrond@council-of-elrond
 ```
 
-Installed plugins live under `~/.claude/plugins/`. Use `--scope project` on `marketplace add` to
-record the marketplace in the project's settings instead of your user settings, so a team shares
-it.
+Installed plugins live under `~/.claude/plugins/`. Use `--scope project` on `marketplace add` to record the marketplace in the project's settings instead of your user settings. That turns the mod on for the team but does not download it: each collaborator runs `claude plugin install council-of-elrond@council-of-elrond --scope project` once, and Claude Code asks them to trust the folder before it applies the project's marketplace.
 
 ### From a local checkout
 
@@ -67,6 +65,27 @@ Put the export in your shell profile, or in `~/.claude/settings.json` under `env
 
 Several paths are separated with `:` (`;` on Windows). Loading from a folder writes two generated,
 gitignored files into it (`.claude-plugin/types/` and `tsconfig.json`); that is expected.
+
+## Cloud sessions
+
+A repository's `.claude/settings.json` does not load plugins in a cloud session. Anthropic's documentation says `enabledPlugins` and `extraKnownMarketplaces` in a repository are not applied there, and neither are plugins from your user settings. What the documentation offers for the cloud:
+
+- **Organization server-managed settings** (Owner role: Organization settings, Claude Code, Managed settings). Put the same entries there; they apply to every user in the organization:
+
+  ```json
+  {
+    "extraKnownMarketplaces": {
+      "council-of-elrond": {
+        "source": { "source": "github", "repo": "Deluha/council-of-elrond" }
+      }
+    },
+    "enabledPlugins": { "council-of-elrond@council-of-elrond": true }
+  }
+  ```
+
+- **A setup script or a `SessionStart` hook** that runs `claude plugin marketplace add Deluha/council-of-elrond` and `claude plugin install council-of-elrond@council-of-elrond --scope project`. This is not confirmed: the documentation does not say whether the plugin then loads in the same session or needs a restart. A session can fetch only the repositories attached to it, so attach `Deluha/council-of-elrond` to the session if the clone is refused. A `SessionStart` hook does not run in a multi-repository session.
+
+Nothing is drawn in a cloud session, and where nobody can be asked the mod refuses the call. The mod has not been run in a cloud session yet (see [MAINTENANCE.md](MAINTENANCE.md#supported-hosts)). If you try it, report what happened in an issue.
 
 ## Check it loaded
 
