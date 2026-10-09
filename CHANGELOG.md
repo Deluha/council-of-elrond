@@ -42,6 +42,10 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **README.** A "Modes" section (enforcing, shadow, bypass, plain), the install command under
   "Loading it", a note that subagents' calls are gated too, and bypass named among the limits.
 - **Test fixtures.** Fake secrets in tests are built at run time from two halves, so no committed line holds a well-formed token.
+- **Documentation.** The repository README, the maintainer and contributor guides, the GitHub
+  notes and the three project skills are brought in step with the final deliverables: test
+  counts, the three denial wordings, the fixtures' two-half fake tokens, and when 0.6.0 and 1.0
+  happen.
 
 ### Security
 - **Allowed calls are scanned for high-confidence secrets.** A literal key in an allowed `curl` or

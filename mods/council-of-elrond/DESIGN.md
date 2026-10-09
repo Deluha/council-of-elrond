@@ -2,8 +2,8 @@
 
 Status: **final deliverables** (SPEC §21–22, §12 below), after Stage 6 (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
-Built against Claude Code **2.1.289**, checked against **2.1.291** from Stage 5 and **2.1.294** from
-Stage 6. The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.294's) and
+Targets Claude Code **2.1.294** (built on **2.1.289**, checked on **2.1.291** from Stage 5 and **2.1.294** from
+Stage 6). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.294's) and
 are the source of truth over docs, samples and the spec. The 2.1.289 → 2.1.291 drift was additive: a
 new `prompt.mention` event, a `Color` type (theme keys or raw colours) for paint props, a `ceiling`
 on tool-check inputs, teammate record fields, and doc wording. The 2.1.291 → 2.1.294 drift is

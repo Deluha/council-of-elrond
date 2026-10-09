@@ -33,7 +33,7 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (413 after the final deliverables)
+cd mods/council-of-elrond && claude plugin test .     # all tests (426 after the final deliverables)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
@@ -215,7 +215,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 - [x] Generalise `reviewByGandalf` into one top-level `review($, brief, model, deadline, signal)` in register.ts; the `Brief` (`members/brief.ts`) carries member, profile and context together. Members only supply `system(nonce)` and `prompt(context, nonce)`.
 - [x] Tests (§19 Routing, Model members): each member and profile gets its triggers, with Gandalf as fallback; approve, revise and block for each member (`tests/routing.test.ts`, `tests/members.test.ts`).
 - [x] `/council` status lists all three members; `/council test` names the routed member, profile and any fallback.
-- [ ] Optional, **not run yet** (waiting on the user's approval because it costs real tokens): a ~40-case labelled eval (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injection attempts inside diffs) run live against the default models, to confirm prompt quality.
+- [ ] Optional, **not run yet** (a 1.0 item: "Decisions on the open items" and "Before 1.0" below): a ~40-case labelled eval (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injection attempts inside diffs) run live against the default models, to confirm prompt quality.
 
 ## Stage 4: full council with Gimli ✅
 
@@ -280,8 +280,8 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 | The ~40-case live eval | **Before 1.0, not before 0.6.0.** A `claude plugin eval` suite under `mods/council-of-elrond/evals/` (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injections inside diffs, plus a council set), about 40 to 120 reviews at about 1,000 tokens each, run once after the prompts are final, results in DESIGN.md, out of CI. A definition-of-done item for 1.0 (below). |
 | Live UI checks (stages 2 to 6) | **Terminal check:** the one screen-by-screen pass above, once, before 0.6.0. |
 | Prompt-refusal wording | The third automatic-denial wording, "This command requires approval" (a `git push` in `-p` on 2.1.294), is now recognised (DESIGN §6.14). **Terminal check:** re-check the two user-refusal wordings against the 2.1.294 binary (`/upgrade-types` step 5). |
-| A new branch's push has no range | Done (DESIGN §13.1): a fixed fallback against `<remote>/HEAD` when the push names a remote. |
-| Scan allowed calls for secrets | Do it for high-confidence findings only (refuse), never asking on an allowed call. The cost is a pattern scan of the command text. A literal token in an allowed `curl` currently reaches the network unscanned. Behaviour change: 0.6.0. Done (DESIGN §13.2). |
+| A new branch's push has no range | Done (DESIGN §13.1): a fixed fallback against `<remote>/HEAD` when the push names a remote; it needs `<remote>/HEAD`, which `git clone` sets and `git remote add` does not. |
+| Scan allowed calls for secrets | Do it for high-confidence findings only (refuse), never asking on an allowed call. The cost is a pattern scan of the command text. A literal token in an allowed `curl` used to reach the network unscanned. Behaviour change: 0.6.0. Done (DESIGN §13.2). |
 | An `exact` field in the rule schema | Declined. The `input` pin works and is tested; add the field only if someone hand-editing `rules.json` asks. |
 | The allow-rule offer after every "allow once" | Wait for feedback from real use. If it is noisy, a `/config` switch for the offer is the smallest change. |
 | An allow rule pins text, not the folder | Documented (README, "What it does not protect against"); pinning the cwd needs a schema change, declined. |
@@ -301,6 +301,11 @@ Also decided after the final deliverables: the fake secrets in tests are built a
 - [ ] The ~40-case live eval (above), recorded in DESIGN.md: a definition-of-done item for 1.0.
 - [ ] A `/config` switch for the allow-rule offer, only if feedback says the offer is noisy.
 - [ ] The two terminal-check items above resolved: the `AskUserQuestion` re-entry path, and the user-refusal wordings against the binary.
+- [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), not yet decided: performance notes and the concurrency model for DESIGN.md; the `register.ts` reducer refactor; the two-session audit race; the allowlist-oracle note in the README.
+
+The per-stage lists below are the follow-ups as each stage left them. The table above decides
+every one that was still open; a struck item was done in the stage named. They stay for the
+reasoning they carry.
 
 From the 2.1.294 types (Stage 6):
 - **`.catch` and re-entry.** 2.1.294 asks a hook's `.catch` handler, with `next.error.kind === 're-entry'` and `next.called` false, when the engine skips the hook because the event was raised beneath its own frame. Elrond's handler then refuses (fails closed). Verify live, in a terminal, that an escalation's "Allow once" still runs the call (the mod's own `$.ui.ask` must not be refused this way), and that a subagent's gated calls are still reviewed rather than refused. Only then decide whether the handler should pass the mod's own `AskUserQuestion` through. The subagent half is verified (DESIGN §12.1).
@@ -309,7 +314,7 @@ From stage 5:
 - **Live UI check (user):** the allow-rule offer after "allow once" (it can't show in `-p`: nobody to ask), "Add the rule" then the same call passing silently, "Not now" not re-offered, and `/council report` in the pane, in a terminal.
 - **The offer comes after every "allow once"** for a new pattern. "Not now" lasts the session only. If it's noisy, a persistent "never offer for this rule" list, or a `/config` switch for the offer, would be small additions.
 - **An allow rule pins the command text, not the folder.** `rm -r build` added from the project root is also allowed after a `cd` in an earlier, separate call. A `cd x && …` in the same command is part of the pinned text.
-- **Rules can't express "exact command" directly**, hence the `input` pattern over the call's JSON. A dedicated `exact` field in the rule schema would read better in `rules.json`; it's a schema change, so it waits for the user's say-so.
+- **Rules can't express "exact command" directly**, hence the `input` pattern over the call's JSON. A dedicated `exact` field in the rule schema would read better in `rules.json`; it's a schema change; declined (the table above).
 - **Review time per council member** isn't recorded (the sitting's time is); the report shows each member's median from its single reviews only.
 - **The report reads at most three 1 MiB files** in the hook's own time (fine: tens of milliseconds). An `auditMaxKb` above 4,096 would pass `$.fs.read`'s 4 MiB cap; the appender would fail first, as it reads the current file too.
 
@@ -327,10 +332,10 @@ From stage 3:
 - **Live UI check (user):** the new `/config` rows (Legolas and Aragorn enabled and model, diff line limit) in a terminal.
 
 From stage 2:
-- **Verify the prompt-refusal wording live** in a terminal. The patterns come from the 2.1.289 binary ("The user doesn't want to proceed with this tool use", "…take this action right now"); after a Claude Code update, re-check them (`grep -a` the binary) or a refusal reads as an ordinary tool error. The final live check found a third automatic wording, "This command requires approval" (DESIGN §12.1 item 4), not yet in `outcomeOf`.
+- **Verify the prompt-refusal wording live** in a terminal. The patterns come from the 2.1.289 binary ("The user doesn't want to proceed with this tool use", "…take this action right now"); after a Claude Code update, re-check them (`grep -a` the binary) or a refusal reads as an ordinary tool error. The final live check found a third automatic wording, "This command requires approval" (DESIGN §12.1 item 4), now in `outcomeOf`.
 - **Live UI check in a terminal (user):** the `/council` pane, the `council: shadow` / `council: bypass` label, the "Council: you allowed this once" line under the permission dialog, the secrets dialog with three options and the allowlist confirm.
 - ~~**Scan allowed calls too?** The secrets scan follows SPEC §4 and reads gated calls only (DESIGN §6.1). Scanning every call is cheap; it needs the user's say-so since it changes the pipeline order.~~ Done, high confidence only (DESIGN §13.2).
-- **Plain-mode identifiers.** `/council` prints member ids such as `gandalf` where you type them (DESIGN §6.16); stage 6's plain-mode test should decide whether ids count as theme text.
+- **Plain-mode identifiers.** `/council` prints member ids such as `gandalf` where you type them (DESIGN §6.16); decided in stage 6: ids are config keys, not theme text (DESIGN §11.4).
 - ~~`/config` has no model row for the full council~~ Added in stage 4.
 
 From stage 1:

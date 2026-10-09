@@ -35,7 +35,11 @@ Check each and fix what is stale:
   they came from.
 - `mods/council-of-elrond/README.md`: every user-visible change; the status paragraph.
 - `CHANGELOG.md`: the change under "Unreleased".
-- `mods/council-of-elrond/.claude-plugin/plugin.json`: `version` bumped if this is a release.
+- `mods/council-of-elrond/.claude-plugin/plugin.json`: `version` bumped only at a release, when
+  the "Unreleased" entries move under the new version (docs/MAINTENANCE.md); never at a stage
+  checkpoint.
+- CI green on the branch (the "Hygiene" and "Test, typecheck, validate" jobs) before the
+  checkpoint is reported.
 
 ## 3. Hygiene
 
