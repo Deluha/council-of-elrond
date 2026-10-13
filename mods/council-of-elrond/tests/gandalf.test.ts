@@ -77,7 +77,7 @@ describe('redaction', () => {
       FAKE_AWS_KEY,
       FAKE_GITHUB_TOKEN,
       'postgres://admin:hunter22@db.example.com/app',
-      'password=correcthorse',
+      'password=correcthorse7',
       'commit 3f9a1c2b4d5e6f708192a3b4c5d6e7f8091a2b3c',
       '-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----',
     ].join('\n')
@@ -86,7 +86,7 @@ describe('redaction', () => {
     expect(out).not.toContain(FAKE_GITHUB_TOKEN)
     expect(out).not.toContain('hunter22')
     expect(out).toContain('postgres://admin:[REDACTED password]@db.example.com/app')
-    expect(out).not.toContain('correcthorse')
+    expect(out).not.toContain('correcthorse7')
     expect(out).not.toContain('MIIEow')
     expect(out).toContain('3f9a1c2b4d5e6f708192a3b4c5d6e7f8091a2b3c')
   })

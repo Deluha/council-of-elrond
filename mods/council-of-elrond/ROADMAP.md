@@ -316,7 +316,8 @@ are grouped below into three hardening briefs, H1 to H3.
    wordings were added. The "Chat about this" match was wrong, DESIGN §12.4; decision 4 is
    amended and the dialog has its own "Talk first" option.)*
 2. **H1, the secrets scan and protected paths** (below). It ships in 0.6.0, since 0.6.0 already
-   changes what the scan refuses.
+   changes what the scan refuses. *(Done: every H1 row, the C5 `**/` prefixes, `db/migrate/**`
+   included, and the allowlist-oracle note; decisions in DESIGN §13.3.)*
 3. **H2, pipeline robustness** (below). Also in 0.6.0.
 4. **C2**, which needs no cloud run and helps whatever C3 shows. Then **C3** once the maintainer
    can run the cloud probe, then **C4** if C3 calls for it, then **C5** and **C6**.

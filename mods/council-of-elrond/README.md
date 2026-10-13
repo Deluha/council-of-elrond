@@ -61,7 +61,11 @@ Shipped defaults:
   - raw disk writes.
 - **Ask:**
   - `sudo`, `doas`, `su`;
-  - anything touching a protected path: `.env*`, CI config, migrations folders, `.git/`, `.claude/council-of-elrond/`, `.claude/settings*.json`.
+  - anything touching a protected path: `.env*`, `Jenkinsfile`, migrations folders, and the entries below. The entries written with a leading `**/` hold in every repository below the session root, at any depth, the rules file included (`app/.claude/council-of-elrond/rules.json`), and so does the directory itself (`rm -rf app/.git` asks):
+    - `**/.github/workflows/**`, `**/.gitlab-ci.yml`, `**/.circleci/**`, `**/.buildkite/**`;
+    - `**/db/migrate/**`;
+    - `**/.git/**`;
+    - `**/.claude/council-of-elrond/**`, `**/.claude/settings.json`, `**/.claude/settings.local.json`.
 - **Review:**
   - file writes and edits;
   - deletes, moves, in-place edits, writes through a redirect;
@@ -328,8 +332,10 @@ included), Write content, an Edit's new text, a notebook cell, an MCP call's inp
 finding refuses the call whatever its tier, allowed calls included. A low-confidence finding comes to
 you only on a gated call: an allowed call never gets a question.
 
-- **High confidence** (private keys, AWS, GitHub, Anthropic, OpenAI, Slack, Google and Stripe keys, passwords in connection strings): refused without asking you, on an allowed call too (it is logged, with tier `allow`). Claude is told to remove the secret.
-- **Low confidence** (`password=…`-style assignments, long random-looking tokens): comes to you with a redacted snippet. Allow once, keep blocked, type an instruction, or **add to allowlist**. The allowlist asks a second time, showing the exact entry: a `sha256:` fingerprint of the secret, never the secret. Only then is it written to `rules.json` under `gollum.allowlist`.
+- **High confidence** (private keys, PGP private key blocks, AWS, GitHub, GitLab, npm, Anthropic, OpenAI, Slack, Google and Stripe keys, Google OAuth client secrets, Slack webhook URLs, passwords in connection strings): refused without asking you, on an allowed call too (it is logged, with tier `allow`). Claude is told to remove the secret.
+- **Low confidence** (`password=…`-style assignments, including compound names such as `DB_PASSWORD`, `PGPASSWORD` and `dbPassword`; JWTs; `Authorization: Bearer …` and `Basic …` headers; a `mysql -p<password>` argument; a password in a connection string with no user, `redis://:<password>@host`; long random-looking tokens): comes to you with a redacted snippet. Allow once, keep blocked, type an instruction, or **add to allowlist**. The allowlist asks a second time, showing the exact entry: a `sha256:` fingerprint of the secret, never the secret. Only then is it written to `rules.json` under `gollum.allowlist`. The fingerprint of a short password can be guessed offline, so the allowlist is for keys and tokens: for a password finding the second question says so, and a real password is better changed.
+
+Code that only names a secret is not a finding, and is not redacted either: `process.env.API_TOKEN`, `getToken()`, a type annotation such as `password: string`, an indexed lookup such as `tokens[0]`, and a variable reference such as `$TOKEN`.
 
 Add your own patterns in `rules.json`:
 

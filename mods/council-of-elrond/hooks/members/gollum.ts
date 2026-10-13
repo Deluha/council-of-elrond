@@ -1,4 +1,4 @@
-import { isRandomLooking, redact, SECRET_PATTERNS } from '../redact.js'
+import { isPlaceholder, isRandomLooking, LONG_TOKEN, redact, SECRET_PATTERNS } from '../redact.js'
 import type { SecretLevel, SecretPattern } from '../redact.js'
 import { FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
 import type { Call } from '../rules/classify.js'
@@ -22,6 +22,12 @@ export type GollumFinding = {
 
 export type GollumScan = { high: GollumFinding[]; low: GollumFinding[] }
 
+/** Pattern ids whose secret is a password, which a short value makes guessable from its fingerprint. */
+const PASSWORD_PATTERNS: ReadonlySet<string> = new Set(['assignment', 'mysql-password', 'connection-string-empty-user'])
+
+/** Whether the allowlist confirm warns that this finding's fingerprint can be guessed offline. */
+export const warnsPasswordFingerprint = (finding: Pick<GollumFinding, 'patternId'>): boolean => PASSWORD_PATTERNS.has(finding.patternId)
+
 /** The text a call would write or run, by tool. */
 export function scannedText(call: Call): string {
   const input = call.input
@@ -42,19 +48,6 @@ export function scannedText(call: Call): string {
 const MAX_SCAN_CHARS = 500_000
 const MAX_FINDINGS = 10
 const SNIPPET_CHARS = 160
-
-/**
- * A low-confidence value that is plainly not a secret: a variable or
- * expression (`$TOKEN`, `process.env.X`, `getToken()`), a type (`string`),
- * a keyword, or an identifier without a digit.
- */
-const isPlaceholder = (value: string): boolean =>
-  /^[$%<{(*[]/.test(value) ||
-  value.includes('(') ||
-  (/^[A-Za-z_][A-Za-z0-9_.]*$/.test(value) && !/[0-9]/.test(value)) ||
-  /^(.)\1+$/.test(value)
-
-const LONG_TOKEN = /[A-Za-z0-9+/_-]{40,}={0,2}/g
 
 /** Subresource-integrity and checksum prefixes: a hash, not a secret. */
 const HASH_PREFIX = /(sha(1|224|256|384|512)[-:=]|integrity["':\s=]+|sum["':\s=]+|[0-9a-f]{7,}\s+)$/i

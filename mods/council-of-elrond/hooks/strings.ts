@@ -94,6 +94,9 @@ const TABLE = {
   'ask.confirmAllowlist': {
     plain: 'The allowlist entry for this {label} is {entry}. It is written to {path} under {field}, and the scan then allows that secret in every later call in this project. Add it and allow this call?',
   },
+  'ask.confirmAllowlistPassword': {
+    plain: "A password's fingerprint can be guessed offline when the password is short. The allowlist is for keys and tokens; change a real password instead.",
+  },
   'ask.confirmAdd': { plain: 'Add it' },
   'ask.confirmCancel': { plain: 'Cancel' },
   'ask.suggestRule': {

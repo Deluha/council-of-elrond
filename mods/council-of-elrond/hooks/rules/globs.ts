@@ -29,6 +29,8 @@ export type ProtectedMatcher = {
   re: RegExp
   /** The literal directory prefix before the first wildcard, or '' if none. */
   prefix: string
+  /** The glob starts with `**` + `/`: the prefix names the directory at any depth, not only at the root. */
+  anyDepth: boolean
   /** A concrete path the glob matches, to test a candidate glob against. */
   sample: string
 }
@@ -40,8 +42,11 @@ export type ProtectedMatcher = {
  * different letter case on a case-insensitive file system cannot slip past.
  */
 export function protectedMatcher(glob: string): ProtectedMatcher {
-  const firstWild = glob.search(/[*?{[]/)
-  const head = firstWild < 0 ? glob : glob.slice(0, firstWild)
+  // A leading `**/` makes the literal head empty; the prefix is read from the rest.
+  const anyDepth = glob.startsWith('**/')
+  const rest = anyDepth ? glob.slice(3) : glob
+  const firstWild = rest.search(/[*?{[]/)
+  const head = firstWild < 0 ? rest : rest.slice(0, firstWild)
   const prefix = head.includes('/') ? head.slice(0, head.lastIndexOf('/')) : ''
   const sample = glob
     .replace(/\*\*\//g, '')
@@ -49,7 +54,7 @@ export function protectedMatcher(glob: string): ProtectedMatcher {
     .replace(/[*?]/g, 'x')
     .replace(/\{([^,}]*)[^}]*\}/g, '$1')
     .replace(/\[[^\]]*\]/g, 'a')
-  return { glob, re: new RegExp(globToRegExp(glob).source, 'i'), prefix, sample }
+  return { glob, re: new RegExp(globToRegExp(glob).source, 'i'), prefix, anyDepth, sample }
 }
 
 /**
@@ -64,9 +69,13 @@ export function protectedMatcher(glob: string): ProtectedMatcher {
 export function touchesProtected(candidate: string, matchers: readonly ProtectedMatcher[]): boolean {
   const isTargetedGlob = /[*?{[]/.test(candidate) && !candidate.split('/').some(segment => segment === '*' || segment === '**')
   const candidateRe = isTargetedGlob ? new RegExp(globToRegExp(candidate).source, 'i') : undefined
-  return matchers.some(({ re, prefix, sample }) => {
+  const lower = candidate.toLowerCase()
+  return matchers.some(({ re, prefix, anyDepth, sample }) => {
     if (re.test(candidate)) return true
-    if (prefix !== '' && candidate === prefix) return true
+    if (prefix !== '') {
+      const at = prefix.toLowerCase()
+      if (lower === at || (anyDepth && lower.endsWith(`/${at}`))) return true
+    }
     if (candidateRe !== undefined && candidateRe.test(sample)) return true
     return false
   })
