@@ -93,6 +93,14 @@ export function parseCouncil(args: string): CouncilCommand {
   }
 }
 
+/**
+ * Whether a subcommand loosens the gate (bypass on, shadow on, a model switch),
+ * so only a person typing it may run it. `models` (the listing), `on`,
+ * `shadow off` and the rest change nothing that lets more through.
+ */
+export const needsPerson = (command: CouncilCommand): boolean =>
+  (command.kind === 'bypass' && command.on) || (command.kind === 'shadow' && command.on) || command.kind === 'model'
+
 export const isSlot = (value: string): value is ModelSlot => (MODEL_SLOTS as readonly string[]).includes(value)
 
 export const WHO_OF_SLOT: Readonly<Record<ModelSlot, StringKey>> = {

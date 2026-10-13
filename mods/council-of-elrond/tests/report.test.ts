@@ -3,12 +3,9 @@ import { describe, expect, test } from 'claude-code/testing'
 import { auditLine } from '../hooks/audit.js'
 import type { AuditRecord } from '../hooks/audit.js'
 import { parseAudit, reportOutput } from '../hooks/elrond/report.js'
-import { auditLines, ROOT, world } from './fixtures.js'
+import { auditLines, council, ROOT, world } from './fixtures.js'
 
 const LOG = `${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`
-
-type Dollar = { command: { run: (e: { command: string; args?: string }) => Promise<unknown> } }
-const council = ($: unknown, args = '') => ($ as Dollar).command.run({ command: 'council', args })
 
 /** One audit line, as the mod writes it, with the fields a test names. */
 const line = (fields: Partial<AuditRecord>): string =>

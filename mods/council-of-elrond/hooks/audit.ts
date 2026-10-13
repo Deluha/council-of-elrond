@@ -99,6 +99,15 @@ export async function fingerprintOf(tool: string, input: unknown): Promise<strin
 
 export const ROTATED_FILES = 3
 
+const encoder = new TextEncoder()
+
+/** The UTF-8 size of a text: the unit the log's limit is in, which `.length` is not. */
+export const byteLength = (value: string): number => encoder.encode(value).length
+
+/** Whether appending `line` to `current` takes the file past `maxBytes`: the older files are read, and the log rotates, only then. */
+export const isRotation = (current: string, line: string, maxBytes: number): boolean =>
+  current !== '' && byteLength(current) + byteLength(line) > maxBytes
+
 /**
  * The writes that append `line` to a log holding `current`: the new current
  * file, plus the rotated files when the line would take it past `maxBytes`.
@@ -111,8 +120,7 @@ export function appendPlan(
   maxBytes: number,
   older: readonly (string | undefined)[],
 ): { path: string; text: string }[] {
-  const size = new TextEncoder().encode(current).length + new TextEncoder().encode(line).length
-  if (current === '' || size <= maxBytes) return [{ path, text: current + line }]
+  if (!isRotation(current, line, maxBytes)) return [{ path, text: current + line }]
   const writes: { path: string; text: string }[] = []
   for (let n = ROTATED_FILES - 1; n >= 1; n--) {
     const source = n === 1 ? current : older[n - 2]

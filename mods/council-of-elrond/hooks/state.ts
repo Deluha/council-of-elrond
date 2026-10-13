@@ -32,9 +32,80 @@ const MAX_PROMPT_CHARS = 4_000
 
 const MAX_REVIEW_TIMES = 200
 
-/** A value of another shape version reads as a fresh session. */
-export const sessionOf = (value: CouncilSession | undefined): CouncilSession =>
-  value !== undefined && value.v === 4 ? value : INITIAL_SESSION
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+
+const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string')
+
+const isOptionalString = (value: unknown): boolean => value === undefined || typeof value === 'string'
+
+const DEBATE_KINDS: readonly unknown[] = ['review', 'council']
+const DEBATE_STATUSES: readonly unknown[] = ['sitting', 'done']
+const DEBATE_VERDICTS: readonly unknown[] = ['approve', 'revise', 'block', 'failed', 'aborted']
+const VOICE_STATUSES: readonly unknown[] = ['waiting', 'approve', 'revise', 'block', 'failed', 'skipped']
+const CHECK_STATUSES: readonly unknown[] = ['running', 'passed', 'failed', 'timed-out', 'error', 'stopped']
+
+const isVoice = (value: unknown): boolean =>
+  isRecord(value) && typeof value.member === 'string' && VOICE_STATUSES.includes(value.status) && isOptionalString(value.profile) && isOptionalString(value.reason) && isOptionalString(value.alternative)
+
+const isCheck = (value: unknown): boolean => isRecord(value) && typeof value.name === 'string' && CHECK_STATUSES.includes(value.status)
+
+const isDebate = (value: unknown): boolean =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  isOptionalString(value.agentId) &&
+  typeof value.tool === 'string' &&
+  typeof value.call === 'string' &&
+  DEBATE_KINDS.includes(value.kind) &&
+  DEBATE_STATUSES.includes(value.status) &&
+  (value.verdict === undefined || DEBATE_VERDICTS.includes(value.verdict)) &&
+  Array.isArray(value.voices) &&
+  value.voices.every(isVoice) &&
+  Array.isArray(value.checks) &&
+  value.checks.every(isCheck)
+
+const isOp = (value: unknown): boolean => isRecord(value) && isNumber(value.rounds) && isNumber(value.wipes)
+
+const isCounts = (value: unknown): boolean =>
+  isRecord(value) && isNumber(value.approved) && isNumber(value.revised) && isNumber(value.blocked) && isNumber(value.failed)
+
+/**
+ * Whether a stored value has the session's shape: every field, and the
+ * elements of every container the pipeline indexes into. The version alone
+ * says nothing about a value another writer or an older build left behind.
+ */
+export function isSession(value: unknown): value is CouncilSession {
+  return (
+    isRecord(value) &&
+    value.v === 4 &&
+    typeof value.latestPrompt === 'string' &&
+    isNumber(value.promptEpoch) &&
+    isNumber(value.tokensSpent) &&
+    typeof value.bypass === 'boolean' &&
+    (value.shadow === null || typeof value.shadow === 'boolean') &&
+    isRecord(value.models) &&
+    Object.values(value.models).every(model => typeof model === 'string') &&
+    isStringArray(value.written) &&
+    isRecord(value.counts) &&
+    Object.values(value.counts).every(isCounts) &&
+    Array.isArray(value.reviewMs) &&
+    value.reviewMs.every(isNumber) &&
+    isRecord(value.ops) &&
+    Object.values(value.ops).every(isOp) &&
+    isRecord(value.verbWipes) &&
+    Object.values(value.verbWipes).every(isNumber) &&
+    isStringArray(value.cache) &&
+    isStringArray(value.declinedRules) &&
+    Array.isArray(value.debates) &&
+    value.debates.every(isDebate) &&
+    isNumber(value.epicUntil) &&
+    typeof value.debateOpened === 'boolean'
+  )
+}
+
+/** A value of another shape version, or of no valid shape, reads as a fresh session. */
+export const sessionOf = (value: unknown): CouncilSession => (isSession(value) ? value : INITIAL_SESSION)
 
 /**
  * A new prompt from the user: what resets per prompt resets here. Rounds,

@@ -132,6 +132,8 @@ const TABLE = {
     plain: 'Council: new here? Try /council shadow on for the first days. Reviewers then log verdicts without refusing; rules, protected paths and the secrets scan still enforce.',
   },
   'notice.commandFailed': { plain: 'Council: /council could not be registered ({problem})' },
+  'notice.auditFailed': { plain: 'Council: audit write failed: {problem}' },
+  'notice.sessionMalformed': { plain: 'Council: the stored session record has an unexpected shape; it is read as a fresh one' },
 
   // Mode labels by the prompt
   'mode.bypass': { plain: 'council: bypass', themed: 'council: Leeroy mode' },
@@ -141,6 +143,13 @@ const TABLE = {
   'cmd.title': { plain: 'Council' },
   'cmd.help': {
     plain: 'Usage: /council [on | off | shadow on|off | log [n] | rules | test "<command>" | model [<member> <model> [--save]] | reload | report | debate]',
+  },
+  'cmd.description': { plain: 'The council: status, bypass, shadow mode, log, rules, test a command, models, reload, report, debate pane' },
+  'cmd.argumentHint': {
+    plain: '[on|off|shadow on|off|log [n]|rules|test "<cmd>"|model [<member> <model> [--save]]|reload|report|debate]',
+  },
+  'cmd.needsPerson': {
+    plain: 'Nothing was changed: off, shadow on and model only run when a person types them, not from a plugin, another session or a scheduled prompt.',
   },
   'cmd.unknown': { plain: 'Unknown subcommand "{sub}".' },
   'cmd.mode': { plain: 'Mode: {mode}' },

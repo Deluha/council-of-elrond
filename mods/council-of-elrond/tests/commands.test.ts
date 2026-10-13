@@ -1,12 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { parseCouncil, words } from '../hooks/elrond/commands.js'
-import { ALLOW_ONCE, APPROVE, auditLines, BLOCK, denyOf, KEEP_BLOCKED, ROOT, USAGE, world } from './fixtures.js'
+import { needsPerson, parseCouncil, words } from '../hooks/elrond/commands.js'
+import { text } from '../hooks/strings.js'
+import { ALLOW_ONCE, APPROVE, auditLines, BLOCK, council, denyOf, KEEP_BLOCKED, ROOT, USAGE, world } from './fixtures.js'
 
 const PLUGIN = 'council-of-elrond'
-
-type Dollar = { command: { run: (e: { command: string; args?: string }) => Promise<unknown> } }
-const council = ($: unknown, args = '') => ($ as Dollar).command.run({ command: 'council', args })
 
 describe('parsing', () => {
   test('subcommands and their arguments', () => {
@@ -24,6 +22,15 @@ describe('parsing', () => {
     expect(parseCouncil('  DEBATE ')).toEqual({ kind: 'debate' })
     expect(parseCouncil('frobnicate')).toMatchObject({ kind: 'usage', key: 'cmd.unknown' })
     expect(words('a "b c" \'d e\'')).toEqual(['a', 'b c', 'd e'])
+  })
+})
+
+describe('which subcommands need a person', () => {
+  test('only the ones that loosen the gate: bypass on, shadow on, a model switch or clearing it', () => {
+    const needing = ['off', 'shadow on', 'model gandalf opus', 'model gandalf default', 'model aragorn claude-opus-5-5 --save']
+    for (const args of needing) expect(needsPerson(parseCouncil(args)), args).toBe(true)
+    const open = ['', 'status', 'on', 'shadow off', 'shadow', 'model', 'models', 'log 5', 'rules', 'test "ls"', 'reload', 'report', 'debate', 'frobnicate']
+    for (const args of open) expect(needsPerson(parseCouncil(args)), args).toBe(false)
   })
 })
 
@@ -277,6 +284,108 @@ describe('the mode label', () => {
     const w = world(on, { surfaces: ['vscode'] })
     await council($, 'shadow on')
     expect(w.statuses).toContain('council: shadow')
+  })
+})
+
+describe('who may run what', () => {
+  const REFUSED = 'only run when a person types them'
+  const NOT_A_PERSON: { kind: string; name?: string }[] = [
+    { kind: 'plugin', name: 'x' },
+    { kind: 'peer' },
+    { kind: 'scheduled-trigger' },
+    { kind: 'task-notification' },
+  ]
+  const A_PERSON: { kind: string }[] = [{ kind: 'composer' }, { kind: 'bridge' }, { kind: 'sdk' }]
+
+  test('off from a plugin, a peer session or a schedule changes nothing and says so', async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [BLOCK] })
+    for (const origin of NOT_A_PERSON) {
+      await council($, 'off', origin)
+      expect(w.logs.join('\n'), origin.kind).toContain(REFUSED)
+      expect(w.logs.join('\n'), origin.kind).not.toContain('Bypass is on')
+      w.logs.length = 0
+    }
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('(block)')
+    expect(w.ran).toEqual([])
+  })
+
+  test('shadow on from them changes nothing and says so', async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [BLOCK] })
+    for (const origin of NOT_A_PERSON) {
+      await council($, 'shadow on', origin)
+      expect(w.logs.join('\n'), origin.kind).toContain(REFUSED)
+      w.logs.length = 0
+    }
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('(block)')
+    expect(w.ran).toEqual([])
+  })
+
+  test('a model switch, or clearing one, from them changes nothing and says so; no probe is sent', async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [APPROVE] })
+    for (const origin of NOT_A_PERSON) {
+      await council($, 'model gandalf opus', origin)
+      await council($, 'model gandalf default', origin)
+      expect(w.logs.join('\n'), origin.kind).toContain(REFUSED)
+      w.logs.length = 0
+    }
+    expect(w.modelRequests).toEqual([])
+    await council($, 'model')
+    expect(w.logs.join('\n')).toContain('gandalf: sonnet (built-in)')
+  })
+
+  test('the refusal is one line through the same path as any output: the pane where one draws, else the transcript', async ($, on) => {
+    const quiet = world(on, { surfaces: [] })
+    await council($, 'off', { kind: 'plugin', name: 'x' })
+    expect(quiet.logs).toEqual(['Council', text('cmd.needsPerson')])
+  })
+
+  test('where a surface draws, the refusal goes to the pane, not the transcript', async ($, on) => {
+    const w = world(on, { surfaces: ['terminal'] })
+    await council($, 'off', { kind: 'plugin', name: 'x' })
+    expect(w.panes).toEqual(['council'])
+    expect(w.logs).toEqual([])
+  })
+
+  test('a person at the composer, the bridge or the SDK can run all three', async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [BLOCK, APPROVE] })
+    for (const origin of A_PERSON) {
+      await council($, 'off', origin)
+      expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }), origin.kind).toEqual({ result: 'ran' })
+      await council($, 'on', origin)
+      await council($, 'shadow on', origin)
+      expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }), origin.kind).toEqual({ result: 'ran' })
+      await council($, 'shadow off', origin)
+      w.logs.length = 0
+      await council($, 'model gandalf opus', origin)
+      expect(w.logs.join('\n'), origin.kind).toContain('gandalf uses opus for this session.')
+      await council($, 'model gandalf default', origin)
+    }
+    expect(w.logs.join('\n')).not.toContain(REFUSED)
+  })
+
+  test('everything that does not loosen the gate answers any origin', async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [BLOCK] })
+    await council($, 'off')
+    const plugin = { kind: 'plugin', name: 'x' }
+    await council($, 'on', plugin)
+    // Bypass is over: the call is reviewed again.
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('(block)')
+    await council($, 'shadow on')
+    await council($, 'shadow off', plugin)
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('(block)')
+    w.logs.length = 0
+    for (const args of ['', 'status', 'models', 'rules', 'log', 'reload', 'report', 'test "ls"', 'debate']) await council($, args, plugin)
+    const shown = w.logs.join('\n')
+    expect(shown).toContain('Mode: enforcing')
+    expect(shown).toContain('Rules reloaded')
+    expect(shown).not.toContain(REFUSED)
+  })
+
+  test('the command is registered with the table\'s description and argument hint', async ($, on) => {
+    const w = world(on)
+    on('session.start', ($$, e) => ({ cwd: e.cwd }))
+    await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+    expect(w.commandSpecs).toEqual([{ name: 'council', description: text('cmd.description'), argumentHint: text('cmd.argumentHint') }])
   })
 })
 

@@ -5,7 +5,7 @@ import type { Voice } from '../hooks/elrond/combine.js'
 import { refusalText } from '../hooks/elrond/refusal.js'
 import type { GimliRun } from '../hooks/members/gimli.js'
 import { allStrings, currentMode, flavourOf, setMode, text, themedKeys } from '../hooks/strings.js'
-import { ALLOW_ONCE, auditLines, BLOCK, denyOf, KEEP_BLOCKED, THEME, withoutIds, world } from './fixtures.js'
+import { ALLOW_ONCE, auditLines, BLOCK, council, denyOf, KEEP_BLOCKED, THEME, withoutIds, world } from './fixtures.js'
 
 /** What Claude reads: these families, and these single keys, never get a themed variant. */
 const CLAUDE_FACING_FAMILIES = ['refusal.', 'reason.', 'alternative.', 'council.', 'gimli.', 'escalate.', 'route.', 'suggest.', 'notice.', 'report.']
@@ -24,9 +24,6 @@ const CLAUDE_FACING_KEYS = [
   'ask.verdict',
   'ask.failed',
 ]
-
-type Dollar = { command: { run: (e: { command: string; args?: string }) => Promise<unknown> } }
-const council = ($: unknown, args = '') => ($ as Dollar).command.run({ command: 'council', args })
 
 describe('the strings table', () => {
   test('plain mode carries no theme text', () => {

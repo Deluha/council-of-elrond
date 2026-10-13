@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { ALLOW_ONCE, APPROVE, auditLines, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, ROOT, TALK_FIRST, USAGE, world } from './fixtures.js'
+import { ALLOW_ONCE, APPROVE, auditLines, council, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, ROOT, TALK_FIRST, USAGE, world } from './fixtures.js'
 import type { ModelReply, World } from './fixtures.js'
 
 /**
@@ -12,9 +12,6 @@ const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
 const AWS = FAKE_AWS_KEY
 const PUSH = { tool: 'Bash', command: 'git push origin feature' } as const
 const REVIEWED = { tool: 'Bash', command: 'rm -rf build' } as const
-
-type Command = { command: { run: (e: { command: string; args: string }) => Promise<unknown> } }
-const council = ($: unknown, args = ''): Promise<unknown> => ($ as Command).command.run({ command: 'council', args })
 
 const FAILURES = [
   ['an API error', { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: USAGE }],

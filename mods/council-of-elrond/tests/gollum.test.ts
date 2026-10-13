@@ -9,6 +9,7 @@ import {
   ALLOWLIST,
   APPROVE,
   auditLines,
+  council,
   denyOf,
   FAKE_AWS_KEY,
   FAKE_GITHUB_TOKEN,
@@ -450,7 +451,7 @@ describe('allowed calls', () => {
   test('/council report counts it as refused by the secrets scan', async ($, on) => {
     const w = world(on, { surfaces: [] })
     await $.tool.call({ tool: 'Bash', command: `echo ${AWS}` })
-    await ($ as unknown as { command: { run: (e: { command: string; args: string }) => Promise<unknown> } }).command.run({ command: 'council', args: 'report' })
+    await council($, 'report')
     expect(w.logs.join('\n')).toContain('(no rule): 1 (by the secrets scan 1)')
   })
 })

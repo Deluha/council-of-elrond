@@ -58,6 +58,10 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   type, a call, an indexed lookup such as `tokens[0]`) is left as written in reviewer prompts,
   refusals and the audit log; any other value after a secret keyword is redacted, even one the scan
   does not flag (`password=correcthorse`).
+- **`/council off`, `shadow on` and `model` only run when a person types them.** They loosen the
+  gate, so a command from a plugin, another Claude session or a scheduled prompt is now refused
+  with one line and changes nothing; `on`, `shadow off`, the `model` listing, `reload` and the
+  rest answer from any origin. The SDK counts as a person for now.
 - The default is now themed: `/council`, the dialog and the report name the characters, and the
   dialog's options read "Need: allow once" and "Pass: keep blocked". Turn on "Plain mode" in
   `/config` to keep the old text ("Allow once", "Keep blocked", role names).
@@ -77,6 +81,20 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   allowed call still pass: the mod never asks on an allowed call.
 
 ### Fixed
+- **A failed allowlist write is no longer a failed attempt.** When the entry could not be written
+  the call stays blocked, with the transcript line, but the failure is the mod's and no longer
+  counts toward a lockout. Cancelling the confirm still counts.
+- **A malformed stored session no longer denies every call until `/clear`.** The record's shape is
+  checked, not only its version; a value of the wrong shape is read as a fresh session (one debug
+  line says so), and the call is reviewed and decided as usual.
+- **The audit log rotates by bytes.** With multibyte text in the log the size check counted
+  characters, so the log could rotate without moving `.1` to `.2`, and lose a file of lines.
+- **A council check no longer outlives a failed review.** When the full council failed part-way,
+  the project checks it had started now end at once instead of running to their own timeouts, up
+  to ten minutes.
+- **Parallel calls see each other's failed attempts and spent tokens.** The lockout and the token
+  budget are decided on a fresh read of the session, so calls running together on one operation
+  are less likely to all pass a limit that one of them reaches.
 - **Compound secret names are caught.** `DB_PASSWORD=…`, `POSTGRES_PASSWORD=…`,
   `PGPASSWORD=…`, `GITHUB_TOKEN=…` and `dbPassword: "…"` are now low-confidence findings and are
   redacted; before, only a bare keyword before `=` or `:` was.

@@ -10,7 +10,7 @@ import { statusOf, tailOf } from '../hooks/members/gimli.js'
 import type { GimliRun } from '../hooks/members/gimli.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
-import { APPROVE, auditLines, BLOCK, CONTEXT, denyOf, KEEP_BLOCKED, REVISE, ROOT, SHIPPED_COMPILED, verdict, world } from './fixtures.js'
+import { APPROVE, auditLines, BLOCK, CONTEXT, council, denyOf, KEEP_BLOCKED, REVISE, ROOT, SHIPPED_COMPILED, verdict, world } from './fixtures.js'
 import type { World } from './fixtures.js'
 
 const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
@@ -422,8 +422,6 @@ describe('the project checks', () => {
 })
 
 describe('commands', () => {
-  const council = ($: unknown, args = ''): Promise<unknown> => ($ as { command: { run: (e: { command: string; args: string }) => Promise<unknown> } }).command.run({ command: 'council', args })
-
   test('/council test names the full council, its seats and checks, and runs nothing', async ($, on) => {
     const w = world(on, { surfaces: [], isClockMocked: true })
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
