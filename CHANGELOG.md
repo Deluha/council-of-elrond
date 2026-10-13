@@ -56,6 +56,10 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 
 ### Fixed
 - **A third automatic-denial wording is recognised.** Claude Code's "This command requires approval" (seen on 2.1.294 in `-p`) now reads as `denied-by-permission`, so it never counts as a failed attempt, instead of as an ordinary tool error.
+- **A deny rule on a file is read as an automatic denial.** Claude Code's "Permission to edit …
+  has been denied" and "Permission to read … has been denied" (read from the 2.1.296 binary) now
+  read as `denied-by-permission`, like "Permission to use … has been denied", so they never count
+  as a failed attempt; before, they were ordinary tool errors.
 
 ## [0.5.0] - 2026-10-08
 

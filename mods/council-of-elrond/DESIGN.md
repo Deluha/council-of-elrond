@@ -2,8 +2,8 @@
 
 Status: **final deliverables** (SPEC §21–22, §12 below), after Stage 6 (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
-Targets Claude Code **2.1.294** (built on **2.1.289**, checked on **2.1.291** from Stage 5 and **2.1.294** from
-Stage 6). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.294's) and
+Targets Claude Code **2.1.296** (built on **2.1.289**, checked on **2.1.291** from Stage 5, **2.1.294** from
+Stage 6 and **2.1.296** after it). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.296's) and
 are the source of truth over docs, samples and the spec. The 2.1.289 → 2.1.291 drift was additive: a
 new `prompt.mention` event, a `Color` type (theme keys or raw colours) for paint props, a `ceiling`
 on tool-check inputs, teammate record fields, and doc wording. The 2.1.291 → 2.1.294 drift is
@@ -15,6 +15,14 @@ false, where the engine does not run a hook because the event was raised beneath
 frame. Elrond's handler refuses whenever `called` is false, so such a call fails closed; a
 subagent's gated call does not arrive this way: it is reviewed (verified live, §12.1). Whether the
 mod's own `$.ui.ask` (an `AskUserQuestion` call) ever does is for the maintainer's terminal check.
+The 2.1.294 → 2.1.296 drift is additive for every signature the mod calls: `$.ui.notify` (a
+terminal notification, with its `ui.notify` event), `requestMeta` on a `tool.call` input (the
+`_meta` of an MCP server's request), `meta` on MCP tool results, `children` on `Button`,
+`autoCompactWindow` on agent definitions, and new built-in tool fields (`Read`'s `allow_large`, a
+web search result's `snippet`). One semantic change: a `deny` returned after the tool answered
+without error now withholds that result (the model reads "`<tool>` ran, and a plugin withheld its
+result: …") where it used to leave it as the answer. Elrond only denies before `next(e)`, so
+nothing changes for it. The wording re-read from the binary is in §12.4.
 
 ## 1. Step 0 findings
 
@@ -50,8 +58,8 @@ calls: $.clock.after (via epicDrop, runCheck), $.clock.now, $.command.register,
        $.fs.list (via previewOf), $.fs.read (via appendAudit, councilOutput, fileDiffOf, loadContext,
        reportFrom, scriptsOf, sqlFilesOf, writeOverrides), $.fs.stat (via loadContext, previewOf,
        realPathOf, sqlFilesOf), $.fs.write (via appendAudit, writeOverrides),
-       $.model.complete (via probeModel, review), $.process.run (via currentBranchOf, previewOf,
-       rangeDiffOf), $.process.spawn (via runCheck), $.session.cwd, $.session.root (via loadContext),
+       $.model.complete (via probeModel, review), $.process.run (via currentBranchOf,
+       runGitInspection), $.process.spawn (via runCheck), $.session.cwd, $.session.root (via loadContext),
        $.session.surfaces (via escalate, offerRule, openDebatePane, show, showDebate, syncIndicator),
        $.state.get, $.state.set, $.ui.ask (via confirmAllowlist, escalate, offerRule), $.ui.log,
        $.ui.notice, $.ui.open (via openDebatePane, show, showDebate), $.ui.resolve,
@@ -60,7 +68,9 @@ env reads: HOME
 state: council-of-elrond.session, council-of-elrond.panel
 ```
 
-Re-run for the final deliverables on 2.1.294: the lines are unchanged.
+Re-run for the final deliverables on 2.1.294: the lines are unchanged. Re-run on 2.1.296: unchanged
+but for `$.process.run`, now reached through `runGitInspection` (the push-range change after the
+final deliverables).
 
 There is no `tool.check` hook: the mod never takes part in the permission decision. The processes it
 starts are read-only `git` commands from Galadriel's table (§6, §8), and, for a big operation, the
@@ -188,7 +198,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 11. **`/council model`.** A one-request probe (16 tokens) checks the model first. `--save` writes only the `gandalf` row (the only `/config` model row so far) and only picker values; anything else stays session-only and says so.
 12. **`/council` output** is drawn in a pane (`$.ui.open` from the command, so it seats at any width) where a surface draws, else as `ui.log` lines. Verified live: a plain `claude -p "/council …"` prints nothing, and in stream-json the lines arrive as `system/ui_log` messages; the command's result carries no text.
 13. **The mode label** is added to `SessionMode` (terminal and desktop). `$.ui.status` carries it only when a surface without that site (VS Code, mobile) is attached, so the terminal doesn't show it twice.
-14. **Permission-check outcomes, told apart by wording** (ROADMAP decision 12). Your refusal at Claude Code's own prompt ("The user doesn't want to proceed with this tool use…", "…take this action right now", read from the 2.1.289 binary) is `refused-by-user` and counts as a failed attempt, whatever `toolErrorsAreWipes` says. An automatic denial ("… needs approval …", verified live in `-p`; deny-rule wording; and "This command requires approval", seen on 2.1.294 for a `git push` in `-p`, §12.1 item 4) is `denied-by-permission` and never counts. Text matching neither is an ordinary tool error. The user-refusal wording is checked first.
+14. **Permission-check outcomes, told apart by wording** (ROADMAP decision 12). Your refusal at Claude Code's own prompt ("The user doesn't want to proceed with this tool use…", "…take this action right now", read from the 2.1.289 binary) is `refused-by-user` and counts as a failed attempt, whatever `toolErrorsAreWipes` says. An automatic denial ("… needs approval …", verified live in `-p`; deny-rule wording ("Permission to use|edit|read … has been denied", the edit and read forms read from the 2.1.296 binary); and "This command requires approval", seen on 2.1.294 for a `git push` in `-p`, §12.1 item 4) is `denied-by-permission` and never counts. Text matching neither is an ordinary tool error. The user-refusal wording is checked first.
 15. **Redaction fixes.** The assignment pattern now matches JSON-escaped quotes (`\"hunter2\"`), which Stage 1 missed in file-tool call text, and leaves an already-redacted value alone, so redacting twice is stable.
 16. **Identifiers stay as written.** Plain-mode output names member ids where you type them (`/council model gandalf …`, `[gandalf]` in the status), since they are config keys. The string table itself holds no theme text (tested).
 
@@ -506,6 +516,33 @@ the final deliverables.
 | Audit log: fields, no contents, no secrets, rotation | `pipeline.test.ts › audit log › records every field, and never contents or secrets`, `› rotates by size`; `operations.test.ts › a secret in a target never reaches the key`; `council.test.ts › a failing check blocks… none of its output reaches the audit log` |
 | No re-entry from the mod's own calls | **Owner:** `done.test.ts › no re-entry from the mod's own calls` (3: questions; previews and model requests; project checks and writes), each with a project rule blocking `AskUserQuestion`. Also `pipeline.test.ts › the mod's own question does not re-enter the gate`. Live: §12.1. |
 | Commands: `/council test` runs nothing, `/council report` reads the log | `commands.test.ts › test classifies only: no process, no model, nothing runs`; `council.test.ts › /council test names the full council… and runs nothing`; `report.test.ts` (11, over rotated files, unparseable lines and an unreadable file) |
+
+### 12.4 Wording re-read from the 2.1.296 binary
+
+Read with `grep -a` from the installed binary (`/upgrade-types` step 5), not live; the minified code
+around a string was read where the string alone did not settle the question.
+
+- **User refusal: unchanged.** "The user doesn't want to proceed with this tool use" and "The user
+  doesn't want to take this action right now" are both in the binary, and `USER_REFUSAL` matches
+  them. This settles the roadmap's terminal-check item on these wordings.
+- **Automatic denial: unchanged, plus two.** "… needs approval …", "This command requires
+  approval", "requested permissions to edit / read from …", "… but you haven't granted it yet" and
+  "Permission to use … has been denied" are all there and matched. The binary also has "Permission
+  to edit … has been denied." and "Permission to read … has been denied." for a deny rule on a
+  file, which no pattern matched; `AUTOMATIC_DENIAL` now matches them (§6.14).
+- **"Chat about this": the `/chat/i` match in `interpretRejection` is wrong.** Picking the option
+  denies the `AskUserQuestion` call with the feedback "The user wants to clarify these questions.
+  …"; "chat" appears only in the option's label and its internal value. `$.ui.ask` then rejects
+  with `<plugin>: $.ui.ask: no answer (<the call's deny or result text, cut to 120 characters>)`.
+  The result text of a call denied with feedback should open with "The user doesn't want to
+  proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string
+  was NOT written to the file)." (151 characters), as a dismissal's does, so the 120 characters
+  left would be the same for both. Even if the feedback reached the mod uncut, it holds
+  "clarify", not "chat". Either way `interpretRejection` returns `dismissed` for "Chat about this",
+  which counts as a failed attempt, against ROADMAP decision 4 ("not a wipe"). The tests pass
+  because the fixture fakes the rejection as "The user chose to chat about this instead", text the
+  engine never sends. A fix is not a one-line pattern change and is left for the user to decide
+  (ROADMAP "Known follow-ups").
 
 ## 13. Decisions after the final deliverables
 

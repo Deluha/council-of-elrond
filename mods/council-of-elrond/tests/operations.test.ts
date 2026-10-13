@@ -129,6 +129,16 @@ describe('outcomes', () => {
     expect(outcomeOf({ isError: true, text: 'The build requires a newer compiler' })).toBe('error')
   })
 
+  test('a deny rule on a file reads as an automatic denial', () => {
+    for (const text of [
+      'Permission to edit /work/src/app.ts has been denied.',
+      'Permission to read /work/.env has been denied.',
+      'Permission to read /work/link has been denied (it resolves, through a symbolic link, to a path a Read rule denies).',
+    ]) {
+      expect(outcomeOf({ isError: true, text })).toBe('denied-by-permission')
+    }
+  })
+
   test('the person refusing counts; an automatic denial never does', () => {
     for (const toolErrors of [true, false]) {
       expect(isWipeOutcome('refused-by-user', { toolErrors })).toBe(true)

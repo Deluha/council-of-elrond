@@ -38,7 +38,7 @@ tsc -p mods                                           # strict typecheck against
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
 
-- **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289** and checked on **2.1.291** from stage 5 and **2.1.294** from stage 6 (types regenerated each time; the drift was additive, DESIGN.md header). If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts` under the skill's folder and names the path; don't write a mod folder, which would ask to hot-reload it into your session), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
+- **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289** and checked on **2.1.291** from stage 5, **2.1.294** from stage 6 and **2.1.296** after it (types regenerated each time; the drift was additive, DESIGN.md header). If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts` under the skill's folder and names the path; don't write a mod folder, which would ask to hot-reload it into your session), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
 - **Keep the mod out of the session building it.** Don't load it into your own dev session (the skill's hot-reload folder, or `--plugin-dir` on the session you work in): it would gate your own tool calls.
 - **Live checks run headless.** Use `claude -p --plugin-dir ./mods/council-of-elrond "<prompt>"` with harmless commands, ideally in a throwaway `git init` folder, then clean it up along with the generated `.claude-plugin/types/` and `tsconfig.json` in the mod folder. `/council` output only shows with `--output-format stream-json --verbose` (as `system/ui_log`).
 
@@ -268,7 +268,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
   - [x] plain mode shows no theme text: the string table, `/council` output, the dialog and the mounted pane and band trees (Stage 6);
   - [x] with every model member disabled, rules, Gollum and escalation still work; *(tests/done.test.ts, mutation-checked)*
   - [x] the README states the limits plainly.
-- [ ] Live interactive check by the user in a terminal, screen by screen: the loot roll (Need, which must run the call, since the mod's own question could arrive at the hook's `.catch` as re-entry on 2.1.294; Pass; a typed instruction; "Chat about this", after which `/council log` must show `decision: chat`, not `dismissed`, since the wording `interpretRejection` matches is unverified; dismiss) and its "allowed once" notice under Claude Code's prompt; the allow-rule offer after "allow once"; the secrets dialog with Greed and its confirm; the debate pane opening on its own at 144 columns and through `/council debate` below that, with a subagent's review in its view; the ready-check band during a `git push` with a project check; the epic drop row and toast after an approved push; the `council: Leeroy mode` and `council: shadow` labels; every `/council` subcommand in its pane; plain mode on the same screens; and whether VS Code paints the pane.
+- [ ] Live interactive check by the user in a terminal, screen by screen: the loot roll (Need, which must run the call, since the mod's own question could arrive at the hook's `.catch` as re-entry on 2.1.294; Pass; a typed instruction; "Chat about this", after which `/council log` must show `decision: chat`, not `dismissed`, which the 2.1.296 binary says it will not until `interpretRejection` is fixed (DESIGN §12.4); dismiss) and its "allowed once" notice under Claude Code's prompt; the allow-rule offer after "allow once"; the secrets dialog with Greed and its confirm; the debate pane opening on its own at 144 columns and through `/council debate` below that, with a subagent's review in its view; the ready-check band during a `git push` with a project check; the epic drop row and toast after an approved push; the `council: Leeroy mode` and `council: shadow` labels; every `/council` subcommand in its pane; plain mode on the same screens; and whether VS Code paints the pane.
 
 ## Known follow-ups
 
@@ -279,7 +279,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 | `.catch` and re-entry (2.1.294) | Half settled live (DESIGN §12.1): a subagent's gated calls are reviewed, in the background and the foreground, not refused. **Terminal check:** whether the mod's own `AskUserQuestion` arrives as re-entry ("Allow once" must still run the call). If it does, pass exactly that through (a guard on the tool name and the pending ask) and keep refusing every other re-entry. |
 | The ~40-case live eval | **Before 1.0, not before 0.6.0.** A `claude plugin eval` suite under `mods/council-of-elrond/evals/` (destructive vs harmless commands, test-weakening diffs, SQL without WHERE, injections inside diffs, plus a council set), about 40 to 120 reviews at about 1,000 tokens each, run once after the prompts are final, results in DESIGN.md, out of CI. A definition-of-done item for 1.0 (below). |
 | Live UI checks (stages 2 to 6) | **Terminal check:** the one screen-by-screen pass above, once, before 0.6.0. |
-| Prompt-refusal wording | The third automatic-denial wording, "This command requires approval" (a `git push` in `-p` on 2.1.294), is now recognised (DESIGN §6.14). **Terminal check:** re-check the two user-refusal wordings against the 2.1.294 binary (`/upgrade-types` step 5). |
+| Prompt-refusal wording | The third automatic-denial wording, "This command requires approval" (a `git push` in `-p` on 2.1.294), is now recognised (DESIGN §6.14). Settled without a terminal on 2.1.296 (DESIGN §12.4): both user-refusal wordings are in the binary unchanged and matched, and the deny-rule wordings for editing and reading a file are now recognised too. |
 | A new branch's push has no range | Done (DESIGN §13.1): a fixed fallback against `<remote>/HEAD` when the push names a remote; it needs `<remote>/HEAD`, which `git clone` sets and `git remote add` does not. |
 | Scan allowed calls for secrets | Do it for high-confidence findings only (refuse), never asking on an allowed call. The cost is a pattern scan of the command text. A literal token in an allowed `curl` used to reach the network unscanned. Behaviour change: 0.6.0. Done (DESIGN §13.2). |
 | An `exact` field in the rule schema | Declined. The `input` pin works and is tested; add the field only if someone hand-editing `rules.json` asks. |
@@ -311,7 +311,10 @@ are grouped below into three hardening briefs, H1 to H3.
 1. **Regenerate the types for Claude Code 2.1.296** (`/upgrade-types`) before any code changes,
    since the vendored types are 2.1.294. Its step 5 re-reads the two user-refusal wordings from the
    binary, which settles that terminal-check item without a terminal. Also grep the binary for the
-   "Chat about this" rejection message that `interpretRejection` matches.
+   "Chat about this" rejection message that `interpretRejection` matches. *(Done: types are
+   2.1.296's, drift additive, DESIGN.md header. The refusal wordings are unchanged; two deny-rule
+   wordings were added. The "Chat about this" match is wrong, DESIGN §12.4; its fix awaits a
+   decision.)*
 2. **H1, the secrets scan and protected paths** (below). It ships in 0.6.0, since 0.6.0 already
    changes what the scan refuses.
 3. **H2, pipeline robustness** (below). Also in 0.6.0.
@@ -390,7 +393,7 @@ are grouped below into three hardening briefs, H1 to H3.
 - [ ] The ~40-case live eval (above), recorded in DESIGN.md: a definition-of-done item for 1.0.
 - [ ] Cloud sessions: the setup-script install was tried and the mod loads and enforces (findings below, "Cloud sessions"); it is recorded in DESIGN.md §14 (C1); what remains is the `$.ui.ask` probe (C3). Repository settings do not load plugins in the cloud (docs/INSTALL.md, "Cloud sessions").
 - [ ] A `/config` switch for the allow-rule offer, only if feedback says the offer is noisy.
-- [ ] The two terminal-check items above resolved: the `AskUserQuestion` re-entry path, and the user-refusal wordings against the binary.
+- [ ] The terminal-check item above resolved: the `AskUserQuestion` re-entry path. (The user-refusal wordings were settled against the 2.1.296 binary, DESIGN §12.4.)
 - [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), decided 2026-10-13: performance notes and the concurrency model for DESIGN.md; the `register.ts` reducer refactor; the two-session audit race; the allowlist-oracle note in the README. Each is decided, as are the review items still open in the code (H1 to H3), under "Recommendations on the remaining open decisions" above.
 - [ ] The cloud-session work items C2 to C6 below (C1 is done), in the order given under "Recommendations on the remaining open decisions".
 
@@ -456,14 +459,14 @@ From stage 3:
 - **Live UI check (user):** the new `/config` rows (Legolas and Aragorn enabled and model, diff line limit) in a terminal.
 
 From stage 2:
-- **Verify the prompt-refusal wording live** in a terminal. The patterns come from the 2.1.289 binary ("The user doesn't want to proceed with this tool use", "…take this action right now"); after a Claude Code update, re-check them (`grep -a` the binary) or a refusal reads as an ordinary tool error. The final live check found a third automatic wording, "This command requires approval" (DESIGN §12.1 item 4), now in `outcomeOf`.
+- **Verify the prompt-refusal wording live** in a terminal. The patterns come from the 2.1.289 binary ("The user doesn't want to proceed with this tool use", "…take this action right now"); after a Claude Code update, re-check them (`grep -a` the binary) or a refusal reads as an ordinary tool error. The final live check found a third automatic wording, "This command requires approval" (DESIGN §12.1 item 4), now in `outcomeOf`. *(Re-checked against the 2.1.296 binary without a terminal: unchanged, DESIGN §12.4.)*
 - **Live UI check in a terminal (user):** the `/council` pane, the `council: shadow` / `council: bypass` label, the "Council: you allowed this once" line under the permission dialog, the secrets dialog with three options and the allowlist confirm.
 - ~~**Scan allowed calls too?** The secrets scan follows SPEC §4 and reads gated calls only (DESIGN §6.1). Scanning every call is cheap; it needs the user's say-so since it changes the pipeline order.~~ Done, high confidence only (DESIGN §13.2).
 - **Plain-mode identifiers.** `/council` prints member ids such as `gandalf` where you type them (DESIGN §6.16); decided in stage 6: ids are config keys, not theme text (DESIGN §11.4).
 - ~~`/config` has no model row for the full council~~ Added in stage 4.
 
 From stage 1:
-- `interpretRejection` detects "Chat about this" by looking for `chat` in the rejection message; the real wording is unverified. Check it live.
+- `interpretRejection` detects "Chat about this" by looking for `chat` in the rejection message. The 2.1.296 binary shows that word never reaches it (DESIGN §12.4), so "Chat about this" reads as `dismissed` and counts as a failed attempt. **Open, for the user to decide:** what reaches `$.ui.ask`'s rejection is the same for a dismissal and for "Chat about this", so no pattern can tell them apart; the fix is not a one-line change.
 - `$.ui.ask` behaviour in SDK and cloud hosts is undocumented. If it can hang there, consider refusing when the only surfaces are remote ones. *(Cloud: the ask is never reached, as surfaces is empty there; probing it is C3 under "Cloud sessions" above.)*
 - `isReadOnly` from `next(e)`'s result is unused. It could let Galadriel or the cache skip work.
 - The audit appender re-reads the whole log per gated call (no append in `$.fs`). Fine at 1 MiB; revisit if latency shows.
