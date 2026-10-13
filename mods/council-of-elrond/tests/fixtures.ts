@@ -69,6 +69,7 @@ export const REVISE = verdict('revise', 'Too wide.', 'Run rm -r build/out instea
 export const ALLOW_ONCE = 'Need: allow once'
 export const KEEP_BLOCKED = 'Pass: keep blocked'
 export const ALLOWLIST = 'Greed: add to allowlist'
+export const TALK_FIRST = 'Parley: talk first'
 
 export type Asked = { question: string; options: readonly string[]; header: string | undefined }
 
@@ -88,7 +89,7 @@ export type World = {
   /** Symbolic links: path -> where it really lands. */
   links: Map<string, string>
   surfaces: string[]
-  /** What the user answers: a label, free text, `dismiss` or `chat`. Queued `answers` go first. */
+  /** What the user answers: a label, free text, `dismiss` or `chat` (the engine's "Chat about this": the call rejects like a dismissal). Queued `answers` go first. */
   answer: string
   answers: string[]
   /** Model replies, in order; the last one repeats. */
@@ -309,7 +310,7 @@ export function world(
       w.asked.push({ question: question.question, options: question.options.map(o => o.label), header: question.header })
       const answer = w.answers.shift() ?? w.answer
       if (answer === 'dismiss') return { deny: 'dismissed' }
-      if (answer === 'chat') return { deny: 'The user chose to chat about this instead' }
+      if (answer === 'chat') return { deny: "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\nThe user wants to clarify these questions." }
       return { result: { answers: { [question.question]: answer } } as never }
     }
     w.ran.push(strip(e as unknown as Record<string, unknown>))

@@ -117,12 +117,12 @@ describe('what Claude reads stays plain in the themed mode', () => {
 })
 
 describe('the loot roll (themed, the default)', () => {
-  test('the dialog is headed "Loot roll" and offers Need and Pass', async ($, on) => {
+  test('the dialog is headed "Loot roll" and offers Need, Pass and Parley', async ($, on) => {
     const w = world(on, { answer: ALLOW_ONCE })
     await $.tool.call({ tool: 'Bash', command: 'sudo systemctl restart nginx' })
-    expect(w.asked[0]).toMatchObject({ header: 'Loot roll', options: ['Need: allow once', 'Pass: keep blocked'] })
+    expect(w.asked[0]).toMatchObject({ header: 'Loot roll', options: ['Need: allow once', 'Pass: keep blocked', 'Parley: talk first'] })
     expect(w.asked[0]?.question).toContain('Loot roll: a gated call needs your decision.')
-    expect(w.asked[0]?.question).toContain('Need allows it once, Pass keeps it blocked, or type an instruction for Claude.')
+    expect(w.asked[0]?.question).toContain('Need allows it once, Pass keeps it blocked, Parley talks it through first, or type an instruction for Claude.')
   })
 
   test('Need: allow once runs the call', async ($, on) => {
@@ -185,7 +185,7 @@ describe('plain mode (the plainMode option)', () => {
     const w = world(on, { answers: ['Allow once', 'Not now'], answer: 'Keep blocked' })
     const call = { tool: 'Bash', command: 'sudo systemctl restart nginx' } as const
     expect(await $.tool.call(call)).toEqual({ result: 'ran' })
-    expect(w.asked[0]).toMatchObject({ header: 'Council', options: ['Allow once', 'Keep blocked'] })
+    expect(w.asked[0]).toMatchObject({ header: 'Council', options: ['Allow once', 'Keep blocked', 'Talk first'] })
     expect(withoutIds(w.asked[0]?.question ?? '')).not.toMatch(THEME)
     expect(w.asked[0]?.question).toContain('A gated call needs your decision.')
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'sudo systemctl restart nginx' }))).toContain('(keep blocked)')

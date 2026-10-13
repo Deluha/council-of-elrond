@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { withAllowlistEntry } from '../hooks/config/write.js'
 import { patternsWith, scanCall, scanText } from '../hooks/members/gollum.js'
-import { ALLOW_ONCE, ALLOWLIST, APPROVE, auditLines, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, ROOT, world } from './fixtures.js'
+import { ALLOW_ONCE, ALLOWLIST, APPROVE, auditLines, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, ROOT, TALK_FIRST, world } from './fixtures.js'
 
 const AWS = FAKE_AWS_KEY
 const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
@@ -89,7 +89,7 @@ describe('in the pipeline', () => {
     const w = world(on, { answer: ALLOW_ONCE, replies: [APPROVE] })
     const call = { tool: 'Write', file_path: `${ROOT}/src/db.ts`, content: 'const password = "hunter2xyz"' } as const
     expect(await $.tool.call(call)).toEqual({ result: 'ran' })
-    expect(w.asked[0]?.options).toEqual([ALLOW_ONCE, ALLOWLIST, KEEP_BLOCKED])
+    expect(w.asked[0]?.options).toEqual([ALLOW_ONCE, ALLOWLIST, KEEP_BLOCKED, TALK_FIRST])
     expect(w.asked[0]?.question).toContain('Possible secret')
     expect(w.asked[0]?.question).not.toContain('hunter2xyz')
     expect(w.modelRequests).toHaveLength(1)
@@ -123,7 +123,7 @@ describe('in the pipeline', () => {
   test('several possible secrets: no allowlist option', async ($, on) => {
     const w = world(on, { answer: KEEP_BLOCKED })
     await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/db.ts`, content: 'password = "hunter2xyz"\ntoken = "abc123def456"' })
-    expect(w.asked[0]?.options).toEqual([ALLOW_ONCE, KEEP_BLOCKED])
+    expect(w.asked[0]?.options).toEqual([ALLOW_ONCE, KEEP_BLOCKED, TALK_FIRST])
   })
 
   test('cancelling the confirm writes nothing and refuses', async ($, on) => {

@@ -89,8 +89,8 @@ tool.call ─► classify (pure, rules only)
              │         low ──► ask ─► allow once / allowlist (confirm, write, reload) ─► continue
              │ ask ─────► escalate ─► allow once ──► notice, next(e) ─► ran? offer an allow rule (pure,
              │                     │                 checked by classify) ─► add: write, reload
-             │                     └► keep blocked / dismissed / nobody ─► refuse   failed attempt
-             │                     └► instruction ─► refuse, rounds reset; chat ─► refuse
+             │                     └► keep blocked / dismissed (or Chat about this) / nobody ─► refuse  failed attempt
+             │                     └► instruction ─► refuse, rounds reset; talk first ─► refuse
              │ review ─► cached approve this prompt? ─► next(e)
              │           Galadriel preview (fixed table, read-only, 5 s each, ≤ 3)
              │           out of rounds (2) ─► escalate (shadow: pass)
@@ -145,7 +145,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | The file a diff needs can't be read (over 4 MiB, permissions) | The diff shows the call's own text and the prompt says so; the review goes on. |
 | A `.sql` file the call names is missing, unreadable, or lands outside the project (by name or real path) | Left out of the database reviewer's context; the review goes on. |
 | Nobody can be asked (no surface) | Refuse, saying why. |
-| `$.ui.ask` dismissed / "Chat about this" | Refuse (recorded as `dismissed` / `chat`). |
+| `$.ui.ask` dismissed / "Chat about this" | Refuse, a failed attempt (recorded as `dismissed`; the two cannot be told apart, §12.4). "Talk first" refuses without counting (recorded as `chat`). |
 | Overrides file broken, unknown version, invalid field | Ignored whole; shipped rules enforce; a transcript line lists errors by field, plus a toast. |
 | Audit write fails | Logged to the debug log; never changes a decision. |
 | A preview inspection fails or times out (5 s) | That inspection is left out; no preview is never a reason to allow or block. |
@@ -192,7 +192,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 5. **Previews on the review tier only.** SPEC §4 puts the ask step before Galadriel. Preview commands come only from the table in `members/galadriel.ts`. Git refs and remotes are validated (no leading `-`, no `..`), a `git -C`/`--git-dir`/`--work-tree` call gets no preview, and git runs with `GIT_OPTIONAL_LOCKS=0`, no prompts and no pager. The preview is redacted before it reaches a model or the dialog. File writes show `git diff --stat HEAD`.
 6. **Operation keys** (`elrond/operations.ts`). Shell keys use each gated part's verb (program plus subcommand for git, npm, docker, kubectl and similar) and its sorted targets. Arguments of path programs (`rm`, `mv`, `chmod`, …) and redirect targets are resolved lexically under the root; shell symbolic links are not resolved, as in the classifier. File tools share the `file:` family on the real path. The verb key drops the targets.
 7. **Rounds are counted, not flagged.** "Out of rounds" is `rounds ≥ 2` on the key, so no separate `awaitingUser` flag exists. "Keep blocked" leaves the rounds used up, so the next attempt asks you again; a typed instruction resets them.
-8. **What counts as a failed attempt.** It counts: a block-tier refusal, a high secret, a reviewer's revise or block, keep blocked, dismissed, nobody to ask, and a cancelled allowlist confirm. A gated call that ran and errored also counts (`toolErrorsAreWipes`). It doesn't count: a lockout refusal, "chat about this", a typed instruction. A successful run (approved, allowed once, cached or bypassed) clears its own key. The per-verb counter clears only on a new prompt.
+8. **What counts as a failed attempt.** It counts: a block-tier refusal, a high secret, a reviewer's revise or block, keep blocked, dismissed, nobody to ask, and a cancelled allowlist confirm. A gated call that ran and errored also counts (`toolErrorsAreWipes`). It doesn't count: a lockout refusal, "Talk first" (the dialog's own option; the engine's "Chat about this" is a dismissal and counts), a typed instruction. A successful run (approved, allowed once, cached or bypassed) clears its own key. The per-verb counter clears only on a new prompt.
 9. **The cache lives until your next prompt** (keyed on the prompt epoch, not `turn.start`'s `turnId`, which subagent turns would complicate). A config reload clears it too.
 10. **Shadow mode** shadows the second opinion only. Verdicts are logged with `shadow: true` and use no rounds or failed attempts; a reviewer failure, a switched-off reviewer or a spent budget passes (logged). Rules, protected paths, the ask tier, the secrets scan and lockouts still enforce. The session switch wins over the `/config` setting.
 11. **`/council model`.** A one-request probe (16 tokens) checks the model first. `--save` writes only the `gandalf` row (the only `/config` model row so far) and only picker values; anything else stays session-only and says so.
@@ -541,8 +541,9 @@ around a string was read where the string alone did not settle the question.
   "clarify", not "chat". Either way `interpretRejection` returns `dismissed` for "Chat about this",
   which counts as a failed attempt, against ROADMAP decision 4 ("not a wipe"). The tests pass
   because the fixture fakes the rejection as "The user chose to chat about this instead", text the
-  engine never sends. A fix is not a one-line pattern change and is left for the user to decide
-  (ROADMAP "Known follow-ups").
+  engine never sends. Decided 2026-10-13 (ROADMAP decision 4, amended): the dialog has its own
+  "Talk first" option, which is a real answer and not a failed attempt; the engine's "Chat about
+  this" counts as a dismissal.
 
 ## 13. Decisions after the final deliverables
 

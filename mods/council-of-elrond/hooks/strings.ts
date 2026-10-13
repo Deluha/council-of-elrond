@@ -85,10 +85,11 @@ const TABLE = {
   'ask.failed': { plain: '{who}: no verdict ({problem}).' },
   'ask.preview': { plain: 'What it would touch:\n{preview}' },
   'ask.secret': { plain: 'Possible {label}: {snippet}' },
-  'ask.close': { plain: 'Allow it once, keep it blocked, or type an instruction for Claude.', themed: 'Need allows it once, Pass keeps it blocked, or type an instruction for Claude.' },
-  'ask.closeSecret': { plain: 'Allow it once, add the secret to the allowlist, keep it blocked, or type an instruction for Claude.', themed: 'Need allows it once, Greed adds the secret to the allowlist, Pass keeps it blocked, or type an instruction for Claude.' },
+  'ask.close': { plain: 'Allow it once, keep it blocked, talk it through first, or type an instruction for Claude.', themed: 'Need allows it once, Pass keeps it blocked, Parley talks it through first, or type an instruction for Claude.' },
+  'ask.closeSecret': { plain: 'Allow it once, add the secret to the allowlist, keep it blocked, talk it through first, or type an instruction for Claude.', themed: 'Need allows it once, Greed adds the secret to the allowlist, Pass keeps it blocked, Parley talks it through first, or type an instruction for Claude.' },
   'ask.allowOnce': { plain: 'Allow once', themed: 'Need: allow once' },
   'ask.keepBlocked': { plain: 'Keep blocked', themed: 'Pass: keep blocked' },
+  'ask.talkFirst': { plain: 'Talk first', themed: 'Parley: talk first' },
   'ask.allowlist': { plain: 'Add to allowlist', themed: 'Greed: add to allowlist' },
   'ask.confirmAllowlist': {
     plain: 'The allowlist entry for this {label} is {entry}. It is written to {path} under {field}, and the scan then allows that secret in every later call in this project. Add it and allow this call?',

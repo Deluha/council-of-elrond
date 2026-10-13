@@ -17,7 +17,7 @@ import type { Voice } from './elrond/combine.js'
 import { bigOperationOf, councilSeats, needsCurrentBranch, rangeOf } from './elrond/council.js'
 import type { Big, CouncilSeat } from './elrond/council.js'
 import type { CouncilCommand, Output } from './elrond/commands.js'
-import { interpretAnswer, interpretRejection, optionsOf, questionText } from './elrond/escalation.js'
+import { interpretAnswer, optionsOf, questionText } from './elrond/escalation.js'
 import type { Answer, MemberOpinion, Unanswered } from './elrond/escalation.js'
 import { deadlineFor, profileOf, resolveModel } from './elrond/models.js'
 import type { ModelChoice } from './elrond/models.js'
@@ -688,8 +688,9 @@ async function escalate($: EngineInterface, question: string, withAllowlist: boo
     const mode = currentMode()
     const answer = await $.ui.ask(question, { options: optionsOf(mode, withAllowlist), header: text('ask.rollHeader', {}, mode) })
     return interpretAnswer(answer, mode, withAllowlist)
-  } catch (error) {
-    return interpretRejection(error)
+  } catch {
+    // The engine's "Chat about this" rejects exactly like a dismissal and cannot be told apart (DESIGN §12.4).
+    return 'dismissed'
   }
 }
 
@@ -1322,16 +1323,16 @@ export const register: Register = (on, options) => {
       )
       // One entry per confirm: the allowlist is offered for a single finding only.
       const answer = await escalate($, question, secrets.length === 1)
-      if (answer === 'unavailable' || answer === 'dismissed' || answer === 'chat') {
+      if (answer === 'unavailable' || answer === 'dismissed') {
         decision = answer
-        const reason =
-          answer === 'unavailable'
-            ? text('reason.nobodyToAsk', { why: text(why) })
-            : answer === 'chat'
-              ? text('reason.userWantsChat')
-              : text('reason.userDismissed')
-        // Decision 4: chatting is not a failed attempt; dismissing and nobody to ask are.
-        return refuse({ who: 'who.user', verdict: 'not allowed', reason, alternative: text(answer === 'chat' ? 'alternative.chat' : 'alternative.ask') }, answer !== 'chat')
+        const reason = answer === 'unavailable' ? text('reason.nobodyToAsk', { why: text(why) }) : text('reason.userDismissed')
+        // Dismissing (or the engine's "Chat about this") and nobody to ask are failed attempts.
+        return refuse({ who: 'who.user', verdict: 'not allowed', reason, alternative: text('alternative.ask') }, true)
+      }
+      if (answer.kind === 'talk-first') {
+        decision = 'chat'
+        // Decision 4: "Talk first" is not a failed attempt.
+        return refuse({ who: 'who.user', verdict: 'not allowed', reason: text('reason.userWantsChat'), alternative: text('alternative.chat') }, false)
       }
       if (answer.kind === 'allow-once') {
         decision = 'allow-once'

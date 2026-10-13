@@ -264,7 +264,8 @@ What is themed, for you only:
   databases), Gimli, Gollum, Galadriel, Elrond and the Council of Elrond where plain mode says the
   role ("the destructive-operations reviewer", "the full council").
 - The escalation dialog is a loot roll: headed "Loot roll", with the options "Need: allow once",
-  "Pass: keep blocked" and, for one possible secret, "Greed: add to allowlist".
+  "Pass: keep blocked", "Parley: talk first" and, for one possible secret, "Greed: add to
+  allowlist".
 - Bypass is Leeroy mode (`council: Leeroy mode` by the prompt, and in `/council`).
 - `/council` counts wipes where plain mode says "refused or failed attempts".
 - Each member's one line of flavour in the debate pane, the pane's title ("The debate"), the council check band's header ("Ready check"), the wipe counter, the threat meter and the epic drop (see [Debate pane and council check](#debate-pane-and-council-check)).
@@ -366,7 +367,7 @@ targets with flags dropped and paths resolved. `rm -rf ./build` and `rm -r build
 operation. A push keys on its remote and branch, and SQL on its database.
 
 - **Rounds:** after a reviewer refuses the same operation twice, further attempts come to you without another model call. Typing an instruction starts the rounds over.
-- **Failed attempts:** a refusal by a rule, a reviewer or the secrets scan, your "keep blocked" (or a dismissed question, or nobody to ask), your refusal at Claude Code's own permission prompt, and a gated call that ran and errored all count. "Chat about this" does not, nor does Claude Code denying a call on its own with nobody asked (in `claude -p`, or by a deny rule).
+- **Failed attempts:** a refusal by a rule, a reviewer or the secrets scan, your "keep blocked" (or a dismissed question, or nobody to ask), your refusal at Claude Code's own permission prompt, and a gated call that ran and errored all count. Claude Code's own "Chat about this" counts like a dismissal. "Talk first" does not, nor does Claude Code denying a call on its own with nobody asked (in `claude -p`, or by a deny rule).
 - **Lockout:** three failed attempts on one operation, or five on one kind of operation (say `git push` to any target), lock it out. Claude is told to stop retrying, tell you what failed and propose another approach.
 - A call that runs successfully clears its own operation. Everything resets when you send a new prompt.
 - **Cache:** a reviewer's approve is reused for the identical call until your next prompt. A block or revise never is.
@@ -378,9 +379,10 @@ the read-only preview when there is one, and each reviewer's verdict. You can:
 
 - **Allow once** (themed: "Need: allow once"): the call runs, and still meets Claude Code's normal permission prompt, which then carries the line "Council: you allowed this once".
 - **Keep blocked** (themed: "Pass: keep blocked"): it is refused.
+- **Talk first** (themed: "Parley: talk first"): it is refused, and Claude is told to stop and talk the call through with you before anything else. It is not a failed attempt.
 - **Type an instruction:** it is refused and your text is passed to Claude.
 
-Dismissing the question refuses the call. Where nobody can be asked (`claude -p`, nothing
+Dismissing the question, or choosing Claude Code's own "Chat about this", refuses the call and counts as a failed attempt (Claude Code does not tell the mod which of the two you chose). Where nobody can be asked (`claude -p`, nothing
 attached), the call is refused with the reason.
 
 ### Allow rules after "allow once"
@@ -509,7 +511,7 @@ themed mode, which is the default. Plain mode says the plain meaning instead, ev
 | Round | One proposal and one verdict on the same operation. Two refusals, and the call comes to you. |
 | Wipe | A failed attempt: a refusal, your "keep blocked", a call that ran and errored. The wipe counter shows them in the debate pane. |
 | Lockout | Three failed attempts on one operation, or five on one kind: Claude is told to stop retrying. |
-| Loot roll | The escalation question, in themed mode. Need, Pass and Greed are its labels: allow once, keep blocked, add to allowlist (you can also type an instruction). |
+| Loot roll | The escalation question, in themed mode. Need, Pass, Greed and Parley are its labels: allow once, keep blocked, add to allowlist, talk first (you can also type an instruction). |
 | Leeroy mode | Session bypass (`/council off`). |
 | Shadow mode | Reviewers log their verdicts but never refuse. |
 | Threat meter | Blocks per reviewer, in the debate pane. |
