@@ -150,7 +150,7 @@ describe('/council report', () => {
   test('reads what the mod itself logs: a review records its time, and the report counts it', async ($, on) => {
     const w = world(on, { surfaces: [] })
     await $.tool.call({ tool: 'Bash', command: 'rm -r build' })
-    expect(typeof auditLines(w)[0]?.reviewMs).toBe('number')
+    expect(typeof (await auditLines(w))[0]?.reviewMs).toBe('number')
     await council($, 'report')
     expect(w.logs.join('\n')).toContain('Gandalf [gandalf]: 1 reviews alone, 1000 tokens')
   })

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { needsPerson, parseCouncil, words } from '../hooks/elrond/commands.js'
 import { text } from '../hooks/strings.js'
-import { ALLOW_ONCE, APPROVE, auditLines, BLOCK, council, denyOf, KEEP_BLOCKED, ROOT, USAGE, world } from './fixtures.js'
+import { ALLOW_ONCE, APPROVE, auditLines, BLOCK, council, denyOf, KEEP_BLOCKED, ROOT, settled, USAGE, world } from './fixtures.js'
 
 const PLUGIN = 'council-of-elrond'
 
@@ -130,6 +130,7 @@ describe('/council', () => {
   test('log shows the last verdicts from the audit log', async ($, on) => {
     const w = world(on, { surfaces: [], replies: [BLOCK] })
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+    await settled(w)
     await council($, 'log')
     expect(w.logs.join('\n')).toMatch(/Bash\s+review\s+gandalf: block\s+→ refused/)
   })
@@ -217,7 +218,7 @@ describe('bypass', () => {
     await council($, 'off')
     expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).toEqual({ result: 'ran' })
     expect(w.modelRequests).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ bypass: true, outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ bypass: true, outcome: 'ran' })
     await council($, 'on')
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('(block)')
   })
@@ -228,7 +229,7 @@ describe('shadow mode', () => {
     const w = world(on, { surfaces: [], replies: [BLOCK] })
     await council($, 'shadow on')
     expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).toEqual({ result: 'ran' })
-    expect(auditLines(w)[0]).toMatchObject({ verdict: 'block', shadow: true, outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ verdict: 'block', shadow: true, outcome: 'ran' })
     // Not a round, not a failed attempt: it keeps being reviewed.
     for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(w.modelRequests).toHaveLength(4)
@@ -238,7 +239,7 @@ describe('shadow mode', () => {
     const w = world(on, { replies: [{ isAnswered: false, reason: 'aborted', usage: USAGE }] })
     expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).toEqual({ result: 'ran' })
     expect(w.asked).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ verdict: 'failed', shadow: true })
+    expect((await auditLines(w))[0]).toMatchObject({ verdict: 'failed', shadow: true })
   })
 
   test('block rules, the ask tier and protected paths still enforce', { options: { shadowMode: true } }, async ($, on) => {

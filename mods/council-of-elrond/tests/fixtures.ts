@@ -125,6 +125,10 @@ export type World = {
   ended: number
   /** Whether a write to this path is refused (the call rejects). */
   writeFails: (path: string) => boolean
+  /** Whether a write to this path never returns. */
+  writeHangs: (path: string) => boolean
+  /** How many file calls the engine has answered: `settled` waits until it stops moving. */
+  fsCalls: number
   /** Whether a `clock.now` read is refused (the call rejects), when the clock is mocked. */
   clockFails: () => boolean
   notices: { id: string; text: string | undefined }[]
@@ -184,6 +188,8 @@ export function world(
     spawnReply: () => ({ code: 0 }),
     ended: 0,
     writeFails: () => false,
+    writeHangs: () => false,
+    fsCalls: 0,
     clockFails: () => false,
     notices: [],
     panes: [],
@@ -203,12 +209,18 @@ export function world(
   })
   on('session.surfaces', () => ({ value: w.surfaces as never }))
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }))
-  on('fs.exists', ($, e) => ({ value: w.files.has(e.path) || w.dirs.has(e.path) }))
+  on('fs.exists', ($, e) => {
+    w.fsCalls++
+    return { value: w.files.has(e.path) || w.dirs.has(e.path) }
+  })
   on('fs.read', ($, e) => {
+    w.fsCalls++
     const content = w.files.get(e.path)
     return content === undefined ? { deny: `ENOENT: ${e.path}` } : { value: content }
   })
   on('fs.write', ($, e) => {
+    w.fsCalls++
+    if (w.writeHangs(e.path)) return new Promise<never>(() => undefined)
     if (w.writeFails(e.path)) return { deny: `EIO: ${e.path}` }
     w.files.set(e.path, e.text)
     return { value: undefined }
@@ -396,12 +408,30 @@ export function watchState(on: On): StateWatch {
   return watch
 }
 
-/** The audit log's lines, parsed. */
-export const auditLines = (w: World, path = `${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`): Record<string, unknown>[] =>
-  (w.files.get(path) ?? '')
+type Turns = { setTimeout: (run: () => void, ms: number) => unknown }
+
+/**
+ * Lets the audit lines the mod queued land. The mod does not wait for them, so
+ * they follow the call by a few turns of the event loop: this takes turns (the
+ * mocked clock's settle, or a zero-delay timer) until the file calls stop
+ * coming. A write that never returns ends it too: nothing more is moving.
+ */
+export async function settled(w: World): Promise<void> {
+  for (let turns = 0; turns < 200; turns++) {
+    const before = w.fsCalls
+    await (w.clock !== undefined ? w.clock.settle() : new Promise<void>(resolve => (globalThis as unknown as Turns).setTimeout(resolve, 0)))
+    if (w.fsCalls === before) return
+  }
+}
+
+/** The audit log's lines, parsed, once the queued ones have landed. */
+export const auditLines = async (w: World, path = `${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`): Promise<Record<string, unknown>[]> => {
+  await settled(w)
+  return (w.files.get(path) ?? '')
     .split('\n')
     .filter(line => line !== '')
     .map(line => JSON.parse(line) as Record<string, unknown>)
+}
 
 export const denyOf = (result: unknown): string => {
   const deny = (result as { deny?: unknown }).deny

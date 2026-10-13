@@ -40,16 +40,32 @@ const isStringArray = (value: unknown): value is string[] => Array.isArray(value
 
 const isOptionalString = (value: unknown): boolean => value === undefined || typeof value === 'string'
 
-const DEBATE_KINDS: readonly unknown[] = ['review', 'council']
-const DEBATE_STATUSES: readonly unknown[] = ['sitting', 'done']
-const DEBATE_VERDICTS: readonly unknown[] = ['approve', 'revise', 'block', 'failed', 'aborted']
-const VOICE_STATUSES: readonly unknown[] = ['waiting', 'approve', 'revise', 'block', 'failed', 'skipped']
-const CHECK_STATUSES: readonly unknown[] = ['running', 'passed', 'failed', 'timed-out', 'error', 'stopped']
+// Copied from types/index.d.ts, and checked against it in both directions at compile time: a member
+// missing here would make every stored record fail the shape check, and `sessionOf` would reset
+// the session (lockouts included) on each read.
+const DEBATE_KINDS = ['review', 'council'] as const satisfies readonly CouncilDebate['kind'][]
+const DEBATE_STATUSES = ['sitting', 'done'] as const satisfies readonly CouncilDebate['status'][]
+const DEBATE_VERDICTS = ['approve', 'revise', 'block', 'failed', 'aborted'] as const satisfies readonly NonNullable<CouncilDebate['verdict']>[]
+const VOICE_STATUSES = ['waiting', 'approve', 'revise', 'block', 'failed', 'skipped'] as const satisfies readonly CouncilDebateVoice['status'][]
+const CHECK_STATUSES = ['running', 'passed', 'failed', 'timed-out', 'error', 'stopped'] as const satisfies readonly CouncilDebateCheck['status'][]
+
+/** Resolves to the members of a union that a list leaves out; only `never` compiles (see `Complete`). */
+type Missing<Union, List extends readonly unknown[]> = Exclude<Union, List[number]>
+type Complete<_Check extends never> = true
+type _ListsAreComplete = [
+  Complete<Missing<CouncilDebate['kind'], typeof DEBATE_KINDS>>,
+  Complete<Missing<CouncilDebate['status'], typeof DEBATE_STATUSES>>,
+  Complete<Missing<NonNullable<CouncilDebate['verdict']>, typeof DEBATE_VERDICTS>>,
+  Complete<Missing<CouncilDebateVoice['status'], typeof VOICE_STATUSES>>,
+  Complete<Missing<CouncilDebateCheck['status'], typeof CHECK_STATUSES>>,
+]
+
+const isOneOf = (list: readonly unknown[], value: unknown): boolean => list.includes(value)
 
 const isVoice = (value: unknown): boolean =>
-  isRecord(value) && typeof value.member === 'string' && VOICE_STATUSES.includes(value.status) && isOptionalString(value.profile) && isOptionalString(value.reason) && isOptionalString(value.alternative)
+  isRecord(value) && typeof value.member === 'string' && isOneOf(VOICE_STATUSES, value.status) && isOptionalString(value.profile) && isOptionalString(value.reason) && isOptionalString(value.alternative)
 
-const isCheck = (value: unknown): boolean => isRecord(value) && typeof value.name === 'string' && CHECK_STATUSES.includes(value.status)
+const isCheck = (value: unknown): boolean => isRecord(value) && typeof value.name === 'string' && isOneOf(CHECK_STATUSES, value.status)
 
 const isDebate = (value: unknown): boolean =>
   isRecord(value) &&
@@ -57,9 +73,9 @@ const isDebate = (value: unknown): boolean =>
   isOptionalString(value.agentId) &&
   typeof value.tool === 'string' &&
   typeof value.call === 'string' &&
-  DEBATE_KINDS.includes(value.kind) &&
-  DEBATE_STATUSES.includes(value.status) &&
-  (value.verdict === undefined || DEBATE_VERDICTS.includes(value.verdict)) &&
+  isOneOf(DEBATE_KINDS, value.kind) &&
+  isOneOf(DEBATE_STATUSES, value.status) &&
+  (value.verdict === undefined || isOneOf(DEBATE_VERDICTS, value.verdict)) &&
   Array.isArray(value.voices) &&
   value.voices.every(isVoice) &&
   Array.isArray(value.checks) &&

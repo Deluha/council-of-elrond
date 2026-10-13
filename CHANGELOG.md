@@ -82,13 +82,17 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 
 ### Fixed
 - **A failed allowlist write is no longer a failed attempt.** When the entry could not be written
-  the call stays blocked, with the transcript line, but the failure is the mod's and no longer
+  the call stays blocked, with the transcript line and a reason that says the entry could not be
+  written (not that you chose to keep it blocked), but the failure is the mod's and no longer
   counts toward a lockout. Cancelling the confirm still counts.
 - **A malformed stored session no longer denies every call until `/clear`.** The record's shape is
   checked, not only its version; a value of the wrong shape is read as a fresh session (one debug
   line says so), and the call is reviewed and decided as usual.
 - **The audit log rotates by bytes.** With multibyte text in the log the size check counted
   characters, so the log could rotate without moving `.1` to `.2`, and lose a file of lines.
+- **A hanging audit write no longer holds up later calls.** The audit line is queued and written
+  in order after the call, and nothing waits for it, so a write that never returns holds back only
+  the lines queued after it. `/council log` and `/council report` may not show a line still waiting.
 - **A council check no longer outlives a failed review.** When the full council failed part-way,
   the project checks it had started now end at once instead of running to their own timeouts, up
   to ten minutes.

@@ -55,6 +55,9 @@ const TABLE = {
   // Reasons and alternatives the council supplies itself
   'reason.userKeptBlocked': { plain: 'The user chose to keep this call blocked.' },
   'reason.userDismissed': { plain: 'The user dismissed the question without allowing the call.' },
+  'reason.allowlistNotWritten': {
+    plain: 'You chose to add this finding to the allowlist, but the entry could not be written, so the call stays blocked.',
+  },
   'reason.userWantsChat': { plain: 'The user wants to discuss this call before anything runs.' },
   'reason.nobodyToAsk': { plain: 'The call needs the user, and nobody can be asked in this session. {why}' },
   'reason.failure': { plain: 'The council could not complete its review ({problem}), and it fails closed.' },

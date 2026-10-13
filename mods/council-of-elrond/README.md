@@ -302,6 +302,13 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | `/council report` | A summary of the audit log, rotated files included (see below). |
 | `/council debate` | Opens the [debate pane](#debate-pane-and-council-check) at any width (where nothing draws, prints its rows as transcript lines). |
 
+**`off`, `shadow on` and `model` only run when a person types them.** They loosen the gate (bypass,
+reviewers that never refuse, a different reviewing model), so a command that arrives from a plugin,
+another Claude session or a scheduled prompt is refused with one line and changes nothing. Typing
+them at the prompt, through the Remote Control bridge or from the SDK works. `on`, `shadow off`, the
+`model` listing, `reload` and the rest answer from any origin. (The SDK counts as a person for now,
+because the web client's origin is not yet known.)
+
 ### `/council report`
 
 Read the report after a few days in shadow mode to tune the rules. It has four parts:
@@ -427,13 +434,6 @@ No rule is offered for:
 - a call you then refused at Claude Code's own prompt, or one that didn't run.
 
 A broken `rules.json` is never rewritten: the rule isn't written, and a transcript line says why.
-**`off`, `shadow on` and `model` only run when a person types them.** They loosen the gate (bypass,
-reviewers that never refuse, a different reviewing model), so a command that arrives from a plugin,
-another Claude session or a scheduled prompt is refused with one line and changes nothing. Typing
-them at the prompt, through the Remote Control bridge or from the SDK works. `on`, `shadow off`, the
-`model` listing, `reload` and the rest answer from any origin. (The SDK counts as a person for now,
-because the web client's origin is not yet known.)
-
 Secrets get their own confirm-then-write path, the allowlist (see [Secrets scan](#secrets-scan)).
 
 ## Audit log
@@ -447,8 +447,10 @@ tells apart a call you refused at Claude Code's permission prompt (`refused-by-u
 check denied with nobody asked (`denied-by-permission`), and one that ran and errored (`error`). It never holds file contents, diffs or secrets: the
 call itself appears only as a hash. A `.gitignore` beside it keeps it out of git.
 
-A failed write to the log is noted in the debug log and never changes a decision. The log is
-rotated by size (in bytes) into `.1` and `.2`. Two Claude Code sessions in one project share the
+Lines are written in order after the call, and nothing waits for them: a failed write is noted in
+the debug log, and one that never returns holds back only the lines queued after it, never a
+decision or a later call. `/council log` and `/council report` may not show a line still waiting.
+The log is rotated by size (in bytes) into `.1` and `.2`. Two Claude Code sessions in one project share the
 file with no lock between them, so their lines can interleave or one can overwrite the other's;
 `/council report` skips any line it cannot read.
 

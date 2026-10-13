@@ -12,6 +12,7 @@ import {
   denyOf,
   KEEP_BLOCKED,
   ROOT,
+  settled,
   watchState,
   world,
 } from './fixtures.js'
@@ -104,7 +105,7 @@ describe('a stored session of the wrong shape (DESIGN §13.4 g)', () => {
     state.readAs = () => (state.written.length === 0 ? MALFORMED : undefined)
     expect(await $.tool.call(REVIEWED)).toEqual({ result: 'ran' })
     expect(w.modelRequests).toHaveLength(1)
-    expect(auditLines(w)[0]).toMatchObject({ verdict: 'approve', outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ verdict: 'approve', outcome: 'ran' })
     expect(w.logs.filter(line => line.includes('unexpected shape'))).toHaveLength(1)
     // Healed by the mod's own write: the next call says nothing.
     expect(lastOf(state.written).ops).toEqual({})
@@ -135,7 +136,7 @@ describe('a failure after the call ran (the .catch replay)', () => {
     state.refuseWrite = () => w.ran.length > 0
     expect(await $.tool.call(REVIEWED)).toEqual({ result: 'ran' })
     expect(w.ran).toHaveLength(1)
-    expect(auditLines(w)[0]).toMatchObject({ verdict: 'approve', outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ verdict: 'approve', outcome: 'ran' })
   })
 
   test('while one before it refuses', async ($, on) => {
@@ -166,7 +167,7 @@ describe('a prompt sent while a review is in flight (DESIGN §10.9)', () => {
     expect(after.ops).toEqual({})
     expect(after.verbWipes).toEqual({})
     // The old prompt's refusal is still in the log.
-    expect(auditLines(w)[0]).toMatchObject({ verdict: 'block', outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ verdict: 'block', outcome: 'refused' })
   })
 
   test('an approve is not cached into it', async ($, on) => {
@@ -198,8 +199,8 @@ describe('Esc during a review (DESIGN §10.9)', () => {
     await w.clock?.settle()
     expect(w.asked).toEqual([])
     expect(w.ran).toEqual([])
-    expect(auditLines(w)).toHaveLength(1)
-    expect(auditLines(w)[0]).toMatchObject({ tier: 'review', member: 'gandalf', verdict: 'aborted', decision: null, outcome: 'refused', tokens: 0 })
+    expect(await auditLines(w)).toHaveLength(1)
+    expect((await auditLines(w))[0]).toMatchObject({ tier: 'review', member: 'gandalf', verdict: 'aborted', decision: null, outcome: 'refused', tokens: 0 })
     const after = lastOf(state.written)
     expect(after.ops).toEqual({})
     expect(after.verbWipes).toEqual({})
@@ -222,8 +223,8 @@ describe('Esc during a review (DESIGN §10.9)', () => {
     expect(w.asked).toEqual([])
     expect(w.ran).toEqual([])
     expect(w.ended).toBe(1)
-    expect(auditLines(w)).toHaveLength(1)
-    expect(auditLines(w)[0]).toMatchObject({ member: 'council', verdict: 'aborted', decision: null, outcome: 'refused', tokens: 0 })
+    expect(await auditLines(w)).toHaveLength(1)
+    expect((await auditLines(w))[0]).toMatchObject({ member: 'council', verdict: 'aborted', decision: null, outcome: 'refused', tokens: 0 })
     const after = lastOf(state.written)
     expect(after.ops).toEqual({})
     expect(after.verbWipes).toEqual({})
@@ -261,7 +262,7 @@ describe('the checks do not outlive the council (DESIGN §13.4 b)', () => {
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
     expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })
     expect(w.ended).toBe(0)
-    expect(auditLines(w)[0]?.council).toMatchObject({ checks: [{ name: 'tests', status: 'passed' }] })
+    expect((await auditLines(w))[0]?.council).toMatchObject({ checks: [{ name: 'tests', status: 'passed' }] })
   })
 })
 
@@ -276,13 +277,15 @@ describe('a failed allowlist write (DESIGN §13.4 h)', () => {
       const deny = denyOf(await $.tool.call(CALL))
       expect(deny, `attempt ${attempt}`).toContain('(keep blocked)')
       expect(deny, `attempt ${attempt}`).not.toContain('locked out')
+      expect(deny, `attempt ${attempt}`).toContain('the entry could not be written')
+      expect(deny, `attempt ${attempt}`).not.toContain('chose to keep this call blocked')
     }
     // Every attempt reached the dialog and its confirm: none was locked out.
     expect(w.asked).toHaveLength(8)
     expect(w.logs.filter(line => line.includes('was not written'))).toHaveLength(4)
     expect(w.files.has(RULES)).toBe(false)
     expect(w.ran).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ decision: 'keep-blocked', outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ decision: 'keep-blocked', outcome: 'refused' })
   })
 
   test('cancelling the confirm is still a failed attempt: the fourth is locked out', async ($, on) => {
@@ -300,11 +303,25 @@ describe('the audit log (DESIGN §13.4 c, d)', () => {
     const w = world(on, { replies: [APPROVE] })
     w.writeFails = path => path.endsWith('audit.jsonl')
     expect(await $.tool.call(REVIEWED)).toEqual({ result: 'ran' })
+    await settled(w)
     expect(w.ran).toHaveLength(1)
     expect(w.logs.filter(line => line.startsWith('Council: audit write failed:') && line.includes('EIO'))).toHaveLength(1)
     // The queue goes on: a later line is attempted too.
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build/out' })
+    await settled(w)
     expect(w.logs.filter(line => line.startsWith('Council: audit write failed'))).toHaveLength(2)
+  })
+
+  test('a write that never returns holds up nothing: the next gated call gets its result, and the lines behind it wait', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    w.writeHangs = path => path.endsWith('audit.jsonl')
+    expect(await $.tool.call(REVIEWED)).toEqual({ result: 'ran' })
+    expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build/out' })).toEqual({ result: 'ran' })
+    expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build/tmp' })).toEqual({ result: 'ran' })
+    expect(w.ran).toHaveLength(3)
+    // Nothing reached the log, and no failure was reported: the first write is still pending.
+    expect(await auditLines(w)).toEqual([])
+    expect(w.logs.filter(line => line.includes('audit write failed'))).toEqual([])
   })
 
   test('multibyte text rotates by bytes: .1 moves to .2 first, twice over', { options: { auditMaxKb: 16 } }, async ($, on) => {
@@ -316,15 +333,17 @@ describe('the audit log (DESIGN §13.4 c, d)', () => {
     w.files.set(AUDIT, first)
     w.files.set(`${AUDIT}.1`, 'oldest\n')
     await $.tool.call(REVIEWED)
+    await settled(w)
     expect(w.files.get(`${AUDIT}.2`)).toBe('oldest\n')
     expect(w.files.get(`${AUDIT}.1`) === first).toBe(true)
-    expect(auditLines(w)).toHaveLength(1)
+    expect(await auditLines(w)).toHaveLength(1)
 
     w.files.set(AUDIT, second)
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build/out' })
+    await settled(w)
     expect(w.files.get(`${AUDIT}.2`) === first).toBe(true)
     expect(w.files.get(`${AUDIT}.1`) === second).toBe(true)
-    expect(auditLines(w)).toHaveLength(1)
+    expect(await auditLines(w)).toHaveLength(1)
   })
 })
 
@@ -336,7 +355,7 @@ describe('the clock (DESIGN §13.4 i)', () => {
     await w.clock?.settle()
     await w.clock?.advance(3_000)
     await pending
-    expect(auditLines(w)[0]).toMatchObject({ ts: '1970-01-01T00:00:03.000Z', latencyMs: 3_000, reviewMs: 3_000 })
+    expect((await auditLines(w))[0]).toMatchObject({ ts: '1970-01-01T00:00:03.000Z', latencyMs: 3_000, reviewMs: 3_000 })
   })
 })
 

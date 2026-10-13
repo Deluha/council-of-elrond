@@ -788,13 +788,17 @@ async function appendAudit($: EngineInterface, record: AuditRecord, root: string
   for (const write of appendPlan(path, current, line, maxBytes, older)) await $.fs.write(write.path, write.text)
 }
 
-/** Appends one audit line; writes are serialized, and a failed write never changes a decision. */
-async function audit($: EngineInterface, record: AuditRecord, root: string): Promise<void> {
-  const queued = auditQueue.then(() => appendAudit($, record, root))
-  auditQueue = queued.catch((error: unknown) => {
-    $.ui.log(text('notice.auditFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
-  })
-  await auditQueue
+/**
+ * Queues one audit line. Writes run in order, but nobody waits for them: a
+ * failed write is logged and a hanging one holds back only the lines queued
+ * after it, never a decision or the call that follows.
+ */
+function audit($: EngineInterface, record: AuditRecord, root: string): void {
+  auditQueue = auditQueue
+    .then(() => appendAudit($, record, root))
+    .catch((error: unknown) => {
+      $.ui.log(text('notice.auditFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
+    })
 }
 
 /** Notes a file Claude wrote, once the write has run. */
@@ -1173,7 +1177,7 @@ export const register: Register = (on, options) => {
           const deny = refusalText({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') })
           const fingerprint = await fingerprintOf(call.tool, call.input)
           const now = await $.clock.now()
-          await audit(
+          audit(
             $,
             {
               ts: new Date(now).toISOString(),
@@ -1289,7 +1293,7 @@ export const register: Register = (on, options) => {
         ...(councilRecord !== undefined && { council: councilRecord }),
         ...(e.agentId !== undefined && { agentId: e.agentId }),
       }
-      await audit($, record, ctx.root)
+      audit($, record, ctx.root)
       const counts = result.deny !== undefined ? isWipe : isWipeOutcome(outcome, wipePolicy())
       if (counts || outcome === 'ran') {
         await update($, session, value => {
@@ -1380,7 +1384,7 @@ export const register: Register = (on, options) => {
           $.ui.log(text('notice.allowlistFailed', { problem: written.problem }))
           decision = 'keep-blocked'
           // The write failed, not Claude's attempt: it stays blocked but is not counted against it.
-          return refuse({ who: 'who.user', verdict: 'keep blocked', reason: text('reason.userKeptBlocked'), alternative: text('alternative.removeSecret') }, false)
+          return refuse({ who: 'who.user', verdict: 'keep blocked', reason: text('reason.allowlistNotWritten'), alternative: text('alternative.removeSecret') }, false)
         }
         decision = 'keep-blocked'
         return refuse({ who: 'who.user', verdict: 'keep blocked', reason: text('reason.userKeptBlocked'), alternative: text('alternative.removeSecret') }, true)

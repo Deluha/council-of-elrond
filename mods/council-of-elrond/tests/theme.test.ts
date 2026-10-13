@@ -127,7 +127,7 @@ describe('the loot roll (themed, the default)', () => {
     const call = { tool: 'Bash', command: 'sudo systemctl restart nginx' } as const
     expect(await $.tool.call(call)).toEqual({ result: 'ran' })
     expect(w.ran).toEqual([call])
-    expect(auditLines(w)[0]).toMatchObject({ decision: 'allow-once', outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ decision: 'allow-once', outcome: 'ran' })
   })
 
   test('Pass: keep blocked refuses the call, and the refusal Claude reads has no theme text', async ($, on) => {
@@ -136,7 +136,7 @@ describe('the loot roll (themed, the default)', () => {
     expect(deny).toContain('Decided by: the user (keep blocked).')
     expect(deny).not.toMatch(THEME)
     expect(w.ran).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ decision: 'keep-blocked', outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ decision: 'keep-blocked', outcome: 'refused' })
   })
 
   test('the plain labels are not the answer here: they reach Claude as an instruction', async ($, on) => {
@@ -151,7 +151,7 @@ describe('the loot roll (themed, the default)', () => {
     const deny = denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))
     expect(deny).toContain('Decided by: the destructive-operations reviewer (block).')
     expect(deny).not.toMatch(THEME)
-    const line = auditLines(w)[0]
+    const line = (await auditLines(w))[0]
     expect(JSON.stringify(line?.reason ?? '')).not.toMatch(THEME)
   })
 

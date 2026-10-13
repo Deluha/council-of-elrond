@@ -16,7 +16,7 @@ describe('rounds', () => {
     expect(w.asked).toHaveLength(1)
     expect(w.asked[0]?.question).toContain('refused this operation twice')
     expect(third).toContain('(keep blocked)')
-    const lines = auditLines(w)
+    const lines = await auditLines(w)
     expect(new Set(lines.map(line => line.opKey))).toEqual(new Set(['shell:rm build']))
   })
 
@@ -44,7 +44,7 @@ describe('failed attempts and lockout', () => {
     expect(deny).toContain('propose a different approach')
     expect(w.modelRequests).toHaveLength(2)
     expect(w.asked).toHaveLength(asked)
-    expect(auditLines(w).at(-1)).toMatchObject({ verdict: 'locked out', outcome: 'refused' })
+    expect((await auditLines(w)).at(-1)).toMatchObject({ verdict: 'locked out', outcome: 'refused' })
   })
 
   test('a new prompt clears the lockout', async ($, on) => {
@@ -78,7 +78,7 @@ describe('failed attempts and lockout', () => {
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).not.toContain('locked out')
-    expect(auditLines(w)[0]).toMatchObject({ outcome: 'error' })
+    expect((await auditLines(w))[0]).toMatchObject({ outcome: 'error' })
   })
 
   test('with tool errors not counted, errors never lock out', { options: { toolErrorsAreWipes: false } }, async ($, on) => {
@@ -92,12 +92,12 @@ describe('failed attempts and lockout', () => {
     const w = world(on, { replies: [APPROVE] })
     w.toolResult = { result: 'denied', isError: true, text: "rm in '/work/build' needs approval. Claude Code asks before a shell command removes files there." }
     for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
-    expect(auditLines(w)[0]).toMatchObject({ outcome: 'denied-by-permission' })
+    expect((await auditLines(w))[0]).toMatchObject({ outcome: 'denied-by-permission' })
     expect(w.ran).toHaveLength(3)
 
     w.toolResult = { result: 'refused', isError: true, text: "The user doesn't want to proceed with this tool use. The tool use was rejected." }
     for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
-    expect(auditLines(w)[3]).toMatchObject({ outcome: 'refused-by-user' })
+    expect((await auditLines(w))[3]).toMatchObject({ outcome: 'refused-by-user' })
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('locked out')
     expect(w.ran).toHaveLength(6)
   })
@@ -106,7 +106,7 @@ describe('failed attempts and lockout', () => {
     const w = world(on, { replies: [APPROVE] })
     w.toolResult = { result: 'denied', isError: true, text: 'This command requires approval' }
     for (let i = 0; i < 4; i++) expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).not.toContain('locked out')
-    expect(auditLines(w)[0]).toMatchObject({ outcome: 'denied-by-permission' })
+    expect((await auditLines(w))[0]).toMatchObject({ outcome: 'denied-by-permission' })
     expect(w.ran).toHaveLength(4)
   })
 
@@ -125,7 +125,7 @@ describe('cache', () => {
     await $.tool.call({ tool: 'Bash', command: 'rm  -rf   build' })
     expect(w.modelRequests).toHaveLength(1)
     expect(w.ran).toHaveLength(2)
-    expect(auditLines(w)[1]).toMatchObject({ cached: true, verdict: 'approve', outcome: 'ran' })
+    expect((await auditLines(w))[1]).toMatchObject({ cached: true, verdict: 'approve', outcome: 'ran' })
     await submit($ as never, 'again')
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(w.modelRequests).toHaveLength(2)
