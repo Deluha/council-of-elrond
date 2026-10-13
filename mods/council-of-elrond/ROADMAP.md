@@ -316,7 +316,8 @@ are grouped below into three hardening briefs, H1 to H3.
    wordings were added. The "Chat about this" match was wrong, DESIGN §12.4; decision 4 is
    amended and the dialog has its own "Talk first" option.)*
 2. **H1, the secrets scan and protected paths** (below). It ships in 0.6.0, since 0.6.0 already
-   changes what the scan refuses.
+   changes what the scan refuses. *(Done: every H1 row, the C5 `**/` prefixes, `db/migrate/**`
+   included, and the allowlist-oracle note; decisions in DESIGN §13.3.)*
 3. **H2, pipeline robustness** (below). Also in 0.6.0.
 4. **C2**, which needs no cloud run and helps whatever C3 shows. Then **C3** once the maintainer
    can run the cloud probe, then **C4** if C3 calls for it, then **C5** and **C6**.
@@ -387,6 +388,16 @@ are grouped below into three hardening briefs, H1 to H3.
 | The `register.ts` reducer refactor (now 1,635 lines) | After 1.0, not before. Until then, new decisions (C4's allowance, H2's origin check) land as pure functions in sibling modules, so register.ts gains effects only. |
 | The two-session audit race | Document only (H2). |
 | The allowlist-oracle note | Add it in H1: a README note that a `sha256:` fingerprint of a short password can be guessed offline, so the allowlist is for keys, not passwords. Add one line in the confirm dialog for assignment findings (`strings.ts`). |
+
+**Approved after the H1 checkpoint (2026-10-13).** The user approved the seven decisions H1 took
+beyond this table (DESIGN §13.3) with these changes: redaction uses its own, narrower test of
+plainly-code values (a variable, a call, a dotted path, an indexed lookup, a type word), so a
+value the scan does not flag, such as an all-letter word, is still redacted; indexing is not a
+placeholder to the scan; the password warning follows a `kind` on each secret pattern
+(`password` or `token`, settable in `gollum.patterns`); one timing test covers every shipped
+pattern; the compound-name prefix is capped at 64 characters. Also approved, as a standing rule
+(CLAUDE.md): a decision the roadmap does not cover that loosens the gate goes to the user before
+it is committed; one that tightens it is decided, recorded and reported.
 
 ### Before 1.0
 

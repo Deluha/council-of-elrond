@@ -52,7 +52,7 @@ import type { Inspection, InspectionResult } from './members/galadriel.js'
 import { GANDALF_LIMITS } from './members/gandalf.js'
 import { isGimliBlock, keepTail, statusOf, tailOf } from './members/gimli.js'
 import type { GimliRun } from './members/gimli.js'
-import { patternsWith, scanCall } from './members/gollum.js'
+import { patternsWith, scanCall, warnsPasswordFingerprint } from './members/gollum.js'
 import { callDiff, LEGOLAS_LIMITS } from './members/legolas.js'
 import type { CallDiff, Current } from './members/legolas.js'
 import type { GollumFinding } from './members/gollum.js'
@@ -696,7 +696,8 @@ async function escalate($: EngineInterface, question: string, withAllowlist: boo
 
 /** The second confirm before an allowlist entry is written: only "Add it" adds. */
 async function confirmAllowlist($: EngineInterface, finding: GollumFinding): Promise<boolean> {
-  const question = text('ask.confirmAllowlist', { label: finding.label, entry: finding.fingerprint, path: OVERRIDES_PATH, field: 'gollum.allowlist' })
+  const base = text('ask.confirmAllowlist', { label: finding.label, entry: finding.fingerprint, path: OVERRIDES_PATH, field: 'gollum.allowlist' })
+  const question = warnsPasswordFingerprint(finding) ? `${base}\n${text('ask.confirmAllowlistPassword')}` : base
   try {
     const answer = await $.ui.ask(question, { options: [text('ask.confirmAdd'), text('ask.confirmCancel')], header: text('ask.header') })
     return answer === text('ask.confirmAdd')

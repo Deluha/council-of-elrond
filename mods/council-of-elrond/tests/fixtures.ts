@@ -28,6 +28,14 @@ export const withoutIds = (shown: string): string => shown.replace(/\[[a-z/]+\]/
 export const FAKE_AWS_KEY = ['AKIA', 'ABCDEFGHIJKLMNOP'].join('')
 export const FAKE_GITHUB_TOKEN = ['ghp_', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('')
 
+export const FAKE_GITLAB_TOKEN = ['glpat-', 'abcdefghij0123456789xyz'].join('')
+export const FAKE_NPM_TOKEN = ['npm_', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('')
+export const FAKE_GOOGLE_OAUTH_SECRET = ['GOCSPX-', 'abcdefghijklmnopqrstuvwxyz01'].join('')
+export const FAKE_SLACK_WEBHOOK = ['https://hooks.slack.com/services/', 'T0ABCDEFGH/B0ABCDEFGH/', 'abcdefghijklmnopqrstuvwx'].join('')
+export const FAKE_PGP_KEY = ['-----BEGIN PGP PRIVATE KEY', ' BLOCK-----\nlQdGBF\n-----END PGP PRIVATE KEY', ' BLOCK-----'].join('')
+export const FAKE_JWT = ['eyJhbGciOiJIUzI1NiJ9', '.eyJzdWIiOiIxMjM0NTY3ODkwIn0', '.abcdefghij1234567890'].join('')
+export const FAKE_RANDOM_TOKEN = ['q8Zr2LkP0vT7mN4bW9sX1c', 'Y6hJ3dF5gA0eR8tU2iO'].join('')
+
 export const ROOT = '/work'
 export const HOME = '/home/me'
 

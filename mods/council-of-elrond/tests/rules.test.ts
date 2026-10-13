@@ -223,6 +223,66 @@ describe('protected paths: the directory itself, globs and letter case', () => {
   })
 })
 
+describe('protected paths hold in a nested repository', () => {
+  const NESTED = [
+    'app/.git/config',
+    'app/.github/workflows/ci.yml',
+    'app/.gitlab-ci.yml',
+    'app/.circleci/config.yml',
+    'app/.buildkite/pipeline.yml',
+    'app/.claude/council-of-elrond/rules.json',
+    'app/.claude/settings.json',
+    'app/.claude/settings.local.json',
+    'app/db/migrate/001.rb',
+  ]
+  const protectedFinding = (result: ReturnType<typeof bash>) => result.findings.some(finding => finding.ruleId === 'protected-path')
+
+  test('a file tool ask on each of the nine entries, below the root', () => {
+    for (const path of NESTED) {
+      for (const tool of ['Write', 'Edit']) {
+        const input = tool === 'Write' ? { file_path: `/work/${path}`, content: 'x' } : { file_path: `/work/${path}`, old_string: 'a', new_string: 'b' }
+        const result = classify({ tool, input }, SHIPPED_COMPILED, CONTEXT)
+        expect(result.tier, `${tool} ${path}`).toBe('ask')
+        expect(protectedFinding(result), `${tool} ${path}`).toBe(true)
+        expect(result.isProtected, `${tool} ${path}`).toBe(true)
+      }
+    }
+  })
+
+  test('a shell command on each of the nine entries, below the root', () => {
+    for (const path of NESTED) {
+      for (const command of [`cat > ${path}`, `rm ${path}`]) {
+        const result = bash(command)
+        expect(result.tier, command).toBe('ask')
+        expect(protectedFinding(result), command).toBe(true)
+      }
+    }
+  })
+
+  test('the protected directory itself, below the root', () => {
+    for (const command of ['rm -rf app/.git', 'rm -rf app/.github/workflows', 'rm -rf app/.claude', 'rm -rf app/.claude/council-of-elrond', 'mv app/.git /tmp']) {
+      expect(tierOf(command), command).toBe('ask')
+    }
+  })
+
+  test('the root-level forms still ask', () => {
+    for (const command of ['cat > .git/config', 'rm .gitlab-ci.yml', 'rm -rf .git', 'rm -rf .claude', 'rm .circleci/config.yml', 'cat > db/migrate/001.rb']) {
+      expect(tierOf(command), command).toBe('ask')
+    }
+  })
+
+  test('a rules file at any depth is protected', () => {
+    const result = classify({ tool: 'Write', input: { file_path: '/work/a/b/c/.claude/council-of-elrond/rules.json', content: '{}' } }, SHIPPED_COMPILED, CONTEXT)
+    expect(result.tier).toBe('ask')
+    expect(protectedFinding(result)).toBe(true)
+  })
+
+  test('a similar name that is not the protected directory is not protected', () => {
+    expect(tierOf('rm -rf app/not.git')).toBe('review')
+    expect(tierOf('rm -rf app/mygit')).toBe('review')
+  })
+})
+
 describe('tiers', () => {
   test('allow: read-only commands and unmatched calls pass', () => {
     for (const command of ['ls -la', 'git status', 'git log --oneline -5', 'cat src/app.ts', 'npm test', 'grep -r foo src', 'ls 2>/dev/null', 'make 2>&1']) {

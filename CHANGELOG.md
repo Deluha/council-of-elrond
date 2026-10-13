@@ -11,6 +11,17 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 ## [Unreleased]
 
 ### Added
+- **More secret formats.** Refused as high-confidence: GitLab personal access tokens, npm tokens,
+  Google OAuth client secrets, Slack webhook URLs and PGP private key blocks. Asked about as
+  low-confidence: JWTs, `Authorization: Bearer` and `Basic` headers, a `mysql -p<password>`
+  argument and a password in a connection string with no user (`redis://:<password>@host`).
+- **A `kind` for your own secret patterns.** `gollum.patterns` entries in `rules.json` take an
+  optional `kind`, `"password"` or `"token"` (the default). A `password` finding gets the
+  allowlist warning; the shipped assignment, `mysql -p`, and connection-string password patterns are
+  passwords.
+- **A password warning in the allowlist confirm.** For a password-shaped finding, the second
+  question adds that a short password's fingerprint can be guessed offline, so the allowlist is for
+  keys and tokens.
 - **"Talk first" in the escalation dialog** (themed "Parley: talk first"). It refuses the call and
   tells Claude to stop and talk it through with you, without counting as a failed attempt.
 - **A new branch's push has a range.** When the remote does not have the branch yet, the preview's
@@ -38,6 +49,15 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   ran, "Legendary commit acquired" as a toast and a band row for eight seconds.
 
 ### Changed
+- **Protected paths hold at any depth.** The shipped CI, `.git`, `db/migrate` and
+  `.claude/council-of-elrond` / `.claude/settings*.json` entries now start with `**/`, so they
+  protect every repository below the session root, a rules file at any depth included, and the
+  directory itself (`rm -rf app/.git`) asks. A directory named like a `**/migrations/**` entry now
+  asks too.
+- **Redaction keeps code.** A low-confidence match whose value is plainly code (`process.env.X`, a
+  type, a call, an indexed lookup such as `tokens[0]`) is left as written in reviewer prompts,
+  refusals and the audit log; any other value after a secret keyword is redacted, even one the scan
+  does not flag (`password=correcthorse`).
 - The default is now themed: `/council`, the dialog and the report name the characters, and the
   dialog's options read "Need: allow once" and "Pass: keep blocked". Turn on "Plain mode" in
   `/config` to keep the old text ("Allow once", "Keep blocked", role names).
@@ -57,6 +77,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   allowed call still pass: the mod never asks on an allowed call.
 
 ### Fixed
+- **Compound secret names are caught.** `DB_PASSWORD=…`, `POSTGRES_PASSWORD=…`,
+  `PGPASSWORD=…`, `GITHUB_TOKEN=…` and `dbPassword: "…"` are now low-confidence findings and are
+  redacted; before, only a bare keyword before `=` or `:` was.
 - **Claude Code's "Chat about this" was meant not to count as a failed attempt, but the mod cannot
   tell it from a dismissal** (Claude Code sends both the same way), so it was always counted. It
   now counts as a dismissal, documented; "Talk first" is the way to stop without one.
