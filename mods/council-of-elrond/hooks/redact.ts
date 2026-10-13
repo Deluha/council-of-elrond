@@ -13,6 +13,8 @@ export type SecretPattern = {
   /** Global regex; `keep` names the leading groups kept verbatim. */
   re: RegExp
   keep?: number
+  /** What the secret is: a `password` can be short and guessable from its fingerprint. Absent means `token`. */
+  kind?: 'password' | 'token'
 }
 
 export const SECRET_PATTERNS: readonly SecretPattern[] = [
@@ -40,19 +42,21 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
   },
   {
     id: 'connection-string-password',
+    kind: 'password',
     level: 'high',
     label: 'password',
-    re: /\b([a-z][a-z0-9+.-]*:\/\/[^\s:@/'"]+:)([^\s@/'"$]{3,})(?=@)/gi,
+    re: /(?<![a-z0-9+.-])([a-z0-9+.-]+:\/\/[^\s:@/'"]+:)([^\s@/'"$]{3,})(?=@)/gi,
     keep: 1,
   },
   {
     id: 'assignment',
+    kind: 'password',
     level: 'low',
     label: 'secret',
     // A compound name (`DB_PASSWORD`, `PGPASSWORD`, `dbPassword`) is a name with
-    // a word-character prefix. Quotes may be JSON-escaped (`\"`); an already
+    // a word-character prefix, capped at 64 so a long run stays linear. Quotes may be JSON-escaped (`\"`); an already
     // redacted value is left alone.
-    re: /\b([A-Za-z0-9_]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret)\\?["']?\s*[=:]\s*\\?["']?)(?!\[REDACTED)([^\s"'&;,\\]{6,})/gi,
+    re: /\b([A-Za-z0-9_]{0,64}(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret)\\?["']?\s*[=:]\s*\\?["']?)(?!\[REDACTED)([^\s"'&;,\\]{6,})/gi,
     keep: 1,
   },
   { id: 'jwt', level: 'low', label: 'JWT', re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g },
@@ -65,6 +69,7 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
   },
   {
     id: 'mysql-password',
+    kind: 'password',
     level: 'low',
     label: 'password',
     // Case-sensitive on purpose: `-P3306` is the port, never the password.
@@ -73,9 +78,10 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
   },
   {
     id: 'connection-string-empty-user',
+    kind: 'password',
     level: 'low',
     label: 'password',
-    re: /\b([a-z][a-z0-9+.-]*:\/\/:)(?!\[REDACTED)([^\s@/'"$]{3,})(?=@)/gi,
+    re: /(?<![a-z0-9+.-])([a-z0-9+.-]+:\/\/:)(?!\[REDACTED)([^\s@/'"$]{3,})(?=@)/gi,
     keep: 1,
   },
 ]
@@ -95,15 +101,31 @@ function entropyOf(text: string): number {
 export const LONG_TOKEN = /[A-Za-z0-9+/_-]{40,}={0,2}/g
 
 /**
- * A low-confidence value that is plainly not a secret: a variable or
- * expression (`$TOKEN`, `process.env.X`, `getToken()`), a type (`string`),
- * a keyword, an indexed lookup (`tokens[0]`), or an identifier without a digit.
+ * The scan's test for a low-confidence value that is plainly not a secret: a
+ * variable or expression (`$TOKEN`, `process.env.X`, `getToken()`), a type
+ * (`string`), a keyword, or an identifier without a digit.
  */
 export const isPlaceholder = (value: string): boolean =>
   /^[$%<{(*[]/.test(value) ||
   value.includes('(') ||
   (/^[A-Za-z_][A-Za-z0-9_.]*$/.test(value) && !/[0-9]/.test(value)) ||
+  /^(.)\1+$/.test(value)
+
+const TYPE_WORDS =
+  /^(?:string|number|boolean|bigint|symbol|object|any|unknown|never|void|null|undefined|none|str|int|float|bool|bytes|true|false)(?:\[\]|\?)?$/i
+
+/**
+ * Redaction's own, narrower test: a value left readable only when it is
+ * plainly code (a variable, a call, a dotted path, an indexed lookup, a type
+ * word, a mask). An all-letter word such as `correcthorse` is redacted even
+ * though the scan does not flag it.
+ */
+export const isCodeReference = (value: string): boolean =>
+  /^[$%<{(*[]/.test(value) ||
+  value.includes('(') ||
+  /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+$/.test(value) ||
   /^[A-Za-z_][A-Za-z0-9_.]*(?:\[(?:\d{1,4}|[A-Za-z_][A-Za-z0-9_.]*)\])+$/.test(value) ||
+  TYPE_WORDS.test(value) ||
   /^(.)\1+$/.test(value)
 
 /** A long, random-looking token that is not hex (a git hash, a checksum). */
@@ -121,7 +143,8 @@ export function redact(text: string, patterns: readonly SecretPattern[] = SECRET
     out = out.replace(pattern.re, (whole: string, ...match: string[]) => {
       const kept = pattern.keep === undefined ? '' : match.slice(0, pattern.keep).join('')
       // Code that only names a secret (`process.env.X`, `password: string`) stays as written.
-      if (pattern.level === 'low' && isPlaceholder(whole.slice(kept.length))) return whole
+      // Only after a name: a format with no name (a JWT is dotted words too) is all secret.
+      if (pattern.level === 'low' && pattern.keep !== undefined && isCodeReference(whole.slice(kept.length))) return whole
       return `${kept}[REDACTED ${pattern.label}]`
     })
   }

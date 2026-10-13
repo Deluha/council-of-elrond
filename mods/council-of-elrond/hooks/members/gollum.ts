@@ -14,6 +14,8 @@ export type GollumFinding = {
   patternId: string
   level: SecretLevel
   label: string
+  /** `password` when the secret can be short and guessable from its fingerprint. */
+  kind: 'password' | 'token'
   /** The line holding it, redacted and cut: safe to show anywhere. */
   snippet: string
   /** `sha256:` and 16 hex digits of the secret: what an allowlist entry holds. */
@@ -22,11 +24,8 @@ export type GollumFinding = {
 
 export type GollumScan = { high: GollumFinding[]; low: GollumFinding[] }
 
-/** Pattern ids whose secret is a password, which a short value makes guessable from its fingerprint. */
-const PASSWORD_PATTERNS: ReadonlySet<string> = new Set(['assignment', 'mysql-password', 'connection-string-empty-user'])
-
 /** Whether the allowlist confirm warns that this finding's fingerprint can be guessed offline. */
-export const warnsPasswordFingerprint = (finding: Pick<GollumFinding, 'patternId'>): boolean => PASSWORD_PATTERNS.has(finding.patternId)
+export const warnsPasswordFingerprint = (finding: Pick<GollumFinding, 'kind'>): boolean => finding.kind === 'password'
 
 /** The text a call would write or run, by tool. */
 export function scannedText(call: Call): string {
@@ -83,13 +82,13 @@ export async function scanText(
   const covered: [number, number][] = []
   const seen = new Set<string>()
 
-  const add = async (pattern: { id: string; level: SecretLevel; label: string }, secret: string, index: number, length: number) => {
+  const add = async (pattern: { id: string; level: SecretLevel; label: string; kind?: 'password' | 'token' }, secret: string, index: number, length: number) => {
     const fingerprint = await fingerprintOfSecret(secret)
     if (seen.has(fingerprint) || isAllowed(allowlist, secret, fingerprint)) return
     seen.add(fingerprint)
     const list = pattern.level === 'high' ? scan.high : scan.low
     if (list.length >= MAX_FINDINGS) return
-    list.push({ patternId: pattern.id, level: pattern.level, label: pattern.label, snippet: lineAround(body, index, length, patterns), fingerprint })
+    list.push({ patternId: pattern.id, level: pattern.level, label: pattern.label, kind: pattern.kind ?? 'token', snippet: lineAround(body, index, length, patterns), fingerprint })
   }
 
   for (const pattern of patterns) {
@@ -120,7 +119,7 @@ export const scanCall = (call: Call, patterns?: readonly SecretPattern[], allowl
   scanText(scannedText(call), patterns, allowlist)
 
 /** Configured patterns (rules.json `gollum.patterns`) as scanner patterns, after the shipped ones. */
-export const patternsWith = (configured: readonly { id: string; level: SecretLevel; regex: string; label: string }[]): SecretPattern[] => [
+export const patternsWith = (configured: readonly { id: string; level: SecretLevel; regex: string; label: string; kind?: 'password' | 'token' }[]): SecretPattern[] => [
   ...SECRET_PATTERNS,
-  ...configured.map(pattern => ({ id: pattern.id, level: pattern.level, label: pattern.label, re: new RegExp(pattern.regex, 'g') })),
+  ...configured.map(pattern => ({ id: pattern.id, level: pattern.level, label: pattern.label, kind: pattern.kind, re: new RegExp(pattern.regex, 'g') })),
 ]

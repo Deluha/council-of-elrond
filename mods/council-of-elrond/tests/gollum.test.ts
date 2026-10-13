@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { loadConfig } from '../hooks/config/schema.js'
 import { withAllowlistEntry } from '../hooks/config/write.js'
 import { patternsWith, scanCall, scanText, warnsPasswordFingerprint } from '../hooks/members/gollum.js'
-import { isPlaceholder, redact, SECRET_PATTERNS } from '../hooks/redact.js'
+import { isCodeReference, isPlaceholder, redact, SECRET_PATTERNS } from '../hooks/redact.js'
 import {
   ALLOW_ONCE,
   ALLOWLIST,
@@ -109,21 +110,61 @@ describe('compound names, more formats and low patterns', () => {
     expect((await scanText('TOKEN_FILE=abc123def456')).low).toEqual([])
   })
 
-  test('a long run of word characters scans in linear time', async () => {
-    const run = 'a'.repeat(200_000)
-    const started = Date.now()
-    redact(run)
-    redact(`${run}1`)
-    await scanText(run)
-    expect(Date.now() - started).toBeLessThan(1000)
+  test('a name prefix of 64 characters before a secret keyword is still found; a longer one is capped', async () => {
+    const prefix = `${'A'.repeat(63)}_`
+    expect((await scanText(`${prefix}PASSWORD=hunter2xyz`)).low.map(finding => finding.patternId)).toEqual(['assignment'])
+    expect(redact(`${prefix}PASSWORD=hunter2xyz`)).toContain('[REDACTED secret]')
+    expect((await scanText(`A${prefix}PASSWORD=hunter2xyz`)).low).toEqual([])
   })
 
-  test('a long line of repeated mysql words scans in linear time', async () => {
-    const line = 'mysql x '.repeat(25_000)
-    const started = Date.now()
-    redact(line)
-    await scanText(line)
-    expect(Date.now() - started).toBeLessThan(1000)
+  test('a connection string is found with a 40-character scheme, a glued non-scheme prefix a digit-first scheme and a dash-first run', async () => {
+    for (const text of [`${'a'.repeat(39)}b://user:pw1secret@host/db`, 'x-postgres://user:pw1secret@host/db', '1x://user:pw1secret@host', '-foo://user:pw1secret@host']) {
+      const scan = await scanText(text)
+      expect(scan.high.map(finding => finding.patternId), text).toEqual(['connection-string-password'])
+      expect(JSON.stringify(scan), text).not.toContain('pw1secret')
+      expect(redact(text), text).toContain('[REDACTED password]')
+    }
+  })
+
+  test('every shipped pattern scans and redacts adversarial input in linear time', async () => {
+    const prefixes: Record<string, string> = {
+      'private-key': '-----BEGIN RSA PRIVATE KEY-----\n',
+      'aws-access-key': 'AKIA',
+      'github-token': 'ghp_',
+      'anthropic-key': 'sk-ant-',
+      'openai-key': 'sk-',
+      'slack-token': 'xoxb-',
+      'google-api-key': 'AIza',
+      'stripe-key': 'sk_live_',
+      'gitlab-token': 'glpat-',
+      'npm-token': 'npm_',
+      'google-oauth-secret': 'GOCSPX-',
+      'slack-webhook': 'https://hooks.slack.com/services/T',
+      'connection-string-password': 'postgres://a:',
+      assignment: 'password=',
+      jwt: 'eyJ',
+      'authorization-header': 'authorization: bearer ',
+      'mysql-password': 'mysql x ',
+      'connection-string-empty-user': 'redis://:',
+    }
+    const size = 200_000
+    for (const pattern of SECRET_PATTERNS) {
+      expect(prefixes[pattern.id], `${pattern.id}: add a prefix to this test`).toBeDefined()
+      const prefix = prefixes[pattern.id] ?? 'a'
+      const inputs = [
+        'a'.repeat(size),
+        prefix.repeat(Math.ceil(size / prefix.length)),
+        `${prefix} `.repeat(Math.ceil(size / (prefix.length + 1))),
+        `${prefix}${'a'.repeat(size)}`,
+        `${'a'.repeat(size)}${prefix}`,
+      ]
+      for (const [index, input] of inputs.entries()) {
+        const started = Date.now()
+        redact(input)
+        await scanText(input)
+        expect(Date.now() - started, `${pattern.id} input ${index}`).toBeLessThan(1000)
+      }
+    }
   })
 
   test('new high formats are high findings', async () => {
@@ -161,18 +202,30 @@ describe('compound names, more formats and low patterns', () => {
 })
 
 describe('redaction keeps code', () => {
-  test('placeholders are left as written, real values are redacted', () => {
-    for (const text of ['const token = process.env.API_TOKEN', 'password: string', 'token = tokens[0]', 'secret = config.keys[name]']) {
+  test('plainly-code values are left as written, any other value is redacted', () => {
+    for (const text of [
+      'const token = process.env.API_TOKEN',
+      'password: string',
+      'token = tokens[0]',
+      'token: string[]',
+      'password = getPassword()',
+      'secret = config.keys[name]',
+    ]) {
       expect(redact(text), text).toBe(text)
     }
     expect(redact('password = "hunter2xyz"')).toBe('password = "[REDACTED secret]"')
-    expect(isPlaceholder('tokens[0]')).toBe(true)
-    expect(isPlaceholder('config.keys[name]')).toBe(true)
-    expect(isPlaceholder('hunter2xyz')).toBe(false)
+    expect(redact('password=correcthorse')).toBe('password=[REDACTED secret]')
+    for (const value of ['tokens[0]', 'config.keys[name]', 'process.env.API_TOKEN', 'String', 'number[]', '********', '$TOKEN']) {
+      expect(isCodeReference(value), value).toBe(true)
+    }
+    for (const value of ['hunter2xyz', 'correcthorse', 'a.b!c']) expect(isCodeReference(value), value).toBe(false)
   })
 
-  test('the scan does not flag indexing either', async () => {
-    expect((await scanText('token = tokens[0]')).low).toEqual([])
+  test('the scan keeps its own placeholder test: indexing is a finding, a plain word is not', async () => {
+    expect(isPlaceholder('tokens[0]')).toBe(false)
+    expect((await scanText('token = tokens[0]')).low).toHaveLength(1)
+    expect((await scanText('password=correcthorse')).low).toEqual([])
+    for (const text of ['const token = process.env.API_TOKEN', 'password: string']) expect((await scanText(text)).low, text).toEqual([])
   })
 
   test('redacting twice is the same as once, for every shipped pattern', () => {
@@ -206,9 +259,33 @@ describe('redaction keeps code', () => {
 })
 
 describe('the password warning in the allowlist confirm', () => {
-  test('which findings get it', () => {
-    for (const patternId of ['assignment', 'mysql-password', 'connection-string-empty-user']) expect(warnsPasswordFingerprint({ patternId }), patternId).toBe(true)
-    for (const patternId of ['random-token', 'jwt', 'authorization-header', 'aws-access-key']) expect(warnsPasswordFingerprint({ patternId }), patternId).toBe(false)
+  test('which findings get it: by kind, shipped and configured', async () => {
+    const kindOf = async (text: string, patterns?: ReturnType<typeof patternsWith>) => {
+      const scan = await scanText(text, patterns)
+      const [finding] = [...scan.high, ...scan.low]
+      return finding === undefined ? undefined : warnsPasswordFingerprint(finding)
+    }
+    expect(await kindOf('password = "hunter2xyz"')).toBe(true)
+    expect(await kindOf('mysql -h db -u root -pS3cretPw1 app')).toBe(true)
+    expect(await kindOf('REDIS_URL=redis://:S3cretPw1@cache:6379')).toBe(true)
+    expect(await kindOf('DATABASE_URL=postgres://app:s3cretpw@db/app')).toBe(true)
+    expect(await kindOf(`x = "${FAKE_RANDOM_TOKEN}"`)).toBe(false)
+    expect(await kindOf(`token_value ${FAKE_JWT}`)).toBe(false)
+    expect(await kindOf(AWS)).toBe(false)
+    const acme = { id: 'acme', level: 'low' as const, regex: 'ACME-[0-9]{8}', label: 'Acme' }
+    expect(await kindOf('ACME-12345678', patternsWith([{ ...acme, kind: 'password' }]))).toBe(true)
+    expect(await kindOf('ACME-12345678', patternsWith([acme]))).toBe(false)
+  })
+
+  test('rules.json accepts kind "password" or "token" and rejects anything else', () => {
+    const pattern = { id: 'acme', level: 'low', regex: 'ACME-[0-9]{8}', label: 'Acme' }
+    const load = (kind?: unknown) => loadConfig(JSON.stringify({ schemaVersion: 1, gollum: { patterns: [{ ...pattern, ...(kind === undefined ? {} : { kind }) }] } }))
+    expect(load().errors).toEqual([])
+    expect(load('password').errors).toEqual([])
+    expect(load('token').errors).toEqual([])
+    expect(load('password').compiled.config.gollum.patterns.at(-1)?.kind).toBe('password')
+    expect(load('secret').errors).toEqual(['gollum.patterns[0].kind: one of password, token'])
+    expect(load(3).errors).toEqual(['gollum.patterns[0].kind: one of password, token'])
   })
 
   test('shown for a password finding', async ($, on) => {

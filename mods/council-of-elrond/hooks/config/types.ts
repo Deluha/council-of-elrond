@@ -102,6 +102,8 @@ export type GimliConfig = {
 
 export const SECRET_LEVELS = ['high', 'low'] as const
 
+export const SECRET_KINDS = ['password', 'token'] as const
+
 export type GollumPattern = {
   id: string
   level: (typeof SECRET_LEVELS)[number]
@@ -109,6 +111,8 @@ export type GollumPattern = {
   regex: string
   /** What the finding is called in the dialog and refusal (`deploy key`). */
   label: string
+  /** `password` adds the allowlist warning that a short value's fingerprint is guessable. Absent means `token`. */
+  kind?: (typeof SECRET_KINDS)[number]
 }
 
 export type GollumConfig = {

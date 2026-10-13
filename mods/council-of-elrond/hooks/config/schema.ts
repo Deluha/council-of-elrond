@@ -7,6 +7,7 @@ import {
   MEMBERS,
   MODEL_SLOTS,
   PROFILES,
+  SECRET_KINDS,
   SECRET_LEVELS,
   TIERS,
 } from './types.js'
@@ -81,7 +82,7 @@ export const GIMLI_TIMEOUT = { default: 120_000, min: 1_000, max: 600_000 } as c
 const MAX_GIMLI_COMMANDS = 8
 
 const GOLLUM_KEYS = ['patterns', 'allowlist'] as const
-const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label'] as const
+const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label', 'kind'] as const
 
 /** A fingerprint as the dialog shows it; anything else in the allowlist is an exact string. */
 export const SECRET_FINGERPRINT = /^sha256:[0-9a-f]{16}$/
@@ -223,6 +224,7 @@ function validateGollum(raw: unknown, errors: string[]): Overrides['gollum'] {
         if (problem !== undefined) errors.push(`${field}.regex: ${problem}`)
         else if (new RegExp(item.regex as string).test('')) errors.push(`${field}.regex: must not match empty text`)
         if (typeof item.label !== 'string' || item.label.trim() === '') errors.push(`${field}.label: required string`)
+        if (item.kind !== undefined && !includes(SECRET_KINDS, item.kind)) errors.push(`${field}.kind: one of ${SECRET_KINDS.join(', ')}`)
         if (errors.length > before) return
         seen.add(item.id as string)
         out.patterns?.push({
@@ -230,6 +232,7 @@ function validateGollum(raw: unknown, errors: string[]): Overrides['gollum'] {
           level: item.level as GollumPattern['level'],
           regex: item.regex as string,
           label: (item.label as string).trim(),
+          ...(item.kind === undefined ? {} : { kind: item.kind as GollumPattern['kind'] }),
         })
       })
     }

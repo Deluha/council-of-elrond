@@ -61,7 +61,7 @@ Shipped defaults:
   - raw disk writes.
 - **Ask:**
   - `sudo`, `doas`, `su`;
-  - anything touching a protected path: `.env*`, `Jenkinsfile`, migrations folders, and the entries below. The entries written with a leading `**/` hold in every repository below the session root, at any depth, the rules file included (`app/.claude/council-of-elrond/rules.json`), and so does the directory itself (`rm -rf app/.git` asks):
+  - anything touching a protected path: `.env*`, `Jenkinsfile`, migrations folders, and the entries below. The entries written with a leading `**/` hold in every repository below the session root, at any depth, the rules file included (`app/.claude/council-of-elrond/rules.json`), and so does the directory itself (`rm -rf app/.git` asks). A path outside the session root is matched by its absolute form, so another repository's `.git/` or your user `~/.claude/settings.json` (which holds hooks and permissions) asks too:
     - `**/.github/workflows/**`, `**/.gitlab-ci.yml`, `**/.circleci/**`, `**/.buildkite/**`;
     - `**/db/migrate/**`;
     - `**/.git/**`;
@@ -335,7 +335,7 @@ you only on a gated call: an allowed call never gets a question.
 - **High confidence** (private keys, PGP private key blocks, AWS, GitHub, GitLab, npm, Anthropic, OpenAI, Slack, Google and Stripe keys, Google OAuth client secrets, Slack webhook URLs, passwords in connection strings): refused without asking you, on an allowed call too (it is logged, with tier `allow`). Claude is told to remove the secret.
 - **Low confidence** (`password=…`-style assignments, including compound names such as `DB_PASSWORD`, `PGPASSWORD` and `dbPassword`; JWTs; `Authorization: Bearer …` and `Basic …` headers; a `mysql -p<password>` argument; a password in a connection string with no user, `redis://:<password>@host`; long random-looking tokens): comes to you with a redacted snippet. Allow once, keep blocked, type an instruction, or **add to allowlist**. The allowlist asks a second time, showing the exact entry: a `sha256:` fingerprint of the secret, never the secret. Only then is it written to `rules.json` under `gollum.allowlist`. The fingerprint of a short password can be guessed offline, so the allowlist is for keys and tokens: for a password finding the second question says so, and a real password is better changed.
 
-Code that only names a secret is not a finding, and is not redacted either: `process.env.API_TOKEN`, `getToken()`, a type annotation such as `password: string`, an indexed lookup such as `tokens[0]`, and a variable reference such as `$TOKEN`.
+Code that only names a secret is not a finding: `process.env.API_TOKEN`, `getToken()`, a type annotation such as `password: string` and a variable reference such as `$TOKEN` (an indexed lookup such as `tokens[0]` is still a finding). Redaction is stricter than the scan: a value is left readable only when it is plainly code (a variable, a call, a dotted path, an indexed lookup, a type word); any other value after a secret keyword is redacted, even one the scan does not flag.
 
 Add your own patterns in `rules.json`:
 
@@ -343,11 +343,13 @@ Add your own patterns in `rules.json`:
 {
   "schemaVersion": 1,
   "gollum": {
-    "patterns": [{ "id": "acme-key", "level": "high", "regex": "ACME-[0-9]{8}", "label": "Acme key" }],
+    "patterns": [{ "id": "acme-key", "level": "high", "regex": "ACME-[0-9]{8}", "label": "Acme key" }, { "id": "acme-pass", "level": "low", "regex": "acme-pw=[^ ]{6,}", "label": "Acme password", "kind": "password" }],
     "allowlist": ["sha256:0123456789abcdef"]
   }
 }
 ```
+
+`kind` is optional: `"password"` adds the allowlist warning that a short password's fingerprint can be guessed offline; `"token"`, the default, does not.
 
 Allowlist entries are exact strings or fingerprints, never regexes. Your patterns are also used to
 redact the dialog, reviewer prompts and the audit log.
@@ -481,7 +483,7 @@ hold is classified (0.5.0); the gaps that remain:
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.
 - Rules you loosen, and calls you allow. An allow rule you add skips review, the ask tier and the secrets scan for that exact command; it does not follow a `cd` earlier in another command, so `rm -r build` is allowed in whichever folder Claude runs it.
 - **Low-confidence secrets in allowed calls.** An allowed call is scanned for high-confidence secrets only: a `password=…`-style assignment or a random-looking token in an allowed `curl` or `echo` passes without a question.
-- **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`) and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through.
+- **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`), an identifier without a digit and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through the scan (redaction still hides it).
 - **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb.
 - A hook that overruns its time limit. The engine may run the call; Elrond refuses rather than pass with its budget nearly spent, but it can't act once it has run out.
 

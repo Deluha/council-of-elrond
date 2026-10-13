@@ -15,6 +15,10 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   Google OAuth client secrets, Slack webhook URLs and PGP private key blocks. Asked about as
   low-confidence: JWTs, `Authorization: Bearer` and `Basic` headers, a `mysql -p<password>`
   argument and a password in a connection string with no user (`redis://:<password>@host`).
+- **A `kind` for your own secret patterns.** `gollum.patterns` entries in `rules.json` take an
+  optional `kind`, `"password"` or `"token"` (the default). A `password` finding gets the
+  allowlist warning; the shipped assignment, `mysql -p`, and connection-string password patterns are
+  passwords.
 - **A password warning in the allowlist confirm.** For a password-shaped finding, the second
   question adds that a short password's fingerprint can be guessed offline, so the allowlist is for
   keys and tokens.
@@ -52,7 +56,8 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   asks too.
 - **Redaction keeps code.** A low-confidence match whose value is plainly code (`process.env.X`, a
   type, a call, an indexed lookup such as `tokens[0]`) is left as written in reviewer prompts,
-  refusals and the audit log, as the scan already treated it. The scan no longer flags indexing.
+  refusals and the audit log; any other value after a secret keyword is redacted, even one the scan
+  does not flag (`password=correcthorse`).
 - The default is now themed: `/council`, the dialog and the report name the characters, and the
   dialog's options read "Need: allow once" and "Pass: keep blocked". Turn on "Plain mode" in
   `/config` to keep the old text ("Allow once", "Keep blocked", role names).

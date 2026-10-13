@@ -22,9 +22,12 @@ Public, MIT-licensed, open-source repository.
 - Session state is the one `$.state` value, changed only through `hooks/state.ts`.
 - Work in stages (SPEC §20). Stop at each stage checkpoint, give the summary SPEC §20 asks for
   (`/checkpoint` drafts it), and wait for the user. Don't start the next stage unasked.
-- Decisions the spec doesn't cover: pick the safer option, record it in the current stage's
-  section of DESIGN.md, and report it at the checkpoint. Decisions listed in ROADMAP.md are
-  binding unless the user changes them.
+- Decisions the spec doesn't cover: one that tightens (more calls ask or are refused, more text
+  is redacted) is decided by picking the safer option, recorded in the current stage's section
+  of DESIGN.md, and reported at the checkpoint. One that loosens (fewer findings, less
+  redaction, a call that used to ask now passing), even as a side effect of an approved change,
+  goes to the user before it is committed. Decisions listed in ROADMAP.md are binding unless
+  the user changes them.
 - Never load the mod into the session that is developing it. Test with `claude plugin test`, and
   run live checks headless in a throwaway repository with `claude -p --plugin-dir` (`/live-check`).
 - Before every commit: `claude plugin test mods/council-of-elrond`, `tsc -p mods` and
@@ -72,7 +75,7 @@ Who owns what:
 | Work | Model | Note |
 | :- | :- | :- |
 | Intent, design, briefs, the review of every brief's result | Opus (orchestrator) | No agent reviews its own work; the reviewer never edits. |
-| Decisions the spec doesn't cover, stage checkpoints | Opus (orchestrator) | Safer option picked and recorded in DESIGN.md; reported at the checkpoint. |
+| Decisions the spec doesn't cover, stage checkpoints | Opus (orchestrator) | A tightening: safer option picked, recorded in DESIGN.md, reported at the checkpoint. A loosening: put to the user before the commit. |
 | Sweeps, greps, file reading | Haiku (research agent) | Findings with file:line, no recommendations; the orchestrator reads the files that matter. |
 | Implementation with domain logic, tests, plus the docs that describe that logic | Sonnet (implementer) | Docs for new or changed logic ship in the implementer's brief, never in a parallel `scribe` brief. |
 | Mechanical edits whose wording the brief dictates | Haiku (`scribe`) | Fully decided brief only; never an error-handling or return-path change. |

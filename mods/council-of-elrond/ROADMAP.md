@@ -389,6 +389,16 @@ are grouped below into three hardening briefs, H1 to H3.
 | The two-session audit race | Document only (H2). |
 | The allowlist-oracle note | Add it in H1: a README note that a `sha256:` fingerprint of a short password can be guessed offline, so the allowlist is for keys, not passwords. Add one line in the confirm dialog for assignment findings (`strings.ts`). |
 
+**Approved after the H1 checkpoint (2026-10-13).** The user approved the seven decisions H1 took
+beyond this table (DESIGN §13.3) with these changes: redaction uses its own, narrower test of
+plainly-code values (a variable, a call, a dotted path, an indexed lookup, a type word), so a
+value the scan does not flag, such as an all-letter word, is still redacted; indexing is not a
+placeholder to the scan; the password warning follows a `kind` on each secret pattern
+(`password` or `token`, settable in `gollum.patterns`); one timing test covers every shipped
+pattern; the compound-name prefix is capped at 64 characters. Also approved, as a standing rule
+(CLAUDE.md): a decision the roadmap does not cover that loosens the gate goes to the user before
+it is committed; one that tightens it is decided, recorded and reported.
+
 ### Before 1.0
 
 - [ ] The ~40-case live eval (above), recorded in DESIGN.md: a definition-of-done item for 1.0.
