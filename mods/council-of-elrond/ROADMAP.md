@@ -292,14 +292,14 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 | `isReadOnly` unused | Left unused: trusting it to skip work would let the tool's own claim lower the gate. |
 | `$.ui.ask` in SDK and cloud hosts | Left as is: the mod refuses where no surface is attached, which is the safe default. The terminal check covers the terminal only. |
 | Windows | Declared unsupported in `docs/INSTALL.md` (POSIX shells, `HOME` only). |
-| Versioning | Release as **0.6.0** once the terminal check passes: the default text changed, allowed calls are scanned, and a push's range changed, each a behaviour change under a minor bump. Move the `[Unreleased]` entries to `[0.6.0]` and bump `plugin.json` then, not before. |
+| Versioning | Release as **0.6.0** once the terminal check passes: the default text changed, allowed calls are scanned, and a push's range changed, each a behaviour change under a minor bump. Move the `[Unreleased]` entries to `[0.6.0]` and bump `plugin.json` then, not before. Approved 2026-10-13: 0.6.0 also carries H1 and H2, and the terminal check runs on that build; C2 to C6 and H3 go to 0.7.0 ("Recommendations on the remaining open decisions" below). |
 
 Also decided after the final deliverables: the fake secrets in tests are built at run time from two halves (`tests/fixtures.ts`), so no committed line holds a well-formed token and `scripts/check-hygiene.sh` reports none; the audit appender's whole-file re-read stays (tens of milliseconds at 1 MiB; revisit only if latency shows).
 
 ### Recommendations on the remaining open decisions (2026-10-13)
 
-Recommendations only, for the user to accept, change or decline; nothing here is binding until
-then. They cover every item the table above leaves open, the cloud work items' own open choices,
+**The user approved every recommendation below on 2026-10-13 ("All of them accepted"), so they
+are binding, like the approved decisions above.** They cover every item the table above leaves open, the cloud work items' own open choices,
 and the end-of-Stage-5 review items that are still open. A sweep of the code on 2026-10-13
 checked which review items are still present. **It found that the review's banner was wrong** (it is corrected in this change): most of
 §2.5 to §2.11 and §3.1 to §3.9 were never fixed. 0.5.0 fixed the parser, the rules and part of
@@ -391,8 +391,8 @@ are grouped below into three hardening briefs, H1 to H3.
 - [ ] Cloud sessions: the setup-script install was tried and the mod loads and enforces (findings below, "Cloud sessions"); it is recorded in DESIGN.md §14 (C1); what remains is the `$.ui.ask` probe (C3). Repository settings do not load plugins in the cloud (docs/INSTALL.md, "Cloud sessions").
 - [ ] A `/config` switch for the allow-rule offer, only if feedback says the offer is noisy.
 - [ ] The two terminal-check items above resolved: the `AskUserQuestion` re-entry path, and the user-refusal wordings against the binary.
-- [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), not yet decided: performance notes and the concurrency model for DESIGN.md; the `register.ts` reducer refactor; the two-session audit race; the allowlist-oracle note in the README. Recommendations for each, and for the review items still open in the code (H1 to H3): "Recommendations on the remaining open decisions" above.
-- [ ] The cloud-session work items C1 to C6 below, in that order.
+- [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), decided 2026-10-13: performance notes and the concurrency model for DESIGN.md; the `register.ts` reducer refactor; the two-session audit race; the allowlist-oracle note in the README. Each is decided, as are the review items still open in the code (H1 to H3), under "Recommendations on the remaining open decisions" above.
+- [ ] The cloud-session work items C2 to C6 below (C1 is done), in the order given under "Recommendations on the remaining open decisions".
 
 ### Cloud sessions: findings and work items
 
@@ -425,7 +425,7 @@ cold. Each is one brief with its own tests; C1 and C5 are documentation only.
 - [ ] **C5. Rules-file discovery in a multi-root environment.** When the session root holds no `rules.json`, resolve it per call: from the call's target (a file tool's path, a shell command's cwd) walk up to the nearest `.claude/council-of-elrond/rules.json` below the root; none found, use the root's defaults. `protectedPaths`, `productionPatterns` and `gimli.commands` then resolve against that file's directory, and the project checks run with it as cwd. One cache entry per directory, invalidated by `/council reload`. The audit log path, when relative, resolves the same way, so it lands in the repository. Until this ships, docs/INSTALL.md says: one repository per cloud environment, and never one that holds the mod's own checkout (that session would be gated by the mod it develops, against the rule above). Tests: a fixture root with two repositories, a rules file in one; a file edit in each resolves the right rules; a shell command under the second gets the root's defaults.
 - [ ] **C6. Small things seen in the log.** `$.session.surfaces()` never rejects (the types), so the `.catch(() => [])` wrappers in register.ts are dead; drop them. The three project checks of a typical rules file need the repository's toolchain on the PATH: once C5 lands, run one live cloud check that a check with a missing binary reports "failed" with the error, not a hang.
 
-Order: C1, then C3 (its result decides C4), then C2, C4, C5, C6.
+Order (approved 2026-10-13, replacing C1, C3, C2, C4, C5, C6): C1 (done), C2, C3 (its result decides C4), C4, C5, C6. The full sequence of pull requests is under "Recommendations on the remaining open decisions".
 
 The per-stage lists below are the follow-ups as each stage left them. The table above decides
 every one that was still open; a struck item was done in the stage named. They stay for the
