@@ -35,12 +35,11 @@ Public, MIT-licensed, open-source repository.
 - A behaviour change needs a test that fails without it. For a path that decides whether a call
   runs, break the code on purpose and confirm the test fails.
 - Keep user-visible changes in the user manual and `CHANGELOG.md` ("Unreleased").
-- Opus orchestrates, reviews and verifies; Sonnet implements; Haiku reads and takes notes. Logic
-  edits, their tests and every doc a user reads go to `implementer` (Sonnet). Reads that span
-  several files go to `reader` (Haiku, read-only). Internal notes, session logs, changelog drafts
-  and summaries go to `scribe` (Haiku). Each file in `.claude/agents/` pins its `model` and
-  `effort`; the Agent call passes neither. One brief per independent file set, at most 3 in
-  parallel, each reviewed. Every agent stops rather than guess. Details: "Orchestration" below.
+- Opus orchestrates, reviews and verifies; Sonnet implements; Haiku reads and takes notes.
+  Implementation, its tests and every doc a user reads go to `implementer`; multi-file reads go to
+  `reader`; internal notes go to `scribe`. Never send implementation to `general-purpose`;
+  `Explore` is denied. One brief per independent file set, at most 3 in parallel, each reviewed.
+  Every agent stops rather than guess. Details: "Orchestration" below.
 
 ## Public repository
 
@@ -57,21 +56,54 @@ Public, MIT-licensed, open-source repository.
 
 ## Orchestration
 
-The main session (Opus) plans, decides, delegates and verifies; it does not implement non-trivial
-changes itself. Three agents do the work, each a file in `.claude/agents/` that pins its `model`
-and `effort`. The files mirror the shared user-level agents in `~/.claude/agents/` so cloud
-sessions, which have no user-level config, get them too; keep the two copies identical and put
-anything specific to this repo here, not in the agent files. An agent that hits ambiguity stops
-and reports rather than choosing.
+These rules mirror the shared user-level setup (`~/.claude/CLAUDE.md`, `~/.claude/agents/`,
+`~/.claude/settings.json`). Cloud sessions have no user-level config, so this repo carries a copy:
+the three files in `.claude/agents/` are identical to the user-level ones, and
+`.claude/settings.json` repeats the main model, its effort and the `Explore` deny. Keep the copies
+identical, and put anything specific to this repo in this section, not in the agent files.
 
-| Agent | Model | Effort | Tools | Use for |
-| :- | :- | :- | :- | :- |
-| the main session | `opus` | `high`, from `effortLevel` in `.claude/settings.json` | all | intent, design, briefs, review, verification, checkpoints |
-| `implementer` | `sonnet` | `high` | Read, Grep, Glob, Edit, Write, Bash | logic, tests, and every doc a user reads (READMEs, `CHANGELOG.md`, `docs/`, `mods/council-of-elrond/*.md`), dictated wording included |
-| `reader` | `haiku` | `high` | Read, Grep, Glob | reads that span several files: sweeps, greps, the diff pre-check |
-| `scribe` | `haiku` | `high` | Read, Write | internal notes, session logs, changelog drafts, summaries; never code, tests or a doc a user reads |
+The main session (Opus, high effort) plans, decides, delegates and verifies; it does not implement
+non-trivial changes itself. Quick single-file lookups it does directly. An agent that hits
+ambiguity stops and reports rather than choosing.
 
-Quick single-file lookups the orchestrator does itself.
+| Role | Agent | Model | Effort | Tools | Use for |
+| :- | :- | :- | :- | :- | :- |
+| Orchestrator | main session | `opus` | `high`, from `modelSettings` | all | intent, design, briefs, review, verification, checkpoints |
+| Implementer | `implementer` | `sonnet` | `medium`; `high` passed per task (rule 3) | Read, Grep, Glob, Edit, Write, Bash | logic, tests, and every doc a user reads (READMEs, `CHANGELOG.md`, `docs/`, `mods/council-of-elrond/*.md`), dictated wording included |
+| Reader | `reader` | `haiku` | `medium` | Read, Grep, Glob | reads that span several files: sweeps, greps, the diff pre-check |
+| Scribe | `scribe` | `haiku` | `medium` | Read, Write | internal notes, session logs, changelog drafts, summaries; never code, tests or a doc a user reads |
+| Plan research | built-in `Plan` | inherits `opus` | inherits the session's | built-in | planning research |
+
+Built-in agents: `Explore` is denied (`Agent(Explore)` in `permissions.deny`) because it runs on
+the main model and would bypass `reader`. `Plan` stays enabled. `general-purpose` stays enabled but
+never receives implementation work. Forks inherit Opus and the full conversation; use one only
+when a task genuinely needs that context.
+
+Rules:
+
+1. Always name the subagent type explicitly. Implementation goes to `implementer`, multi-file
+   reading to `reader`, notes to `scribe`. Never send implementation to `general-purpose`.
+2. Every delegation brief includes:
+   - the goal;
+   - the exact files in scope, and the "Read first" paths;
+   - the constraints: what not to touch, what to stop on, and the rules of this file that apply.
+     Edit briefs also say: reuse the shared helpers (`refusalText`, `questionText`, `redact`,
+     `untrusted`, `untrustedRules`, `ANSWER_FORMAT`, `finish()`) and the patterns
+     `docs/DEVELOPMENT.md` says to copy rather than re-deriving them; never weaken a guard or a
+     test to get green;
+   - explicit acceptance criteria: the observable result;
+   - how to verify: the commands that must pass, with raw output pasted.
+3. Pass `effort: "high"` to `implementer` for bug fixes in existing code, migrations, and
+   edge-case-heavy work; leave it at medium otherwise. Never pass a model, and never make `xhigh`
+   or `max` a default.
+4. Before a task is declared done, the orchestrator reads the actual diff and runs the tests
+   itself: the three gates and `scripts/check-hygiene.sh`. A subagent's summary, or the output it
+   pasted, is never enough on its own.
+5. When a subagent's result is wrong: if it skipped files, skipped tests or stopped early, rerun
+   it at higher effort; if it had full context, clearly tried and was still wrong, the
+   orchestrator takes the task over.
+6. Independent reads and edits run in parallel (several Agent calls in one message, at most 3);
+   edit briefs that run together get disjoint file sets. Dependent steps run in sequence.
 
 Who owns what:
 
@@ -89,28 +121,10 @@ Who owns what:
 The loop: Opus writes the brief; `implementer` runs it; `reader` pre-checks the diff; Opus reads
 the diff, runs the three gates and reviews.
 
-A brief carries:
-
-- the goal;
-- the files in scope, and the "Read first" paths;
-- the constraints: what not to touch, what to stop on, and the rules above that apply. Edit briefs
-  also say: reuse the shared helpers (`refusalText`, `questionText`, `redact`, `untrusted`,
-  `untrustedRules`, `ANSWER_FORMAT`, `finish()`) and the patterns `docs/DEVELOPMENT.md` says to
-  copy rather than re-deriving them; never weaken a guard or a test to get green;
-- explicit acceptance criteria: the commands that must pass, with raw output pasted, and the
-  observable result.
-
-Before a task is declared done, the orchestrator reads the actual diff and runs the tests itself.
-A subagent's summary, or the output it pasted, is never enough on its own.
-
-Independent reads and edits run in parallel (several Agent calls in one message, at most 3); edit
-briefs that run together get disjoint file sets. Dependent steps run in sequence.
-
 Haiku guardrails:
 
-- Effort: every agent is pinned at `high`, and `.claude/settings.json` sets `effortLevel: "high"`,
-  which in project settings applies to every model, built-in agents included. Never `low`: with a
-  long always-loaded instruction file, Haiku has been observed to stop before finishing at `low`.
+- Effort: `reader` and `scribe` run at `medium`, their model's default. Never `low`: with a long
+  always-loaded instruction file, Haiku has been observed to stop before finishing at `low`.
   (The mod's own Haiku reviewer profile in `hooks/elrond/models.ts` is a separate setting.)
 - At `medium`, Haiku has been observed to report a change done without running the check. So no
   Haiku agent runs verify commands or edits tracked files; the orchestrator runs the checks.
