@@ -35,14 +35,11 @@ Public, MIT-licensed, open-source repository.
 - A behaviour change needs a test that fails without it. For a path that decides whether a call
   runs, break the code on purpose and confirm the test fails.
 - Keep user-visible changes in the user manual and `CHANGELOG.md` ("Unreleased").
-- Opus orchestrates and reviews; Sonnet implements; Haiku reads, verifies and transcribes. Opus
-  owns intent, design, briefs and review. Logic edits, their tests and the docs that describe
-  them go to the implementer (Sonnet). Dictated edits and verify runs go to `scribe` (Haiku,
-  `effort: high` pinned in `.claude/agents/scribe.md`). Sweeps and pre-checks go to the research
-  agent (Haiku). Pin rule: an agent file pins `model` and `effort` in its frontmatter and the call
-  passes neither; a built-in agent has no frontmatter, so its call passes `model: "haiku"` (or
-  `"sonnet"`) and never `effort`. One brief per independent file set, at most 3 in parallel, each
-  reviewed. Every agent stops rather than guess. Details: "Orchestration" below.
+- Opus orchestrates, reviews and verifies; Sonnet implements; Haiku reads and takes notes.
+  Implementation, its tests and every doc a user reads go to `implementer`; multi-file reads go to
+  `reader`; internal notes go to `scribe`. Never send implementation to `general-purpose`;
+  `Explore` is denied. One brief per independent file set, at most 3 in parallel, each reviewed.
+  Every agent stops rather than guess. Details: "Orchestration" below.
 
 ## Public repository
 
@@ -59,44 +56,79 @@ Public, MIT-licensed, open-source repository.
 
 ## Orchestration
 
-Three lanes. Opus thinks and judges; Sonnet writes logic (the implementer); Haiku reads, verifies
-and transcribes (the research agent for sweeps and pre-checks, `scribe` for dictated edits and
-verify runs). A Sonnet or Haiku agent that hits ambiguity stops and reports rather than choosing.
+These rules mirror the shared user-level setup (`~/.claude/CLAUDE.md`, `~/.claude/agents/`,
+`~/.claude/settings.json`). Cloud sessions have no user-level config, so this repo carries a copy:
+the three files in `.claude/agents/` are identical to the user-level ones, and
+`.claude/settings.json` repeats the main model, its effort and the `Explore` deny. Keep the copies
+identical, and put anything specific to this repo in this section, not in the agent files.
 
-| Role | Agent | Model | Effort |
-| :- | :- | :- | :- |
-| Orchestrator and reviewer | the main session | Opus | the session's |
-| Implementer | built-in `general-purpose`, called with `model: "sonnet"` | latest Sonnet | not settable per call; the engine's choice |
-| Research agent | built-in `Explore`, called with `model: "haiku"` | latest Haiku | not settable per call; the engine's choice |
-| `scribe` | `.claude/agents/scribe.md`, the one agent file in this repo | latest Haiku | `high`, pinned in its frontmatter |
+The main session (Opus, high effort) plans, decides, delegates and verifies; it does not implement
+non-trivial changes itself. Quick single-file lookups it does directly. An agent that hits
+ambiguity stops and reports rather than choosing.
+
+| Role | Agent | Model | Effort | Tools | Use for |
+| :- | :- | :- | :- | :- | :- |
+| Orchestrator | main session | `opus` | `high`, from `modelSettings` | all | intent, design, briefs, review, verification, checkpoints |
+| Implementer | `implementer` | `sonnet` | `medium`; `high` passed per task (rule 3) | Read, Grep, Glob, Edit, Write, Bash | logic, tests, and every doc a user reads (READMEs, `CHANGELOG.md`, `docs/`, `mods/council-of-elrond/*.md`), dictated wording included |
+| Reader | `reader` | `haiku` | `medium` | Read, Grep, Glob | reads that span several files: sweeps, greps, the diff pre-check |
+| Scribe | `scribe` | `haiku` | `medium` | Read, Write | internal notes, session logs, changelog drafts, summaries; never code, tests or a doc a user reads |
+| Plan research | built-in `Plan` | inherits `opus` | inherits the session's | built-in | planning research |
+
+Built-in agents: `Explore` is denied (`Agent(Explore)` in `permissions.deny`) because it runs on
+the main model and would bypass `reader`. `Plan` stays enabled. `general-purpose` stays enabled but
+never receives implementation work. Forks inherit Opus and the full conversation; use one only
+when a task genuinely needs that context.
+
+Rules:
+
+1. Always name the subagent type explicitly. Implementation goes to `implementer`, multi-file
+   reading to `reader`, notes to `scribe`. Never send implementation to `general-purpose`.
+2. Every delegation brief includes:
+   - the goal;
+   - the exact files in scope, and the "Read first" paths;
+   - the constraints: what not to touch, what to stop on, and the rules of this file that apply.
+     Edit briefs also say: reuse the shared helpers (`refusalText`, `questionText`, `redact`,
+     `untrusted`, `untrustedRules`, `ANSWER_FORMAT`, `finish()`) and the patterns
+     `docs/DEVELOPMENT.md` says to copy rather than re-deriving them; never weaken a guard or a
+     test to get green;
+   - explicit acceptance criteria: the observable result;
+   - how to verify: the commands that must pass, with raw output pasted.
+3. Pass `effort: "high"` to `implementer` for bug fixes in existing code, migrations, and
+   edge-case-heavy work; leave it at medium otherwise. Never pass a model, and never make `xhigh`
+   or `max` a default.
+4. Before a task is declared done, the orchestrator reads the actual diff and runs the tests
+   itself: the three gates and `scripts/check-hygiene.sh`. A subagent's summary, or the output it
+   pasted, is never enough on its own.
+5. When a subagent's result is wrong: if it skipped files, skipped tests or stopped early, rerun
+   it at higher effort; if it had full context, clearly tried and was still wrong, the
+   orchestrator takes the task over.
+6. Independent reads and edits run in parallel (several Agent calls in one message, at most 3);
+   edit briefs that run together get disjoint file sets. Dependent steps run in sequence.
 
 Who owns what:
 
-| Work | Model | Note |
+| Work | Owner | Note |
 | :- | :- | :- |
-| Intent, design, briefs, the review of every brief's result | Opus (orchestrator) | No agent reviews its own work; the reviewer never edits. |
-| Decisions the spec doesn't cover, stage checkpoints | Opus (orchestrator) | A tightening: safer option picked, recorded in DESIGN.md, reported at the checkpoint. A loosening: put to the user before the commit. |
-| Sweeps, greps, file reading | Haiku (research agent) | Findings with file:line, no recommendations; the orchestrator reads the files that matter. |
-| Implementation with domain logic, tests, plus the docs that describe that logic | Sonnet (implementer) | Docs for new or changed logic ship in the implementer's brief, never in a parallel `scribe` brief. |
-| Mechanical edits whose wording the brief dictates | Haiku (`scribe`) | Fully decided brief only; never an error-handling or return-path change. |
-| Verify commands (the three gates, `scripts/check-hygiene.sh`) | Haiku (`scribe`) | Raw output pasted verbatim; missing output = fail. |
-| Diff pre-check, limited to what no CI check catches: a parameter or import named `$` in a module other than `hooks/register.ts`; a new string literal under `hooks/` outside `strings.ts` and `members/`; a new `atom(` call, or an `update($, session, ...)` whose updater is not a function imported from `./state.js`; a `hooks/` change with no `tests/` change; a change to `strings.ts`, `plugin.json` `userConfig` or `elrond/commands.ts` with no change to `mods/council-of-elrond/README.md` or `CHANGELOG.md` | Haiku (research agent) | Findings with file:line, no verdict; runs before the Opus review. Trial step: the maintainer removes this row if it adds no findings over 3 PRs. |
+| Intent, design, briefs, the review of every brief's result | orchestrator | No agent reviews its own work; the reviewer never edits. |
+| Decisions the spec doesn't cover, stage checkpoints | orchestrator | A tightening: safer option picked, recorded in DESIGN.md, reported at the checkpoint. A loosening: put to the user before the commit. |
+| Verify commands (the three gates, `scripts/check-hygiene.sh`) | orchestrator | Run by the orchestrator itself before a task is declared done and before every commit. |
+| Sweeps, greps, reading across files | `reader` | Findings with file:line, no recommendations; the orchestrator reads the files that matter. |
+| Implementation with domain logic, tests, plus the docs that describe that logic | `implementer` | Docs for new or changed logic ship in the same brief as the logic. |
+| Edits to tracked docs whose wording the brief dictates | `implementer` | Fully decided brief; never an error-handling or return-path change. |
+| Internal notes, session logs, changelog drafts, summaries | `scribe` | Drafts only; the tracked `CHANGELOG.md` entry goes to `implementer`. |
+| Diff pre-check, limited to what no CI check catches: a parameter or import named `$` in a module other than `hooks/register.ts`; a new string literal under `hooks/` outside `strings.ts` and `members/`; a new `atom(` call, or an `update($, session, ...)` whose updater is not a function imported from `./state.js`; a `hooks/` change with no `tests/` change; a change to `strings.ts`, `plugin.json` `userConfig` or `elrond/commands.ts` with no change to `mods/council-of-elrond/README.md` or `CHANGELOG.md` | `reader` | Findings with file:line, no verdict; runs before the Opus review. Trial step: the maintainer removes this row if it adds no findings over 3 PRs. |
 
-The loop: Opus writes the brief; the implementer (`general-purpose` on Sonnet) or `scribe` runs
-it; the research agent pre-checks the diff; Opus reviews.
-
-A brief carries the goal, the "Read first" paths, the exact edits (for `scribe`, the wording), the
-verify command, and what to stop on.
+The loop: Opus writes the brief; `implementer` runs it; `reader` pre-checks the diff; Opus reads
+the diff, runs the three gates and reviews.
 
 Haiku guardrails:
 
-- Effort: the read-only research agent keeps whatever effort the engine gives a built-in agent
-  (`medium`, as observed); `scribe` stays at its pinned `high`. Never `low`: with a long
-  always-loaded instruction file, Haiku has been observed to stop before finishing at `low`. (The
-  mod's own Haiku reviewer profile in `hooks/elrond/models.ts` is a separate setting.)
-- At `medium`, Haiku has been observed to report a change done without running the check. Every
-  brief demands the raw command output, and the orchestrator treats missing output as a fail.
-- Haiku briefs carry zero open choices. Anything needing domain judgement in the implementation
-  goes to Sonnet; open choices stay with the orchestrator.
+- Effort: `reader` and `scribe` run at `medium`, their model's default. Never `low`: with a long
+  always-loaded instruction file, Haiku has been observed to stop before finishing at `low`.
+  (The mod's own Haiku reviewer profile in `hooks/elrond/models.ts` is a separate setting.)
+- At `medium`, Haiku has been observed to report a change done without running the check. So no
+  Haiku agent runs verify commands or edits tracked files; the orchestrator runs the checks.
+- Haiku briefs carry zero open choices. Anything needing domain judgement goes to `implementer`;
+  open choices stay with the orchestrator.
 - Corrections to a running Haiku agent go as a new message, never embedded in a tool result it
   will read.
