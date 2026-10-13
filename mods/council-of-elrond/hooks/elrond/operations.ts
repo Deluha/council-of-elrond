@@ -260,7 +260,7 @@ const AUTOMATIC_DENIAL: readonly RegExp[] = [
   /\brequires? approval\b/i,
   /requested permissions? to (use|write|edit|read|run)/i,
   /haven'?t granted it yet/i,
-  /permission to use .+ has been denied/i,
+  /permission to (use|edit|read) .+ has been denied/i,
 ]
 
 export const isUserRefusal = (text: string): boolean => USER_REFUSAL.some(re => re.test(text))

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { ALLOW_ONCE, APPROVE, auditLines, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, ROOT, USAGE, world } from './fixtures.js'
+import { ALLOW_ONCE, APPROVE, auditLines, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, ROOT, TALK_FIRST, USAGE, world } from './fixtures.js'
 import type { ModelReply, World } from './fixtures.js'
 
 /**
@@ -24,11 +24,12 @@ const FAILURES = [
   ['a refused request', 'refuse-request'],
 ] as const satisfies readonly (readonly [string, ModelReply])[]
 
-/** Every answer that is not "allow once". `chat` is the engine's "Chat about this" (the question rejects). */
+/** Every answer that is not "allow once". `chat` is the engine's "Chat about this" (the question rejects like a dismissal). */
 const NOT_ALLOWED = [
   ['keep blocked', { answer: KEEP_BLOCKED }],
   ['dismissed', { answer: 'dismiss' }],
   ['Chat about this', { answer: 'chat' }],
+  ['talk first', { answer: TALK_FIRST }],
   ['a typed instruction', { answer: 'Use rm -r build/out instead' }],
   ['nobody to ask', { surfaces: [] as string[] }],
 ] as const
@@ -241,21 +242,31 @@ describe('with every model member disabled, the rules, the secrets scan and esca
   })
 })
 
-describe('"Chat about this"', () => {
-  test('"Chat about this" refuses, tells Claude to stop and ask, and is not a failed attempt', async ($, on) => {
-    const w = world(on, { answer: 'chat' })
+describe('"Talk first" and "Chat about this"', () => {
+  test('"Talk first" refuses, tells Claude to stop and talk it through, and is not a failed attempt', async ($, on) => {
+    const w = world(on, { answer: TALK_FIRST })
     const call = { tool: 'Bash', command: 'sudo ls' } as const
     const deny = denyOf(await $.tool.call(call))
     expect(deny).toContain('Stop and talk the call through with the user')
     expect(w.ran).toEqual([])
     expect(auditLines(w)[0]).toMatchObject({ decision: 'chat', outcome: 'refused' })
-    // Unlike a dismissal, three chats in a row do not lock the operation out.
+    // Unlike a dismissal, three in a row do not lock the operation out.
     await $.tool.call(call)
     await $.tool.call(call)
     const fourth = denyOf(await $.tool.call(call))
     expect(fourth).not.toContain('locked out')
     expect(fourth).toContain('Stop and talk the call through with the user')
     expect(w.asked).toHaveLength(4)
+    expect(w.ran).toEqual([])
+  })
+
+  test('the engine\'s "Chat about this" reads as a dismissal and counts as a failed attempt', async ($, on) => {
+    const w = world(on, { answer: 'chat' })
+    const call = { tool: 'Bash', command: 'sudo ls' } as const
+    for (let i = 0; i < 3; i++) await $.tool.call(call)
+    expect(auditLines(w)[0]).toMatchObject({ decision: 'dismissed', outcome: 'refused' })
+    expect(denyOf(await $.tool.call(call))).toContain('locked out')
+    expect(w.asked).toHaveLength(3)
     expect(w.ran).toEqual([])
   })
 })

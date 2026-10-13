@@ -12,6 +12,7 @@ import {
   KEEP_BLOCKED,
   REVISE,
   ROOT,
+  TALK_FIRST,
   USAGE,
   verdict,
   world,
@@ -173,7 +174,7 @@ describe('escalation', () => {
     const call = { tool: 'Bash', command: 'sudo systemctl restart nginx' } as const
     expect(await $.tool.call(call)).toEqual({ result: 'ran' })
     expect(w.ran).toEqual([call])
-    expect(w.asked[0]).toMatchObject({ options: [ALLOW_ONCE, KEEP_BLOCKED], header: 'Loot roll' })
+    expect(w.asked[0]).toMatchObject({ options: [ALLOW_ONCE, KEEP_BLOCKED, TALK_FIRST], header: 'Loot roll' })
     expect(w.asked[0]?.question).toContain('A rule sends this call straight to you.')
   })
 
