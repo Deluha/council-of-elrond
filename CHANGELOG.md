@@ -46,7 +46,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   notes and the three project skills are brought in step with the final deliverables: test
   counts, the three denial wordings, the fixtures' two-half fake tokens, and when 0.6.0 and 1.0
   happen.
-- **Install guide for teams and the cloud.** `docs/INSTALL.md` now says that a project-scope install still needs one `claude plugin install` per collaborator, and has a "Cloud sessions" section: a repository's settings do not load plugins in a cloud session, so the cloud needs organization managed settings or a setup script (untested). The supported-hosts note says cloud sessions are untested.
+- **Install guide for teams and the cloud.** `docs/INSTALL.md` now says that a project-scope install still needs one `claude plugin install` per collaborator, and has a "Cloud sessions" section: a repository's settings do not load plugins in a cloud session, so the cloud needs organization managed settings or a setup script. A cloud session has since been tried: the section gives the setup-script recipe (a pinned ref, loaded at session start, the options written to the user settings with `--config`) and what a cloud session does differently (nothing drawn, nobody to ask, one repository per environment), and the supported-hosts note lists the cloud as tested.
 
 ### Security
 - **Allowed calls are scanned for high-confidence secrets.** A literal key in an allowed `curl` or

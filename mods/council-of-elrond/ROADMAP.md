@@ -292,18 +292,107 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 | `isReadOnly` unused | Left unused: trusting it to skip work would let the tool's own claim lower the gate. |
 | `$.ui.ask` in SDK and cloud hosts | Left as is: the mod refuses where no surface is attached, which is the safe default. The terminal check covers the terminal only. |
 | Windows | Declared unsupported in `docs/INSTALL.md` (POSIX shells, `HOME` only). |
-| Versioning | Release as **0.6.0** once the terminal check passes: the default text changed, allowed calls are scanned, and a push's range changed, each a behaviour change under a minor bump. Move the `[Unreleased]` entries to `[0.6.0]` and bump `plugin.json` then, not before. |
+| Versioning | Release as **0.6.0** once the terminal check passes: the default text changed, allowed calls are scanned, and a push's range changed, each a behaviour change under a minor bump. Move the `[Unreleased]` entries to `[0.6.0]` and bump `plugin.json` then, not before. Approved 2026-10-13: 0.6.0 also carries H1 and H2, and the terminal check runs on that build; C2 to C6 and H3 go to 0.7.0 ("Recommendations on the remaining open decisions" below). |
 
 Also decided after the final deliverables: the fake secrets in tests are built at run time from two halves (`tests/fixtures.ts`), so no committed line holds a well-formed token and `scripts/check-hygiene.sh` reports none; the audit appender's whole-file re-read stays (tens of milliseconds at 1 MiB; revisit only if latency shows).
+
+### Recommendations on the remaining open decisions (2026-10-13)
+
+**The user approved every recommendation below on 2026-10-13 ("All of them accepted"), so they
+are binding, like the approved decisions above.** They cover every item the table above leaves open, the cloud work items' own open choices,
+and the end-of-Stage-5 review items that are still open. A sweep of the code on 2026-10-13
+checked which review items are still present. **It found that the review's banner was wrong** (it is corrected in this change): most of
+§2.5 to §2.11 and §3.1 to §3.9 were never fixed. 0.5.0 fixed the parser, the rules and part of
+the pipeline (DESIGN.md §10), and the CHANGELOG never claimed the rest. The items still present
+are grouped below into three hardening briefs, H1 to H3.
+
+**Recommended order of the next pull requests.**
+
+1. **Regenerate the types for Claude Code 2.1.296** (`/upgrade-types`) before any code changes,
+   since the vendored types are 2.1.294. Its step 5 re-reads the two user-refusal wordings from the
+   binary, which settles that terminal-check item without a terminal. Also grep the binary for the
+   "Chat about this" rejection message that `interpretRejection` matches.
+2. **H1, the secrets scan and protected paths** (below). It ships in 0.6.0, since 0.6.0 already
+   changes what the scan refuses.
+3. **H2, pipeline robustness** (below). Also in 0.6.0.
+4. **C2**, which needs no cloud run and helps whatever C3 shows. Then **C3** once the maintainer
+   can run the cloud probe, then **C4** if C3 calls for it, then **C5** and **C6**.
+5. **H3, review accuracy** (below).
+6. **Release.** 0.6.0 is H1 and H2 on top of what `[Unreleased]` holds now, after the terminal
+   check on that build. C2 to C6 and H3 go to 0.7.0, so the terminal check is not redone for
+   cloud-only work.
+
+**The cloud work items' open choices.**
+
+| Item | Recommendation |
+| :- | :- |
+| C3, how the probe ships | Run it from a throwaway branch that is never merged. Ship no `cloudAsk` option: an ask with no timeout can hold a call indefinitely, so it should not exist in a release, even off by default. Have the probe also log the origin kinds (`PromptOrigin`) that the web client's prompts and `/council` commands arrive with. C4 and H2's origin check both need them. |
+| C4, which prompts may approve | Accept `council allow` and `council deny` only as a whole line, and only from a person's origin: `composer`, `bridge`, and whatever kind C3 shows for the web client. Never accept them from `peer`, `peer-send-message`, `plugin` (`asUser` included), `channel`, `scheduled-trigger`, `task-notification`, `coordinator`, `observer`, `auto-continuation` or `unclassified`: each of those can carry text that no person typed. |
+| C4, the `session` allowance | Limit it the way the allow-rule offer is limited: never for a script, an expanding word, a multi-line or long command, a block rule, a protected path or any secrets finding. It stands in for that offer, so it should not reach further. |
+| C5, where a rules file may sit | Only at the top of a repository (a folder holding `.git`) directly below the session root, never at an arbitrary depth. Otherwise a planted file in any subfolder could set rules, models or `gimli.commands` for the calls beneath it. |
+| C5, protected paths | The shipped entries `.git/**`, `.github/workflows/**`, `.gitlab-ci.yml`, `.circleci/**`, `.buildkite/**`, `.claude/council-of-elrond/**`, `.claude/settings.json` and `.claude/settings.local.json` are anchored at the session root. Prefix them with `**/` in H1, ahead of C5, so they hold in every repository below a multi-repository root. That includes a rules file at any depth. |
+
+**H1: the secrets scan and protected paths** (one implementer brief; behaviour change, 0.6.0).
+
+| Review item | Recommendation |
+| :- | :- |
+| §3.1 compound names (`DB_PASSWORD=…`, `PGPASSWORD=…`, `GITHUB_TOKEN=…`) | Let the assignment pattern take a name prefix ending in `_` or the keyword itself, keeping it a low finding (it asks). Today `\b` fails inside the name, so these pass unscanned. |
+| §3.5 formats | High only for exact, fixed vendor formats (`glpat-`, `npm_`, `GOCSPX-`, Slack webhook URLs, the PGP private-key block): a high finding now refuses allowed calls too, so a loose high pattern would refuse ordinary work. Low for JWTs, `Authorization: Basic/Bearer` headers, `mysql -p<password>` and a connection string with an empty user. |
+| §3.6 redaction blanks code | Share Gollum's placeholder test with `redact()` for low patterns, so `process.env.X`, type annotations and indexing stay in the reviewer's diff. Add the idempotence test DESIGN §6.15 claims. |
+| §3.8 `LONG_TOKEN` defined twice | Keep one copy, in `redact.ts`. |
+| Protected paths anchored at the root | The `**/` prefixes above, with a test per entry in a nested repository. |
+
+**H2: pipeline robustness** (one implementer brief; DESIGN §4 rows and notes in the same brief).
+
+| Review item | Recommendation |
+| :- | :- |
+| §2.9 `command.run` origin | Require a person's origin (the C4 list) for the subcommands that loosen the gate: `off`, `shadow on`, `model`. Others answer any origin. Until C3 names the web client's kind, `sdk` counts as a person's. |
+| §2.6 checks outlive a throw | `stop.abort()` in a `finally` in `convene`, and chain the dispatch signal into `stop`. |
+| §2.7 rotation by characters | Compare UTF-8 bytes, as `appendPlan` does, and test rotation to `.2` with multibyte text. |
+| §2.7 a hanging audit write stalls later calls | Stop awaiting the queue in `finish()` and keep its catch, so the line is still written in order. The brief first checks in the test kit that a `$.fs.write` still lands after the hook returned; if it does not, it stops and reports. |
+| §2.7 two sessions on one log | Document only (README limits, DESIGN §4): `$.fs` has no lock, and the report already skips unparseable lines. |
+| §2.5 one state snapshot per call | Re-read the session just before the lockout and token-budget checks, which a parallel call can overshoot. Document last-reader-wins for the cache and rounds in a new DESIGN "Concurrency model" note. |
+| §2.8 eager work | Build `shownCall` lazily, only on the paths that show it. No caps until latency shows. The new DESIGN "Performance notes" record this and that render hooks only read state. |
+| §2.9 a failed allowlist write counts as a failed attempt | Not a failed attempt: the failure is the mod's, not Claude's. |
+| §2.9 `sessionOf` checks only the version | Validate the shape and fall back to `INITIAL_SESSION` with a debug line. Today a malformed value denies every call until `/clear`. |
+| §2.9 `Date.now()` | Use `$.clock.now()` throughout. |
+| §2.9 literals outside `strings.ts` | Move the command's description, argument hint and the audit-write-failed line into `strings.ts` (a CLAUDE.md rule). |
+| §2.9 `$.ui.status` never cleared | Fold into C2, which reworks what shows where nothing draws. |
+| §2.10 DESIGN §4 rows | Rewrite "Esc during a council", "Writing the allowlist fails" and "Audit write fails", and add a row for `$.session.root`/`cwd` failing (denies every call, allow tier included: keep it, as it is fail-closed). |
+| §2.11 test gaps | Add a test with each fix above. Add the `.catch` replay after `next` ran, a prompt during an in-flight review, Esc mid-review and mid-council, `/council reload` clearing the cache, and a malformed session. Skip the `proceed()` budget-guard test unless the kit can set `remainingMs`. |
+
+**H3: review accuracy** (one implementer brief; behaviour changes under 0.7.0).
+
+| Review item | Recommendation |
+| :- | :- |
+| §2.9 an `Edit` with an `edits` array | Apply every edit in order in the diff builder, so the diff reviewer sees the whole change, not an empty diff. |
+| §3.7 git previews and a part's cwd or `GIT_DIR` | Skip the git inspections when the part's cwd is outside the root or an assignment sets `GIT_DIR` or `GIT_WORK_TREE`, and pass an inside cwd through. Read `-o`, `--push-option` and `--receive-pack` values as values, not the remote. |
+| §3.7 nits | `--no-ext-diff` on `git diff --stat`, and `core.fsmonitor` switched off in the inspections' git environment, so a preview never starts a configured program. |
+| §3.4 operation keys | Skip the value of `psql -c`, and remove `-n` from the value-taking options. Key a redirect write on the written file. Read `git push origin HEAD` as the current branch. Name alternating verbs on one target in the README's "Known gaps". |
+| §3.8 diff builder | Use `-0,0` for a new file (fix the test that pins `-1,0`), strip `\r` from CRLF lines, and show "\ No newline at end of file". |
+| §3.8 routing | A mixed call with Gandalf off keeps coming to the user (the safer choice); say so in DESIGN §7.1. Check `disabled` before `no-diff`. |
+| §3.8 verdict parser | Cap `safer_alternative` like the reason. A missing one on an approve stays accepted; fix the comment that says otherwise. |
+| §3.8 database | Add `sqlite3` to the client options. A `.sql` file's content stays out of the block rules (classification reads no files); name it in "Known gaps". |
+| §3.8 the report | A council line with malformed `voices` adds no cost, rather than counting under a member named `council`. |
+| §3.8 `unquote` | Drop it where the parser already removed quotes, with a test that keys are unchanged. |
+
+**The Stage 5 review's remaining decisions** (the "Before 1.0" list below).
+
+| Item | Recommendation |
+| :- | :- |
+| Performance notes and the concurrency model | Write both in H2, where the related code changes (§2.5, §2.8). |
+| The `register.ts` reducer refactor (now 1,635 lines) | After 1.0, not before. Until then, new decisions (C4's allowance, H2's origin check) land as pure functions in sibling modules, so register.ts gains effects only. |
+| The two-session audit race | Document only (H2). |
+| The allowlist-oracle note | Add it in H1: a README note that a `sha256:` fingerprint of a short password can be guessed offline, so the allowlist is for keys, not passwords. Add one line in the confirm dialog for assignment findings (`strings.ts`). |
 
 ### Before 1.0
 
 - [ ] The ~40-case live eval (above), recorded in DESIGN.md: a definition-of-done item for 1.0.
-- [ ] Cloud sessions: the setup-script install was tried and the mod loads and enforces (findings below, "Cloud sessions"); what remains is recording it in DESIGN.md (C1) and the `$.ui.ask` probe (C3). Repository settings do not load plugins in the cloud (docs/INSTALL.md, "Cloud sessions").
+- [ ] Cloud sessions: the setup-script install was tried and the mod loads and enforces (findings below, "Cloud sessions"); it is recorded in DESIGN.md §14 (C1); what remains is the `$.ui.ask` probe (C3). Repository settings do not load plugins in the cloud (docs/INSTALL.md, "Cloud sessions").
 - [ ] A `/config` switch for the allow-rule offer, only if feedback says the offer is noisy.
 - [ ] The two terminal-check items above resolved: the `AskUserQuestion` re-entry path, and the user-refusal wordings against the binary.
-- [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), not yet decided: performance notes and the concurrency model for DESIGN.md; the `register.ts` reducer refactor; the two-session audit race; the allowlist-oracle note in the README.
-- [ ] The cloud-session work items C1 to C6 below, in that order.
+- [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), decided 2026-10-13: performance notes and the concurrency model for DESIGN.md; the `register.ts` reducer refactor; the two-session audit race; the allowlist-oracle note in the README. Each is decided, as are the review items still open in the code (H1 to H3), under "Recommendations on the remaining open decisions" above.
+- [ ] The cloud-session work items C2 to C6 below (C1 is done), in the order given under "Recommendations on the remaining open decisions".
 
 ### Cloud sessions: findings and work items
 
@@ -329,14 +418,14 @@ cold. Each is one brief with its own tests; C1 and C5 are documentation only.
 **Work items.** C2 and C4 change a recorded design decision; the user approved both on
 2026-10-13 ("I approve roadmap items C2 and C4"), so every item follows the usual loop.
 
-- [ ] **C1. Record the cloud trial.** DESIGN.md gains a "Cloud sessions" subsection with the table above; docs/INSTALL.md "Cloud sessions" replaces "not confirmed" with the working recipe (setup script, pinned ref, loads at start, no restart) and a ready-made snippet that also writes the plugin's options to the user settings (`shadowMode` for a rollout, models, budget), since project settings are not read; docs/MAINTENANCE.md "Supported hosts" lists the cloud as tested, enforcing and non-drawing. Documentation only; `scribe`-sized once the wording is dictated.
+- [x] **C1. Record the cloud trial.** DESIGN.md gains a "Cloud sessions" subsection with the table above; docs/INSTALL.md "Cloud sessions" replaces "not confirmed" with the working recipe (setup script, pinned ref, loads at start, no restart) and a ready-made snippet that also writes the plugin's options to the user settings (`shadowMode` for a rollout, models, budget), since project settings are not read; docs/MAINTENANCE.md "Supported hosts" lists the cloud as tested, enforcing and non-drawing. Documentation only; `scribe`-sized once the wording is dictated. *(Done: DESIGN.md §14; the install recipe and its option keys checked against the CLI there.)*
 - [ ] **C2. Speak through Claude where nothing draws.** Command output never reaches Claude (a stage 2 decision); this is a scoped exception, approved 2026-10-13. When `$.session.surfaces()` is empty: `/council` (status, report, rules, test) also returns its lines as the `command.run` result's `context`, prefixed with an instruction to relay them verbatim; the session-start notice is appended as a model-readable row (`$.session.append`, `type: "user"`) saying the council is active and how to approve a call (C4); and the `nobodyToAsk` refusal names the refused operation, the rule or reviewer behind it, and the approval route. Never the secrets preview or a diff. Tests: the fixtures' `session.surfaces` answers `[]`, and the command result carries `context`; with a surface it carries none. Strings in `strings.ts`; README under "Where nothing draws"; CHANGELOG.
 - [ ] **C3. Probe `$.ui.ask` in a cloud session.** A branch with a `cloudAsk` option (default off) that attempts the ask when surfaces is empty. The ask has no timeout today and the types give it none; a `$.clock` timer would count against the 10 s own-time budget (fact 3 above), so the probe runs without one and the hang risk is what it measures. Run it once in a throwaway cloud environment whose setup script installs that ref, with one gated call, and record in DESIGN.md: whether the web client shows the question, what the rejection's `message` is when it cannot, and how long it takes. If the client answers it, the surfaces guard in `escalate` becomes "no surface and no remote client" and C4 is a fallback only. If it rejects, `interpretRejection` must map that message to `unavailable` (today every non-"chat" rejection is `dismissed`, a failed attempt).
 - [ ] **C4. A chat approval route for hosts that cannot ask.** A typed approval stands in for the dialog, approved 2026-10-13. A refusal in the no-surface case carries a short fingerprint of the operation key (`council:xxxx`, six hex characters of the audit hash) that Claude relays. The person types `council allow xxxx` (one call) or `council allow xxxx session` (the session, like "allow once" and the allow-rule offer) in chat. The `prompt.submit` hook recognises the line, records the allowance in `$.state` through `state.ts`, answers with a model-readable acknowledgement, and strips the line from the prompt. The next gated call with that fingerprint runs, audited as decided by the user via chat; the allowance is spent on use and at the next prompt. It never applies to a high-confidence secrets find, a block rule or a protected path (the same limits as the dialog), and `council deny xxxx` records a refusal with no failed attempt (a `chat` outcome). Tests: a refusal carries the fingerprint; the prompt line is parsed (and `council allow` with no fingerprint, or an unknown one, is answered and not stored); the allowed call runs once; a block rule still refuses; the allowance is gone after the next prompt. README section; CHANGELOG. Skipped if C3 shows the client answers the dialog.
 - [ ] **C5. Rules-file discovery in a multi-root environment.** When the session root holds no `rules.json`, resolve it per call: from the call's target (a file tool's path, a shell command's cwd) walk up to the nearest `.claude/council-of-elrond/rules.json` below the root; none found, use the root's defaults. `protectedPaths`, `productionPatterns` and `gimli.commands` then resolve against that file's directory, and the project checks run with it as cwd. One cache entry per directory, invalidated by `/council reload`. The audit log path, when relative, resolves the same way, so it lands in the repository. Until this ships, docs/INSTALL.md says: one repository per cloud environment, and never one that holds the mod's own checkout (that session would be gated by the mod it develops, against the rule above). Tests: a fixture root with two repositories, a rules file in one; a file edit in each resolves the right rules; a shell command under the second gets the root's defaults.
 - [ ] **C6. Small things seen in the log.** `$.session.surfaces()` never rejects (the types), so the `.catch(() => [])` wrappers in register.ts are dead; drop them. The three project checks of a typical rules file need the repository's toolchain on the PATH: once C5 lands, run one live cloud check that a check with a missing binary reports "failed" with the error, not a hang.
 
-Order: C1, then C3 (its result decides C4), then C2, C4, C5, C6.
+Order (approved 2026-10-13, replacing C1, C3, C2, C4, C5, C6): C1 (done), C2, C3 (its result decides C4), C4, C5, C6. The full sequence of pull requests is under "Recommendations on the remaining open decisions".
 
 The per-stage lists below are the follow-ups as each stage left them. The table above decides
 every one that was still open; a struck item was done in the stage named. They stay for the
