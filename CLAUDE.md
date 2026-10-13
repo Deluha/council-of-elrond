@@ -66,10 +66,10 @@ and reports rather than choosing.
 
 | Agent | Model | Effort | Tools | Use for |
 | :- | :- | :- | :- | :- |
-| the main session | `opus` | `high`, saved per model under `modelSettings` in user settings | all | intent, design, briefs, review, verification, checkpoints |
+| the main session | `opus` | `high`, from `effortLevel` in `.claude/settings.json` | all | intent, design, briefs, review, verification, checkpoints |
 | `implementer` | `sonnet` | `high` | Read, Grep, Glob, Edit, Write, Bash | logic, tests, and every doc a user reads (READMEs, `CHANGELOG.md`, `docs/`, `mods/council-of-elrond/*.md`), dictated wording included |
-| `reader` | `haiku` | `medium` | Read, Grep, Glob | reads that span several files: sweeps, greps, the diff pre-check |
-| `scribe` | `haiku` | `medium` | Read, Write | internal notes, session logs, changelog drafts, summaries; never code, tests or a doc a user reads |
+| `reader` | `haiku` | `high` | Read, Grep, Glob | reads that span several files: sweeps, greps, the diff pre-check |
+| `scribe` | `haiku` | `high` | Read, Write | internal notes, session logs, changelog drafts, summaries; never code, tests or a doc a user reads |
 
 Quick single-file lookups the orchestrator does itself.
 
@@ -108,9 +108,10 @@ briefs that run together get disjoint file sets. Dependent steps run in sequence
 
 Haiku guardrails:
 
-- Effort: `reader` and `scribe` are pinned at `medium`. Never `low`: with a long always-loaded
-  instruction file, Haiku has been observed to stop before finishing at `low`. (The mod's own
-  Haiku reviewer profile in `hooks/elrond/models.ts` is a separate setting.)
+- Effort: every agent is pinned at `high`, and `.claude/settings.json` sets `effortLevel: "high"`,
+  which in project settings applies to every model, built-in agents included. Never `low`: with a
+  long always-loaded instruction file, Haiku has been observed to stop before finishing at `low`.
+  (The mod's own Haiku reviewer profile in `hooks/elrond/models.ts` is a separate setting.)
 - At `medium`, Haiku has been observed to report a change done without running the check. So no
   Haiku agent runs verify commands or edits tracked files; the orchestrator runs the checks.
 - Haiku briefs carry zero open choices. Anything needing domain judgement goes to `implementer`;

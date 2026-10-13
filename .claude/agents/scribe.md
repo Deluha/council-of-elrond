@@ -2,7 +2,7 @@
 name: scribe
 description: Use for internal notes, session logs, changelog drafts and summaries. Never code, tests or user-facing docs; those go to implementer.
 model: haiku
-effort: medium
+effort: high
 tools: Read, Write
 ---
 

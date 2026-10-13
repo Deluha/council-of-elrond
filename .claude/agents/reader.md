@@ -2,7 +2,7 @@
 name: reader
 description: Use for read-only exploration across several files: code, docs, schemas, logs. Returns findings with file:line, no edits, no recommendations. Skip for a single-file lookup.
 model: haiku
-effort: medium
+effort: high
 tools: Read, Grep, Glob
 ---
 
