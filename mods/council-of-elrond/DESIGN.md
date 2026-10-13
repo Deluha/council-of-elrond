@@ -525,3 +525,27 @@ the final deliverables.
    - **No state.** An allowed call has no operation, so there are no rounds, no failed attempt, no lockout and no wipe, and nothing is read from or written to the session state: §5.9 holds.
    - **Every mode.** The branch runs before shadow mode and bypass are read, so the scan enforces in shadow mode, as the gated scan does (§6.10). Switching the secrets scan off turns it off here too.
    - **The offered allow rule** is unchanged: still never offered for a call with any secrets finding, since the low finding you allowed once would otherwise pass unseen.
+
+## 14. Cloud sessions
+
+The first use of the mod in a cloud session: Claude Code on the web, two repositories in one environment, the mod installed by the environment's setup script at a pinned ref. The findings come from that session's engine debug log and from the 2.1.294 types. The work items they raise are C2 to C6 in [ROADMAP.md](./ROADMAP.md) ("Cloud sessions: findings and work items"); the user's guide is docs/INSTALL.md, "Cloud sessions".
+
+| Finding | Evidence |
+| :- | :- |
+| A setup-script install (`claude plugin marketplace add` at a pinned ref, then `claude plugin install`) loads the mod at session start; no restart is needed. | The engine's debug log: the hooks module loaded at tier `user` and `/council` was registered before the first prompt. |
+| The mod enforces in the cloud: rules, model reviews, previews and the audit log all ran. | Two single reviews of about 2 s each, one refusal, audit lines written. |
+| The web client is not a render surface. `$.session.surfaces()` is `[]`, so nothing the mod draws reaches the person: no pane, no status line, no toast, no `/council` output. | `RenderSurface` is `terminal`, `desktop`, `mobile` or `vscode` (the types); the log said "nothing attached draws". `$.ui.log` lines go out as `ui_log` events, which the web client does not show. |
+| `$.ui.ask` is never attempted in the cloud: `escalate` returns `unavailable` when surfaces is empty, before any ask. So whether the web client could answer the question is unknown. | `register.ts`, `escalate`. The types say the ask rejects "in a `-p` run"; a cloud session is a stream-json session with a remote client, not `-p`, and `AskUserQuestion` is in its tool list. |
+| Every call that would come to the user is refused with "nobody can be asked", and each counts as a failed attempt toward the lockout. The refusal text reaches Claude only. | A read of the audit log in that session was refused this way. |
+| Project settings are not read for `pluginConfigs`: a repository cannot turn shadow mode on for its cloud sessions. | The log: "no pluginConfigs[...] in user, --settings or managed settings (project settings are not read); every option is its default". |
+| With two repositories in one environment, `$.session.root()` is their parent, so the project's `.claude/council-of-elrond/rules.json` is never found: its project checks, protected paths and production patterns do not apply, and the audit log is written outside the repository (lost when the container is reclaimed). The types offer no API that lists workspace roots. | `loadContext` resolves `OVERRIDES_PATH` against the root only. The only root-like APIs are `session.root`, `session.cwd`, `session.repo` and the `DirectoryAdded` hook input. |
+| The only text channel that reaches the web client is the model. | A `tool.call` deny's text is the model's error result; a `command.run` result may carry `context` for the model; `$.session.append` with `type: "user"` adds a model-readable row. `$.ui.log` is "not sent to the model" (the types). |
+
+**The install, checked against the CLI** (2.1.296, in a throwaway home folder). `claude plugin marketplace add 'Deluha/council-of-elrond#<ref>'` declares the marketplace in the user settings with that `ref`. The ref is handed to `git clone --branch`, so it is a branch or a tag; a commit is refused ("Remote branch … not found"). `claude plugin install council-of-elrond@council-of-elrond` installs at user scope by default, matching the trial's "tier `user`", and each `--config KEY=VALUE` lands in `pluginConfigs["council-of-elrond@council-of-elrond"].options` in the same file, the one place a cloud session reads the options from. No confirmation flag is needed, as the marketplace declares no command.
+
+Decisions in recording it:
+
+1. **The guide leads with the setup script**, the route that was tried; organization managed settings stay as the untried alternative. The `SessionStart` hook route is no longer offered: it was never tried, and such a hook does not run in a multi-repository session.
+2. **The guide shows `#main` and says to pin a release tag** once releases are tagged (`council-of-elrond--v<version>`, docs/MAINTENANCE.md "Releasing"): a gate that follows every merge changes under a team without its review.
+3. **The one-repository limit is in the guide now**, ahead of C5, since a second repository silently drops the project's rules and the audit log.
+4. **The README's "nothing is lost" note** now names the cloud as a place where `/council`'s transcript lines are not shown either.

@@ -68,9 +68,18 @@ gitignored files into it (`.claude-plugin/types/` and `tsconfig.json`); that is 
 
 ## Cloud sessions
 
-A repository's `.claude/settings.json` does not load plugins in a cloud session. Anthropic's documentation says `enabledPlugins` and `extraKnownMarketplaces` in a repository are not applied there, and neither are plugins from your user settings. What the documentation offers for the cloud:
+A repository's `.claude/settings.json` does not load plugins in a cloud session. Anthropic's documentation says `enabledPlugins` and `extraKnownMarketplaces` in a repository are not applied there, and neither are plugins from the user settings on your own machine. Two routes work:
 
-- **Organization server-managed settings** (Owner role: Organization settings, Claude Code, Managed settings). Put the same entries there; they apply to every user in the organization:
+- **The environment's setup script** (tried: the mod loads at session start and enforces, with no restart). Install it there, and write the plugin's options in the same step, since a cloud session reads them from the user settings only, never from the repository:
+
+  ```sh
+  claude plugin marketplace add 'Deluha/council-of-elrond#main'
+  claude plugin install council-of-elrond@council-of-elrond --config shadowMode=true
+  ```
+
+  The part after `#` is a branch or a tag, not a commit. `#main` follows every merge; once releases are tagged, pin one (`#council-of-elrond--v0.6.0`) so the gate does not change under you. Both commands write to the user settings (`~/.claude/settings.json`): the marketplace with its ref, the plugin enabled, and each `--config` option under `pluginConfigs`. Add one `--config KEY=VALUE` per option; the keys are the ones under [Options](../mods/council-of-elrond/README.md#options-config), for example `gandalfModel=opus`, `councilModel=sonnet` or `tokenBudget=500000`. Shadow mode suits a team's first days, as on a local install. The clone needs network access to github.com; don't attach this repository to the session (see "One repository per environment" below).
+
+- **Organization server-managed settings** (Owner role: Organization settings, Claude Code, Managed settings). Put the same entries there; they apply to every user in the organization. This route has not been tried.
 
   ```json
   {
@@ -83,9 +92,13 @@ A repository's `.claude/settings.json` does not load plugins in a cloud session.
   }
   ```
 
-- **A setup script or a `SessionStart` hook** that runs `claude plugin marketplace add Deluha/council-of-elrond` and `claude plugin install council-of-elrond@council-of-elrond --scope project`. This is not confirmed: the documentation does not say whether the plugin then loads in the same session or needs a restart. A session can fetch only the repositories attached to it, so attach `Deluha/council-of-elrond` to the session if the clone is refused. A `SessionStart` hook does not run in a multi-repository session.
+What a cloud session does differently (recorded in [DESIGN.md §14](../mods/council-of-elrond/DESIGN.md#14-cloud-sessions)):
 
-Nothing is drawn in a cloud session, and where nobody can be asked the mod refuses the call. The mod has not been run in a cloud session yet (see [MAINTENANCE.md](MAINTENANCE.md#supported-hosts)). If you try it, report what happened in an issue.
+- **Nothing the mod draws reaches you.** The web client is not a surface the mod draws on: no pane, no label, no toast and no `/council` output (its lines go to the transcript log, which the web client does not show). The audit log is still written.
+- **Nobody can be asked.** Every call that would come to you is refused as "nobody can be asked", and each refusal counts as a failed attempt toward the lockout. Only Claude reads the refusal, so ask Claude what was refused. In shadow mode the reviewers never refuse, but the ask-tier rules, protected paths and the secrets scan still do.
+- **One repository per environment.** With two repositories attached, the session's root is their parent, so the project's `.claude/council-of-elrond/rules.json` is not found: its checks, protected paths and production patterns don't apply, and the audit log is written outside the repository and lost with the container. Never use an environment that holds this repository's own checkout: a session developing the mod must not be gated by it.
+
+If you see something else, report it in an issue.
 
 ## Check it loaded
 
