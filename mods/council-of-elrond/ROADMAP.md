@@ -299,10 +299,44 @@ Also decided after the final deliverables: the fake secrets in tests are built a
 ### Before 1.0
 
 - [ ] The ~40-case live eval (above), recorded in DESIGN.md: a definition-of-done item for 1.0.
-- [ ] Cloud sessions: try a setup-script install (`claude plugin marketplace add` and `claude plugin install`) in a throwaway cloud environment, and record in DESIGN.md whether the mod loads, whether it needs a restart, and what `$.ui.ask` does there. Repository settings do not load plugins in the cloud (docs/INSTALL.md, "Cloud sessions").
+- [ ] Cloud sessions: the setup-script install was tried and the mod loads and enforces (findings below, "Cloud sessions"); what remains is recording it in DESIGN.md (C1) and the `$.ui.ask` probe (C3). Repository settings do not load plugins in the cloud (docs/INSTALL.md, "Cloud sessions").
 - [ ] A `/config` switch for the allow-rule offer, only if feedback says the offer is noisy.
 - [ ] The two terminal-check items above resolved: the `AskUserQuestion` re-entry path, and the user-refusal wordings against the binary.
 - [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), not yet decided: performance notes and the concurrency model for DESIGN.md; the `register.ts` reducer refactor; the two-session audit race; the allowlist-oracle note in the README.
+- [ ] The cloud-session work items C1 to C6 below, in that order.
+
+### Cloud sessions: findings and work items
+
+The first real use of the mod in a cloud session (Claude Code on the web, two repositories in one
+environment, the mod installed by the environment's setup script at a pinned ref) found it loaded
+and enforcing, but silent and unable to ask. The findings below come from that session's engine
+debug log and from the 2.1.294 types; the items are written so a dev session can take each one
+cold. Each is one brief with its own tests; C1 and C5 are documentation only.
+
+**What the session showed.**
+
+| Finding | Evidence |
+| :- | :- |
+| A setup-script install (`claude plugin marketplace add` at a pinned ref, then `claude plugin install`) loads the mod at session start; no restart is needed. | The engine's debug log: the hooks module loaded at tier `user` and `/council` was registered before the first prompt. |
+| The mod enforces in the cloud: rules, model reviews, previews and the audit log all ran. | Two single reviews of about 2 s each, one refusal, audit lines written. |
+| The web client is not a render surface. `$.session.surfaces()` is `[]`, so nothing the mod draws reaches the person: no pane, no status line, no toast, no `/council` output. | `RenderSurface` is `terminal`, `desktop`, `mobile` or `vscode` (the types); the log said "nothing attached draws". `$.ui.log` lines go out as `ui_log` events, which the web client does not show. |
+| `$.ui.ask` is never attempted in the cloud: `escalate` returns `unavailable` when surfaces is empty, before any ask. So whether the web client could answer the question is unknown. | `register.ts`, `escalate`. The types say the ask rejects "in a `-p` run"; a cloud session is a stream-json session with a remote client, not `-p`, and `AskUserQuestion` is in its tool list. |
+| Every call that would come to the user is refused with "nobody can be asked", and each counts as a failed attempt toward the lockout. The refusal text reaches Claude only. | A read of the audit log in that session was refused this way. |
+| Project settings are not read for `pluginConfigs`: a repository cannot turn shadow mode on for its cloud sessions. | The log: "no pluginConfigs[...] in user, --settings or managed settings (project settings are not read); every option is its default". |
+| With two repositories in one environment, `$.session.root()` is their parent, so the project's `.claude/council-of-elrond/rules.json` is never found: its project checks, protected paths and production patterns do not apply, and the audit log is written outside the repository (lost when the container is reclaimed). The types offer no API that lists workspace roots. | `loadContext` resolves `OVERRIDES_PATH` against the root only. The only root-like APIs are `session.root`, `session.cwd`, `session.repo` and the `DirectoryAdded` hook input. |
+| The only text channel that reaches the web client is the model. | A `tool.call` deny's text is the model's error result; a `command.run` result may carry `context` for the model; `$.session.append` with `type: "user"` adds a model-readable row. `$.ui.log` is "not sent to the model" (the types). |
+
+**Work items.** C2 and C4 change a recorded design decision; the user approved both on
+2026-10-13 ("I approve roadmap items C2 and C4"), so every item follows the usual loop.
+
+- [ ] **C1. Record the cloud trial.** DESIGN.md gains a "Cloud sessions" subsection with the table above; docs/INSTALL.md "Cloud sessions" replaces "not confirmed" with the working recipe (setup script, pinned ref, loads at start, no restart) and a ready-made snippet that also writes the plugin's options to the user settings (`shadowMode` for a rollout, models, budget), since project settings are not read; docs/MAINTENANCE.md "Supported hosts" lists the cloud as tested, enforcing and non-drawing. Documentation only; `scribe`-sized once the wording is dictated.
+- [ ] **C2. Speak through Claude where nothing draws.** Command output never reaches Claude (a stage 2 decision); this is a scoped exception, approved 2026-10-13. When `$.session.surfaces()` is empty: `/council` (status, report, rules, test) also returns its lines as the `command.run` result's `context`, prefixed with an instruction to relay them verbatim; the session-start notice is appended as a model-readable row (`$.session.append`, `type: "user"`) saying the council is active and how to approve a call (C4); and the `nobodyToAsk` refusal names the refused operation, the rule or reviewer behind it, and the approval route. Never the secrets preview or a diff. Tests: the fixtures' `session.surfaces` answers `[]`, and the command result carries `context`; with a surface it carries none. Strings in `strings.ts`; README under "Where nothing draws"; CHANGELOG.
+- [ ] **C3. Probe `$.ui.ask` in a cloud session.** A branch with a `cloudAsk` option (default off) that attempts the ask when surfaces is empty. The ask has no timeout today and the types give it none; a `$.clock` timer would count against the 10 s own-time budget (fact 3 above), so the probe runs without one and the hang risk is what it measures. Run it once in a throwaway cloud environment whose setup script installs that ref, with one gated call, and record in DESIGN.md: whether the web client shows the question, what the rejection's `message` is when it cannot, and how long it takes. If the client answers it, the surfaces guard in `escalate` becomes "no surface and no remote client" and C4 is a fallback only. If it rejects, `interpretRejection` must map that message to `unavailable` (today every non-"chat" rejection is `dismissed`, a failed attempt).
+- [ ] **C4. A chat approval route for hosts that cannot ask.** A typed approval stands in for the dialog, approved 2026-10-13. A refusal in the no-surface case carries a short fingerprint of the operation key (`council:xxxx`, six hex characters of the audit hash) that Claude relays. The person types `council allow xxxx` (one call) or `council allow xxxx session` (the session, like "allow once" and the allow-rule offer) in chat. The `prompt.submit` hook recognises the line, records the allowance in `$.state` through `state.ts`, answers with a model-readable acknowledgement, and strips the line from the prompt. The next gated call with that fingerprint runs, audited as decided by the user via chat; the allowance is spent on use and at the next prompt. It never applies to a high-confidence secrets find, a block rule or a protected path (the same limits as the dialog), and `council deny xxxx` records a refusal with no failed attempt (a `chat` outcome). Tests: a refusal carries the fingerprint; the prompt line is parsed (and `council allow` with no fingerprint, or an unknown one, is answered and not stored); the allowed call runs once; a block rule still refuses; the allowance is gone after the next prompt. README section; CHANGELOG. Skipped if C3 shows the client answers the dialog.
+- [ ] **C5. Rules-file discovery in a multi-root environment.** When the session root holds no `rules.json`, resolve it per call: from the call's target (a file tool's path, a shell command's cwd) walk up to the nearest `.claude/council-of-elrond/rules.json` below the root; none found, use the root's defaults. `protectedPaths`, `productionPatterns` and `gimli.commands` then resolve against that file's directory, and the project checks run with it as cwd. One cache entry per directory, invalidated by `/council reload`. The audit log path, when relative, resolves the same way, so it lands in the repository. Until this ships, docs/INSTALL.md says: one repository per cloud environment, and never one that holds the mod's own checkout (that session would be gated by the mod it develops, against the rule above). Tests: a fixture root with two repositories, a rules file in one; a file edit in each resolves the right rules; a shell command under the second gets the root's defaults.
+- [ ] **C6. Small things seen in the log.** `$.session.surfaces()` never rejects (the types), so the `.catch(() => [])` wrappers in register.ts are dead; drop them. The three project checks of a typical rules file need the repository's toolchain on the PATH: once C5 lands, run one live cloud check that a check with a missing binary reports "failed" with the error, not a hang.
+
+Order: C1, then C3 (its result decides C4), then C2, C4, C5, C6.
 
 The per-stage lists below are the follow-ups as each stage left them. The table above decides
 every one that was still open; a struck item was done in the stage named. They stay for the
@@ -341,6 +375,6 @@ From stage 2:
 
 From stage 1:
 - `interpretRejection` detects "Chat about this" by looking for `chat` in the rejection message; the real wording is unverified. Check it live.
-- `$.ui.ask` behaviour in SDK and cloud hosts is undocumented. If it can hang there, consider refusing when the only surfaces are remote ones.
+- `$.ui.ask` behaviour in SDK and cloud hosts is undocumented. If it can hang there, consider refusing when the only surfaces are remote ones. *(Cloud: the ask is never reached, as surfaces is empty there; probing it is C3 under "Cloud sessions" above.)*
 - `isReadOnly` from `next(e)`'s result is unused. It could let Galadriel or the cache skip work.
 - The audit appender re-reads the whole log per gated call (no append in `$.fs`). Fine at 1 MiB; revisit if latency shows.
