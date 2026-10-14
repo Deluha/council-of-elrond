@@ -88,6 +88,11 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   counts, the three denial wordings, the fixtures' two-half fake tokens, and when 0.6.0 and 1.0
   happen.
 - **Install guide for teams and the cloud.** `docs/INSTALL.md` now says that a project-scope install still needs one `claude plugin install` per collaborator, and has a "Cloud sessions" section: a repository's settings do not load plugins in a cloud session, so the cloud needs organization managed settings or a setup script. A cloud session has since been tried: the section gives the setup-script recipe (a pinned ref, loaded at session start, the options written to the user settings with `--config`) and what a cloud session does differently (nothing drawn, nobody to ask, one repository per environment), and the supported-hosts note lists the cloud as tested.
+- **Types regenerated for Claude Code 2.1.299.** Drift: additive for every API the mod calls. Two
+  engine changes found by probe: a hook that overruns its time budget, or blocks the hooks worker,
+  is now cut off and its `.catch` asked; the mod refuses the call in both cases, as it already did
+  for any failure before a call ran.
+
 
 ### Security
 - **Allowed calls are scanned for high-confidence secrets.** A literal key in an allowed `curl` or

@@ -38,7 +38,7 @@ tsc -p mods                                           # strict typecheck against
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
 
-- **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289** and checked on **2.1.291** from stage 5, **2.1.294** from stage 6 and **2.1.296** after it (types regenerated each time; the drift was additive, DESIGN.md header). If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts` under the skill's folder and names the path; don't write a mod folder, which would ask to hot-reload it into your session), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
+- **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289** and checked on **2.1.291** from stage 5, **2.1.294** from stage 6, and **2.1.296** and **2.1.299** after it (types regenerated each time; the drift was additive, DESIGN.md header; 2.1.299's probes found two semantic changes, DESIGN §12.5). If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts` under the skill's folder and names the path; don't write a mod folder, which would ask to hot-reload it into your session), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
 - **Keep the mod out of the session building it.** Don't load it into your own dev session (the skill's hot-reload folder, or `--plugin-dir` on the session you work in): it would gate your own tool calls.
 - **Live checks run headless.** Use `claude -p --plugin-dir ./mods/council-of-elrond "<prompt>"` with harmless commands, ideally in a throwaway `git init` folder, then clean it up along with the generated `.claude-plugin/types/` and `tsconfig.json` in the mod folder. `/council` output only shows with `--output-format stream-json --verbose` (as `system/ui_log`).
 
@@ -48,16 +48,17 @@ claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: l
    - Passing `$` to an imported function fails validation.
    - `$`-taking helpers must be **top-level functions in register.ts**, not closures inside a hook.
    - All decisions live in pure sibling modules.
-2. **A hook that overruns its 10 s own-time budget is not cut off.** Its own later `next(e)` still runs the call, and `.catch` didn't fire on overrun in the test kit.
+2. **A hook that overruns its 10 s own-time budget is cut off from 2.1.299** (DESIGN §12.5): its `.catch` is asked with `kind` `timeout` and `called` false, and a later `next(e)` is refused. The test kit does not cut a hook off, so the guard below stays.
    - Every pass-through goes through `proceed()` in register.ts, which refuses when `next.budget.remainingMs < 1000`.
    - Keep the hook's own (non-`$`) work small and bounded.
+   - A hook that blocks the hooks worker for 5 s without yielding has the worker replaced and its `.catch` asked (`kind` `throw`): keep a `.catch` on the gating hook.
 3. **`$` calls don't count against the budget; `$.clock.sleep/after/every` do.**
    - Bound model calls with `timeoutMs` and processes with `timeoutMs`.
    - Build a shared deadline by passing *remaining* time into each call's `timeoutMs`, never with a clock timer.
 4. **In `.catch`:** if `next.called`, then `next(e)` replays the real result without re-running the call. Otherwise refuse.
 5. **`$.ui.ask` is an `AskUserQuestion` tool call** that skips the calling hook but **not the plugin's other `tool.call` hooks**.
    - Keep exactly one `tool.call` hook.
-   - It rejects on dismiss, on "Chat about this", and in `-p`. Dismiss and "Chat about this" reject with the same text (the call's result, cut to 120 characters), so the mod cannot tell them apart (DESIGN §12.4).
+   - It rejects on dismiss, on "Chat about this", and in `-p`. In `-p` on 2.1.299 the rejection says the session has no `AskUserQuestion` tool. Dismiss and "Chat about this" reject with the same text (the call's result, cut to 120 characters), so the mod cannot tell them apart (DESIGN §12.4).
    - Guard it with `$.session.surfaces()` (empty means nobody can be asked: refuse).
 6. **Command output reaches Claude.** A command's `{ text }` is read by Claude (approved decision 1: don't put council internals there). *(Amended by C2: where nothing draws, a person's `/council` status, report, rules and test also go to Claude as the result's `context`, redacted and fenced; DESIGN §13.5.)*
 7. **`$.state` needs a contract.**

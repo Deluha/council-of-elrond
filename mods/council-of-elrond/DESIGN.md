@@ -2,8 +2,8 @@
 
 Status: **final deliverables** (SPEC §21–22, §12 below), after Stage 6 (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
-Targets Claude Code **2.1.296** (built on **2.1.289**, checked on **2.1.291** from Stage 5, **2.1.294** from
-Stage 6 and **2.1.296** after it). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.296's) and
+Targets Claude Code **2.1.299** (built on **2.1.289**, checked on **2.1.291** from Stage 5, **2.1.294** from
+Stage 6, and **2.1.296** and **2.1.299** after it). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.299's) and
 are the source of truth over docs, samples and the spec. The 2.1.289 → 2.1.291 drift was additive: a
 new `prompt.mention` event, a `Color` type (theme keys or raw colours) for paint props, a `ceiling`
 on tool-check inputs, teammate record fields, and doc wording. The 2.1.291 → 2.1.294 drift is
@@ -23,6 +23,14 @@ web search result's `snippet`). One semantic change: a `deny` returned after the
 without error now withholds that result (the model reads "`<tool>` ran, and a plugin withheld its
 result: …") where it used to leave it as the answer. Elrond only denies before `next(e)`, so
 nothing changes for it. The wording re-read from the binary is in §12.4.
+The 2.1.296 → 2.1.299 drift is additive for every signature the mod calls: `$.session.identity`,
+`$.prompt.media` (a submission's attachments), `command` (the slash command a submission runs) and
+`isMeta` on `prompt.submit`'s input, a skill's frontmatter and source on `skill.prompt`, spacing
+tokens (`Space`) and text sizes and weights on elements, and new built-in tool fields. Two semantic
+changes were found by probe rather than in the types (§12.5): a hook that overruns its own-time
+budget is now cut off, its `.catch` asked with `kind` `timeout`, and a `next(e)` it makes afterwards
+is refused; and a hook that blocks the hooks worker for 5 s has the worker replaced and its `.catch`
+asked with `kind` `throw`. Elrond's handler refuses in both cases, so both fail closed.
 
 ## 1. Step 0 findings
 
@@ -74,7 +82,7 @@ Re-run after C2 (§13.5): `session.detach` and `session.attach` hooks, and `$.se
 (via `announce`); `relayOf` joins the `$.session.surfaces` callers. Re-run for the final
 deliverables on 2.1.294: the lines were unchanged. Re-run on 2.1.296: unchanged
 but for `$.process.run`, now reached through `runGitInspection` (the push-range change after the
-final deliverables).
+final deliverables). Re-run on 2.1.299: unchanged.
 
 There is no `tool.check` hook: the mod never takes part in the permission decision. The processes it
 starts are read-only `git` commands from Galadriel's table (§6, §8), and, for a big operation, the
@@ -143,7 +151,8 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | A high-confidence secret in an allowed call | Refused, audited with tier `allow`; no rounds, no failed attempt, no state write. |
 | Hook throws after the call ran | `.catch` replays the real result (`next.called`); the call is not re-run and Claude isn't told a call that ran was refused. |
 | A `tool.call` raised beneath the hook's own frame (`re-entry`, from 2.1.294) | `.catch` answers with `called` false and refuses. A subagent's calls do not arrive this way, in the background or the foreground (verified live, §12.1). |
-| Hook overruns its 10 s own-time budget | **Probe result: the engine did not cut the hook off in the test kit, even with `.catch`.** A hook that overran and then called `next(e)` ran the call. Elrond therefore passes calls only through `proceed()`, which refuses when `next.budget.remainingMs` < 1 s. The hook's own work is bounded to make this unlikely: commands over 20,000 characters aren't parsed (review), parse depth ≤ 4, ≤ 200 parts. |
+| Hook overruns its 10 s own-time budget | **From 2.1.299 the engine cuts the hook off** (probed headless, §12.5): its `.catch` is asked with `kind` `timeout` and `called` false, and refuses; a `next(e)` the hook makes afterwards is refused by the engine. The Stage 0 probe found the test kit does not cut a hook off, even with `.catch`, so calls still pass only through `proceed()`, which refuses when `next.budget.remainingMs` < 1 s. The hook's own work is bounded to make an overrun unlikely: commands over 20,000 characters aren't parsed (review), parse depth ≤ 4, ≤ 200 parts. |
+| A hook blocks the hooks worker (no yield for 5 s) | From 2.1.299 the engine replaces the worker, keeps the plugin loaded and asks the hook's `.catch` with `kind` `throw` and `called` false: refused (probed headless, §12.5). `session.start` runs again in the new worker. |
 | Model error, timeout (`timeoutMs`), empty reply, malformed verdict, request refused | Escalate to you; "keep blocked" refuses. |
 | Token budget spent / no enabled member can take the call (the named one and Gandalf off) | Escalate without a model call. |
 | The file a diff needs can't be read (over 4 MiB, permissions) | The diff shows the call's own text and the prompt says so; the review goes on. |
@@ -555,6 +564,40 @@ around a string was read where the string alone did not settle the question.
   engine never sends. Decided 2026-10-13 (ROADMAP decision 4, amended): the dialog has its own
   "Talk first" option, which is a real answer and not a failed attempt; the engine's "Chat about
   this" counts as a dismissal.
+
+### 12.5 Re-read and re-probed on 2.1.299
+
+The `/upgrade-types` run for 2.1.299: the binary read with `grep -a`, and one headless
+`claude -p --plugin-dir` run per behaviour, with a throwaway probe mod (not Elrond) in a throwaway
+repository.
+
+- **Refusal wordings: unchanged.** Both user-refusal wordings are in the binary and `USER_REFUSAL`
+  matches them. Every automatic-denial wording found is matched by `AUTOMATIC_DENIAL`, including two
+  not recorded before: "The <name> connector requires approval for this call." and "Permission for
+  this tool use was denied. It requires approval, and this session has no approval surface …".
+  `$.ui.ask`'s rejection is unchanged: `<plugin>: $.ui.ask: no answer (<the call's deny or result
+  text, cut>)`, or "the dialog was dismissed".
+- **A hook that overruns its own-time budget is cut off.** A `tool.call` hook that spent 11 s in
+  `$.clock.sleep` had its `.catch` asked at about 10 s, with `next.error.kind` `timeout` and
+  `next.called` false. Its later `next(e)` was refused by the engine ("next() after it settled;
+  refused"), and the call did not run. This replaces the Stage 0 finding for the live engine (§4);
+  `proceed()` stays as the guard the test kit needs.
+- **A hook that blocks the hooks worker.** A `tool.call` hook spinning without yielding for over 5 s:
+  the engine got no heartbeat, replaced the worker, kept the plugin loaded and asked its `.catch`
+  with `kind` `throw` and `called` false. The call did not run. The plugin's `session.start` ran
+  again in the new worker.
+- **`$.ui.ask` in `-p` rejects** at once, now because a `-p` session has no `AskUserQuestion` tool
+  ("`$.tool.call: no tool named "AskUserQuestion" in this session`"). Elrond never reaches it there:
+  `escalate` checks `$.session.surfaces()` first.
+- **`$.process.spawn` ends on `return()`.** A `sleep` ended by `stream.return()` from a
+  `$.clock.after` timer after 1.5 s was gone 0.5 s later, with no orphan.
+- **A slash command in `-p` raises no `prompt.submit`.** `/probe hello` reached `command.run`
+  (origin `sdk`) only; a plain `-p` prompt raised `prompt.submit` with origin `sdk` and no `command`.
+  Whether a slash command typed in a terminal raises `prompt.submit` with the new `command` field
+  set is not checked. If it does, a person's `/council` command also runs the per-prompt reset
+  (`resetForPrompt`).
+- **Skipped:** `/council` output as `ui_log` in stream-json, already checked live on 2.1.299 in C2
+  (§13.5 h).
 
 ## 13. Decisions after the final deliverables
 
