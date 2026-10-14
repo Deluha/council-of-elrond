@@ -36,9 +36,9 @@ Run this whenever `claude --version` differs from the version at the top of DESI
    ```
    If the wording changed, update `hooks/elrond/operations.ts` (`outcomeOf`) and its tests.
 5. **Re-probe what the tests can't.** The behaviours established by live probes (DESIGN.md §1,
-   §4): the own-time budget not cutting a hook off, `$.ui.ask` rejecting in `-p`, `$.process.spawn`
-   ending on `return()`, `ui_log` lines in stream-json. One headless run per behaviour, in a
-   throwaway repo.
+   §4): the own-time budget cutting a hook off (from 2.1.299, a `timeout` `.catch`), `$.ui.ask`
+   rejecting in `-p`, `$.process.spawn` ending on `return()`, `ui_log` lines in stream-json. One
+   headless run per behaviour, in a throwaway repo.
 6. **Record it.** The version line at the top of DESIGN.md, the drift in one sentence, and any
    changed decision. Mention the version in CHANGELOG.
 7. **Pin CI if needed.** `.github/workflows/ci.yml` installs the latest `@anthropic-ai/claude-code`.
