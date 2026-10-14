@@ -12,6 +12,7 @@ import {
   KEEP_BLOCKED,
   REVISE,
   ROOT,
+  settled,
   TALK_FIRST,
   USAGE,
   verdict,
@@ -35,7 +36,7 @@ describe('allow', () => {
     expect(w.ran).toEqual([{ tool: 'Bash', command: 'git status', description: 'Show status' }])
     expect(w.modelRequests).toEqual([])
     expect(w.asked).toEqual([])
-    expect(auditLines(w)).toEqual([])
+    expect(await auditLines(w)).toEqual([])
   })
 
   test('the mod adds no permission decision of its own', async ($, on) => {
@@ -54,7 +55,7 @@ describe('block', () => {
     expect(deny).toContain('Recursive delete of the filesystem root')
     expect(w.ran).toEqual([])
     expect(w.modelRequests).toEqual([])
-    const [line] = auditLines(w)
+    const [line] = await auditLines(w)
     expect(line).toMatchObject({ tool: 'Bash', tier: 'block', ruleId: 'rm-recursive-outside-repo', outcome: 'refused' })
   })
 })
@@ -67,7 +68,7 @@ describe('review by Gandalf', () => {
     expect(w.ran).toEqual([call])
     expect(w.modelRequests).toHaveLength(1)
     expect(w.modelRequests[0]).toMatchObject({ model: 'sonnet', maxTokens: 2000, effort: 'low', timeoutMs: 30000 })
-    expect(auditLines(w)[0]).toMatchObject({ tier: 'review', member: 'gandalf', model: 'sonnet', verdict: 'approve', outcome: 'ran', tokens: 1000 })
+    expect((await auditLines(w))[0]).toMatchObject({ tier: 'review', member: 'gandalf', model: 'sonnet', verdict: 'approve', outcome: 'ran', tokens: 1000 })
   })
 
   test('revise: refused with the requested change', async ($, on) => {
@@ -84,7 +85,7 @@ describe('review by Gandalf', () => {
     expect(deny).toContain('(block)')
     expect(deny).toContain('Reason: Deletes the whole build cache.')
     expect(w.ran).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ verdict: 'block', outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ verdict: 'block', outcome: 'refused' })
   })
 
   test('file writes, subagent calls and MCP calls are reviewed the same way', async ($, on) => {
@@ -93,7 +94,7 @@ describe('review by Gandalf', () => {
     expectRefusal(await $.tool.call({ tool: 'Bash', command: 'rm -rf build', agentId: 'agent-1' } as never))
     expectRefusal(await $.tool.call({ tool: 'mcp__github__merge_pull_request', number: 7 } as never))
     expect(w.modelRequests).toHaveLength(3)
-    expect(auditLines(w)[1]).toMatchObject({ agentId: 'agent-1' })
+    expect((await auditLines(w))[1]).toMatchObject({ agentId: 'agent-1' })
   })
 
   test("the user's latest prompt and session scripts reach the reviewer, redacted", async ($, on) => {
@@ -134,7 +135,7 @@ describe('fail closed', () => {
     const w = world(on, { replies: [{ isAnswered: false, reason: 'aborted', usage: USAGE }], answer: ALLOW_ONCE })
     expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).toEqual({ result: 'ran' })
     expect(w.ran).toHaveLength(1)
-    expect(auditLines(w)[0]).toMatchObject({ verdict: 'failed', decision: 'allow-once', outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ verdict: 'failed', decision: 'allow-once', outcome: 'ran' })
   })
 
   test('once the token budget is spent, reviews go to the user', { options: { tokenBudget: 1500 } }, async ($, on) => {
@@ -188,7 +189,7 @@ describe('escalation', () => {
     const w = world(on, { answer: 'dismiss' })
     const deny = expectRefusal(await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/.env`, old_string: 'A=1', new_string: 'A=2' }))
     expect(deny).toContain('dismissed')
-    expect(auditLines(w)[0]).toMatchObject({ tier: 'ask', decision: 'dismissed', outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ tier: 'ask', decision: 'dismissed', outcome: 'refused' })
   })
 
   test('where nothing draws, nobody is asked and the call is refused', async ($, on) => {
@@ -205,7 +206,7 @@ describe('escalation', () => {
     // The escalation, then the allow-rule offer: neither is gated itself.
     expect(w.asked).toHaveLength(2)
     expect(w.asked[1]?.options).toEqual(['Add the rule', 'Not now'])
-    expect(auditLines(w)).toHaveLength(1)
+    expect(await auditLines(w)).toHaveLength(1)
   })
 })
 
@@ -238,8 +239,9 @@ describe('audit log', () => {
   test('records every field, and never contents or secrets', async ($, on) => {
     const w = world(on, { replies: [verdict('block', `Writes key ${FAKE_AWS_KEY} to disk.`, 'Use the vault.')] })
     await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/keys.ts`, content: `const k = "${FAKE_AWS_KEY}" // FILE BODY` })
+    await settled(w)
     const raw = w.files.get(`${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`) ?? ''
-    const [line] = auditLines(w)
+    const [line] = await auditLines(w)
     for (const field of ['ts', 'tool', 'fingerprint', 'opKey', 'tier', 'member', 'profile', 'verdict', 'reason', 'shadow', 'decision', 'latencyMs', 'tokens']) {
       expect(line, field).toHaveProperty(field)
     }
@@ -252,7 +254,7 @@ describe('audit log', () => {
     const w = world(on, { replies: [BLOCK] })
     await $.tool.call({ tool: 'Bash', command: 'rm  -rf   build' })
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
-    const [a, b] = auditLines(w)
+    const [a, b] = await auditLines(w)
     expect(a?.fingerprint).toBe(b?.fingerprint)
   })
 
@@ -267,6 +269,7 @@ describe('audit log', () => {
   test('rotates by size', { options: { auditMaxKb: 16 } }, async ($, on) => {
     const w = world(on)
     for (let i = 0; i < 70; i++) await $.tool.call({ tool: 'Bash', command: `rm -rf /tmp/x${i}` })
+    await settled(w)
     const path = `${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`
     expect(w.files.has(`${path}.1`)).toBe(true)
     expect((w.files.get(path) ?? '').length).toBeLessThanOrEqual(16 * 1024)

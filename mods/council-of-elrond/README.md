@@ -302,6 +302,13 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | `/council report` | A summary of the audit log, rotated files included (see below). |
 | `/council debate` | Opens the [debate pane](#debate-pane-and-council-check) at any width (where nothing draws, prints its rows as transcript lines). |
 
+**`off`, `shadow on` and `model` only run when a person types them.** They loosen the gate (bypass,
+reviewers that never refuse, a different reviewing model), so a command that arrives from a plugin,
+another Claude session or a scheduled prompt is refused with one line and changes nothing. Typing
+them at the prompt, through the Remote Control bridge or from the SDK works. `on`, `shadow off`, the
+`model` listing, `reload` and the rest answer from any origin. (The SDK counts as a person for now,
+because the web client's origin is not yet known.)
+
 ### `/council report`
 
 Read the report after a few days in shadow mode to tune the rules. It has four parts:
@@ -375,7 +382,7 @@ targets with flags dropped and paths resolved. `rm -rf ./build` and `rm -r build
 operation. A push keys on its remote and branch, and SQL on its database.
 
 - **Rounds:** after a reviewer refuses the same operation twice, further attempts come to you without another model call. Typing an instruction starts the rounds over.
-- **Failed attempts:** a refusal by a rule, a reviewer or the secrets scan, your "keep blocked" (or a dismissed question, or nobody to ask), your refusal at Claude Code's own permission prompt, and a gated call that ran and errored all count. Claude Code's own "Chat about this" counts like a dismissal. "Talk first" does not, nor does Claude Code denying a call on its own with nobody asked (in `claude -p`, or by a deny rule).
+- **Failed attempts:** a refusal by a rule, a reviewer or the secrets scan, your "keep blocked" (or a dismissed question, or nobody to ask), your refusal at Claude Code's own permission prompt, and a gated call that ran and errored all count. Claude Code's own "Chat about this" counts like a dismissal. "Talk first" does not, nor does Claude Code denying a call on its own with nobody asked (in `claude -p`, or by a deny rule), nor an allowlist entry the mod could not write (the call stays blocked, but the failure is not Claude's).
 - **Lockout:** three failed attempts on one operation, or five on one kind of operation (say `git push` to any target), lock it out. Claude is told to stop retrying, tell you what failed and propose another approach.
 - A call that runs successfully clears its own operation. Everything resets when you send a new prompt.
 - **Cache:** a reviewer's approve is reused for the identical call until your next prompt. A block or revise never is.
@@ -440,6 +447,13 @@ tells apart a call you refused at Claude Code's permission prompt (`refused-by-u
 check denied with nobody asked (`denied-by-permission`), and one that ran and errored (`error`). It never holds file contents, diffs or secrets: the
 call itself appears only as a hash. A `.gitignore` beside it keeps it out of git.
 
+Lines are written in order after the call, and nothing waits for them: a failed write is noted in
+the debug log, and one that never returns holds back only the lines queued after it, never a
+decision or a later call. `/council log` and `/council report` may not show a line still waiting.
+The log is rotated by size (in bytes) into `.1` and `.2`. Two Claude Code sessions in one project share the
+file with no lock between them, so their lines can interleave or one can overwrite the other's;
+`/council report` skips any line it cannot read.
+
 ## Expected token cost
 
 A review sends roughly 1,000–4,000 input tokens (checklist, the call or diff cut to its line limit,
@@ -484,6 +498,7 @@ hold is classified (0.5.0); the gaps that remain:
 - Rules you loosen, and calls you allow. An allow rule you add skips review, the ask tier and the secrets scan for that exact command; it does not follow a `cd` earlier in another command, so `rm -r build` is allowed in whichever folder Claude runs it.
 - **Low-confidence secrets in allowed calls.** An allowed call is scanned for high-confidence secrets only: a `password=…`-style assignment or a random-looking token in an allowed `curl` or `echo` passes without a question.
 - **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`), an identifier without a digit and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through the scan (redaction still hides it).
+- **Two sessions in one project share one audit log without a lock.** Claude Code's file access has none, so lines can interleave or be lost; the report skips lines it cannot parse.
 - **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb.
 - A hook that overruns its time limit. The engine may run the call; Elrond refuses rather than pass with its budget nearly spent, but it can't act once it has run out.
 

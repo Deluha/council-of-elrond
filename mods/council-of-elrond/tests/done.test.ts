@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { ALLOW_ONCE, APPROVE, auditLines, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, ROOT, TALK_FIRST, USAGE, world } from './fixtures.js'
+import { ALLOW_ONCE, APPROVE, auditLines, council, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, ROOT, settled, TALK_FIRST, USAGE, world } from './fixtures.js'
 import type { ModelReply, World } from './fixtures.js'
 
 /**
@@ -12,9 +12,6 @@ const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
 const AWS = FAKE_AWS_KEY
 const PUSH = { tool: 'Bash', command: 'git push origin feature' } as const
 const REVIEWED = { tool: 'Bash', command: 'rm -rf build' } as const
-
-type Command = { command: { run: (e: { command: string; args: string }) => Promise<unknown> } }
-const council = ($: unknown, args = ''): Promise<unknown> => ($ as Command).command.run({ command: 'council', args })
 
 const FAILURES = [
   ['an API error', { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: USAGE }],
@@ -91,8 +88,8 @@ describe("no re-entry from the mod's own calls", () => {
     expect(w.asked).toHaveLength(2)
     expect(w.asked[1]?.options).toEqual(['Add the rule', 'Not now'])
     // Only the control call above is gated; the mod's two questions left no line.
-    expect(auditLines(w).filter(line => line.tool === 'AskUserQuestion')).toHaveLength(1)
-    expect(auditLines(w).filter(line => line.tool === 'Bash')).toHaveLength(1)
+    expect((await auditLines(w)).filter(line => line.tool === 'AskUserQuestion')).toHaveLength(1)
+    expect((await auditLines(w)).filter(line => line.tool === 'Bash')).toHaveLength(1)
   })
 
   test("no re-entry from the mod's own calls: its previews and model requests never reach the gate", async ($, on) => {
@@ -102,8 +99,8 @@ describe("no re-entry from the mod's own calls", () => {
     expect(w.ran).toEqual([PUSH])
     expect(w.processes.length).toBeGreaterThan(0)
     expect(w.modelRequests.length).toBeGreaterThan(0)
-    expect(auditLines(w).filter(line => line.tool === 'Bash')).toHaveLength(1)
-    expect(auditLines(w).filter(line => line.tool !== 'Bash')).toEqual([])
+    expect((await auditLines(w)).filter(line => line.tool === 'Bash')).toHaveLength(1)
+    expect((await auditLines(w)).filter(line => line.tool !== 'Bash')).toEqual([])
   })
 
   test("no re-entry from the mod's own calls: its project checks and writes never reach the gate", async ($, on) => {
@@ -114,8 +111,9 @@ describe("no re-entry from the mod's own calls", () => {
     // Neither the check's argv nor anything else of the mod's reached the tool.
     expect(w.ran).toEqual([PUSH])
     // The audit log is written by the mod ($.fs.write): not a gated call, and one line for the push.
+    await settled(w)
     expect(w.files.has(`${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`)).toBe(true)
-    expect(auditLines(w)).toHaveLength(1)
+    expect(await auditLines(w)).toHaveLength(1)
   })
 })
 
@@ -127,7 +125,7 @@ describe('in enforcing mode, a reviewer failure never runs a gated call without 
         const deny = denyOf(await $.tool.call(REVIEWED))
         expect(deny).not.toBe('')
         expect(w.ran).toEqual([])
-        expect(auditLines(w)[0]).toMatchObject({ outcome: 'refused' })
+        expect((await auditLines(w))[0]).toMatchObject({ outcome: 'refused' })
       })
     }
   }
@@ -249,7 +247,7 @@ describe('"Talk first" and "Chat about this"', () => {
     const deny = denyOf(await $.tool.call(call))
     expect(deny).toContain('Stop and talk the call through with the user')
     expect(w.ran).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ decision: 'chat', outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ decision: 'chat', outcome: 'refused' })
     // Unlike a dismissal, three in a row do not lock the operation out.
     await $.tool.call(call)
     await $.tool.call(call)
@@ -264,7 +262,7 @@ describe('"Talk first" and "Chat about this"', () => {
     const w = world(on, { answer: 'chat' })
     const call = { tool: 'Bash', command: 'sudo ls' } as const
     for (let i = 0; i < 3; i++) await $.tool.call(call)
-    expect(auditLines(w)[0]).toMatchObject({ decision: 'dismissed', outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ decision: 'dismissed', outcome: 'refused' })
     expect(denyOf(await $.tool.call(call))).toContain('locked out')
     expect(w.asked).toHaveLength(3)
     expect(w.ran).toEqual([])

@@ -123,6 +123,14 @@ export type World = {
   spawned: string[][]
   spawnReply: (argv: readonly string[]) => SpawnReply
   ended: number
+  /** Whether a write to this path is refused (the call rejects). */
+  writeFails: (path: string) => boolean
+  /** Whether a write to this path never returns. */
+  writeHangs: (path: string) => boolean
+  /** How many file calls the engine has answered: `settled` waits until it stops moving. */
+  fsCalls: number
+  /** Whether a `clock.now` read is refused (the call rejects), when the clock is mocked. */
+  clockFails: () => boolean
   notices: { id: string; text: string | undefined }[]
   panes: string[]
   /** Every pane the mod opened, as it asked. */
@@ -134,6 +142,8 @@ export type World = {
   statuses: (string | undefined)[]
   configSets: { key: string; value: unknown }[]
   commands: string[]
+  /** What each command was registered with. */
+  commandSpecs: { name: string; description: string; argumentHint?: string }[]
 }
 
 const strip = (e: Record<string, unknown>): Record<string, unknown> => {
@@ -177,6 +187,10 @@ export function world(
     spawned: [],
     spawnReply: () => ({ code: 0 }),
     ended: 0,
+    writeFails: () => false,
+    writeHangs: () => false,
+    fsCalls: 0,
+    clockFails: () => false,
     notices: [],
     panes: [],
     opens: [],
@@ -185,6 +199,7 @@ export function world(
     statuses: [],
     configSets: [],
     commands: [],
+    commandSpecs: [],
   }
 
   on('session.root', () => ({ value: ROOT }))
@@ -194,12 +209,19 @@ export function world(
   })
   on('session.surfaces', () => ({ value: w.surfaces as never }))
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }))
-  on('fs.exists', ($, e) => ({ value: w.files.has(e.path) || w.dirs.has(e.path) }))
+  on('fs.exists', ($, e) => {
+    w.fsCalls++
+    return { value: w.files.has(e.path) || w.dirs.has(e.path) }
+  })
   on('fs.read', ($, e) => {
+    w.fsCalls++
     const content = w.files.get(e.path)
     return content === undefined ? { deny: `ENOENT: ${e.path}` } : { value: content }
   })
   on('fs.write', ($, e) => {
+    w.fsCalls++
+    if (w.writeHangs(e.path)) return new Promise<never>(() => undefined)
+    if (w.writeFails(e.path)) return { deny: `EIO: ${e.path}` }
     w.files.set(e.path, e.text)
     return { value: undefined }
   })
@@ -239,7 +261,16 @@ export function world(
     if (reply === 'timeout') return { deny: 'timed out' }
     return { value: { exitCode: reply.exitCode, stdout: reply.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  if (setup.isClockMocked === true) w.clock = mock.clock(on)
+  if (setup.isClockMocked === true) {
+    // The mocked clock's own `clock.now` hook, behind a switch that makes the read fail.
+    const gated = ((name: string, ...rest: unknown[]) => {
+      const register = on as unknown as (...args: unknown[]) => unknown
+      if (name !== 'clock.now') return register(name, ...rest)
+      const hook = rest[rest.length - 1] as (...args: unknown[]) => unknown
+      return register(name, ...rest.slice(0, -1), (...args: unknown[]) => (w.clockFails() ? { deny: 'clock is down' } : hook(...args)))
+    }) as unknown as On
+    w.clock = mock.clock(gated)
+  }
   else on('clock.now', () => ({ value: Date.now() }))
   on('process.spawn', async function* ($, e, next) {
     w.spawned.push([...e.argv])
@@ -287,6 +318,7 @@ export function world(
   })
   on('command.register', ($, e) => {
     w.commands.push(e.name)
+    w.commandSpecs.push({ name: e.name, description: e.description, ...(e.argumentHint !== undefined && { argumentHint: e.argumentHint }) })
     return { value: { command: e.name } }
   })
   on('ui.log', ($, e) => {
@@ -297,11 +329,15 @@ export function world(
     w.toasts.push(e.text)
     return { value: undefined }
   })
-  on('model.complete', async ($, e) => {
+  on('model.complete', async ($, e, next) => {
     w.modelRequests.push(e as unknown as Record<string, unknown>)
     const delay = w.modelDelays.shift()
     if (delay !== undefined && w.clock !== undefined) {
-      await w.clock.sleep(delay)
+      // A request the caller aborted (Esc) answers "aborted" at once, as the engine's does.
+      const interrupted = new Promise<'aborted'>(resolve => next.signal.addEventListener('abort', () => resolve('aborted'), { once: true }))
+      if ((await Promise.race([w.clock.sleep(delay).then(() => 'done' as const), interrupted])) === 'aborted') {
+        return { value: { isAnswered: false, reason: 'aborted', usage: USAGE } as never }
+      }
       // Past its own timeout, the request is abandoned.
       if (typeof e.timeoutMs === 'number' && delay >= e.timeoutMs) return { value: { isAnswered: false, reason: 'aborted', usage: USAGE } as never }
     }
@@ -327,12 +363,75 @@ export function world(
   return w
 }
 
-/** The audit log's lines, parsed. */
-export const auditLines = (w: World, path = `${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`): Record<string, unknown>[] =>
-  (w.files.get(path) ?? '')
+/** Who ran a command: the person's own Enter by default, as the engine stamps it. */
+export type Origin = { kind: string; name?: string }
+
+type CommandRunner = { command: { run: (e: unknown) => Promise<unknown> } }
+
+/**
+ * `/council <args>` as the engine delivers it: the whole `command.run` input,
+ * origin and presentation included. Without an origin the hook sees none.
+ */
+export const council = ($: unknown, args = '', origin: Origin = { kind: 'composer' }): Promise<unknown> =>
+  ($ as CommandRunner).command.run({ command: 'council', args, origin, presentation: { isFullscreen: false, columns: 80 } })
+
+/**
+ * Watches the session record beneath the mod: how often it was read, every value
+ * written, and two switches. `readAs(n)` makes the n-th read (1-based) answer a
+ * value of the test's choosing (undefined: the real one); `refuseWrite()` makes a
+ * write fail. Opt in per test: a test that registers its own `state.set` must not.
+ */
+export type StateWatch = {
+  reads: number
+  written: unknown[]
+  readAs: (n: number) => unknown
+  refuseWrite: () => boolean
+}
+
+export function watchState(on: On): StateWatch {
+  const watch: StateWatch = { reads: 0, written: [], readAs: () => undefined, refuseWrite: () => false }
+  on('state.get', async ($, e, next) => {
+    const real = await next(e)
+    if (e.plugin !== 'council-of-elrond' || e.key !== 'session') return real
+    if (real.deny !== undefined) return real
+    watch.reads++
+    const seeded = watch.readAs(watch.reads)
+    // The hook's result wraps the read itself: `{ value: { value, version } }`.
+    return seeded === undefined ? real : { ...real, value: { ...real.value, value: seeded as never } }
+  })
+  on('state.set', ($, e, next) => {
+    if (e.plugin !== 'council-of-elrond' || e.key !== 'session') return next(e)
+    if (watch.refuseWrite()) return { deny: 'disk full' }
+    watch.written.push(e.value)
+    return next(e)
+  })
+  return watch
+}
+
+type Turns = { setTimeout: (run: () => void, ms: number) => unknown }
+
+/**
+ * Lets the audit lines the mod queued land. The mod does not wait for them, so
+ * they follow the call by a few turns of the event loop: this takes turns (the
+ * mocked clock's settle, or a zero-delay timer) until the file calls stop
+ * coming. A write that never returns ends it too: nothing more is moving.
+ */
+export async function settled(w: World): Promise<void> {
+  for (let turns = 0; turns < 200; turns++) {
+    const before = w.fsCalls
+    await (w.clock !== undefined ? w.clock.settle() : new Promise<void>(resolve => (globalThis as unknown as Turns).setTimeout(resolve, 0)))
+    if (w.fsCalls === before) return
+  }
+}
+
+/** The audit log's lines, parsed, once the queued ones have landed. */
+export const auditLines = async (w: World, path = `${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`): Promise<Record<string, unknown>[]> => {
+  await settled(w)
+  return (w.files.get(path) ?? '')
     .split('\n')
     .filter(line => line !== '')
     .map(line => JSON.parse(line) as Record<string, unknown>)
+}
 
 export const denyOf = (result: unknown): string => {
   const deny = (result as { deny?: unknown }).deny

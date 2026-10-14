@@ -9,6 +9,7 @@ import {
   ALLOWLIST,
   APPROVE,
   auditLines,
+  council,
   denyOf,
   FAKE_AWS_KEY,
   FAKE_GITHUB_TOKEN,
@@ -21,6 +22,7 @@ import {
   FAKE_SLACK_WEBHOOK,
   KEEP_BLOCKED,
   ROOT,
+  settled,
   TALK_FIRST,
   world,
 } from './fixtures.js'
@@ -313,7 +315,8 @@ describe('in the pipeline', () => {
     expect(w.asked).toEqual([])
     expect(w.modelRequests).toEqual([])
     expect(w.ran).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ member: 'gollum', verdict: 'block', outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ member: 'gollum', verdict: 'block', outcome: 'refused' })
+    await settled(w)
     expect(w.files.get(`${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`)).not.toContain(AWS)
   })
 
@@ -344,7 +347,7 @@ describe('in the pipeline', () => {
     const rules = JSON.parse(w.files.get(RULES) ?? '{}') as { gollum?: { allowlist?: string[] } }
     expect(rules.gollum?.allowlist).toHaveLength(1)
     expect(w.files.get(RULES)).not.toContain('hunter2xyz')
-    expect(auditLines(w)[0]).toMatchObject({ decision: 'allowlist', outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ decision: 'allowlist', outcome: 'ran' })
 
     // The next call with the same secret is not asked about.
     await $.tool.call(call)
@@ -396,8 +399,9 @@ describe('allowed calls', () => {
     expect(w.asked).toEqual([])
     expect(w.modelRequests).toEqual([])
     expect(w.ran).toEqual([])
-    expect(auditLines(w)).toHaveLength(2)
-    for (const line of auditLines(w)) expect(line).toMatchObject({ tier: 'allow', member: 'gollum', verdict: 'block', outcome: 'refused', opKey: null, decision: null })
+    expect(await auditLines(w)).toHaveLength(2)
+    for (const line of await auditLines(w)) expect(line).toMatchObject({ tier: 'allow', member: 'gollum', verdict: 'block', outcome: 'refused', opKey: null, decision: null })
+    await settled(w)
     expect(w.files.get(AUDIT)).not.toContain(AWS)
   })
 
@@ -406,7 +410,7 @@ describe('allowed calls', () => {
     expect(await $.tool.call({ tool: 'Bash', command: 'echo password=hunter2xyz' })).toEqual({ result: 'ran' })
     expect(w.asked).toEqual([])
     expect(w.ran).toHaveLength(1)
-    expect(auditLines(w)).toEqual([])
+    expect(await auditLines(w)).toEqual([])
   })
 
   test('an allowlisted high secret runs', async ($, on) => {
@@ -427,7 +431,7 @@ describe('allowed calls', () => {
     const w = world(on)
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: `echo ${AWS}` }))).toContain('the secrets scan (block)')
     expect(w.ran).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ shadow: false, outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ shadow: false, outcome: 'refused' })
   })
 
   test('there are no rounds to count: no rounds line, and never locked out', async ($, on) => {
@@ -444,13 +448,14 @@ describe('allowed calls', () => {
   test('a subagent\'s refused call carries its agent id in the audit line', async ($, on) => {
     const w = world(on)
     await $.tool.call({ tool: 'Bash', command: `echo ${AWS}`, agentId: 'sub-1' } as never)
-    expect(auditLines(w)[0]).toMatchObject({ tier: 'allow', agentId: 'sub-1' })
+    expect((await auditLines(w))[0]).toMatchObject({ tier: 'allow', agentId: 'sub-1' })
   })
 
   test('/council report counts it as refused by the secrets scan', async ($, on) => {
     const w = world(on, { surfaces: [] })
     await $.tool.call({ tool: 'Bash', command: `echo ${AWS}` })
-    await ($ as unknown as { command: { run: (e: { command: string; args: string }) => Promise<unknown> } }).command.run({ command: 'council', args: 'report' })
+    await settled(w)
+    await council($, 'report')
     expect(w.logs.join('\n')).toContain('(no rule): 1 (by the secrets scan 1)')
   })
 })

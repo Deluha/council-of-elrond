@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { ALLOW_ONCE, APPROVE, auditLines, BLOCK, denyOf, KEEP_BLOCKED, ROOT, THEME, verdict, world } from './fixtures.js'
+import { ALLOW_ONCE, APPROVE, auditLines, BLOCK, council, denyOf, KEEP_BLOCKED, ROOT, THEME, verdict, world } from './fixtures.js'
 import type { World } from './fixtures.js'
 
 /**
@@ -42,9 +42,6 @@ const paneLines = async ($: unknown, surface: Surface, agentId?: string): Promis
 
 /** Every Text of a drawing, in order. */
 const linesOf = async (ui: Drawn): Promise<string[]> => (await ui.findAll({ type: 'Text' })).map(found => found.text ?? '')
-
-type Dollar = { command: { run: (e: { command: string; args?: string }) => Promise<unknown> } }
-const council = ($: unknown, args = '') => ($ as Dollar).command.run({ command: 'council', args })
 
 const withChecks = (w: World, commands: readonly { name: string; argv: string[] }[]): void => {
   w.files.set(RULES, JSON.stringify({ schemaVersion: 1, gimli: { commands } }))
@@ -375,7 +372,7 @@ describe('a debate that cannot be written', () => {
     const deny = denyOf(await $.tool.call(call('rm -rf build')))
     expect(deny).toContain('Decided by: the destructive-operations reviewer (block).')
     expect(w.ran).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ verdict: 'block', outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ verdict: 'block', outcome: 'refused' })
     // Nothing was recorded, so there is nothing to draw but the empty view.
     expect(await paneLines($, 'terminal')).toContain('No reviews yet in this view.')
   })
@@ -387,7 +384,7 @@ describe('a debate that cannot be written', () => {
     expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })
     expect(w.spawned).toEqual([['npm', 'test']])
     expect(w.modelRequests).toHaveLength(3)
-    expect(auditLines(w)[0]).toMatchObject({ member: 'council', verdict: 'approve', outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ member: 'council', verdict: 'approve', outcome: 'ran' })
     expect(await paneLines($, 'terminal')).toContain('No reviews yet in this view.')
   })
 })

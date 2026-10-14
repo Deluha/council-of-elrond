@@ -5,7 +5,7 @@ import type { Voice } from '../hooks/elrond/combine.js'
 import { refusalText } from '../hooks/elrond/refusal.js'
 import type { GimliRun } from '../hooks/members/gimli.js'
 import { allStrings, currentMode, flavourOf, setMode, text, themedKeys } from '../hooks/strings.js'
-import { ALLOW_ONCE, auditLines, BLOCK, denyOf, KEEP_BLOCKED, THEME, withoutIds, world } from './fixtures.js'
+import { ALLOW_ONCE, auditLines, BLOCK, council, denyOf, KEEP_BLOCKED, THEME, withoutIds, world } from './fixtures.js'
 
 /** What Claude reads: these families, and these single keys, never get a themed variant. */
 const CLAUDE_FACING_FAMILIES = ['refusal.', 'reason.', 'alternative.', 'council.', 'gimli.', 'escalate.', 'route.', 'suggest.', 'notice.', 'report.']
@@ -24,9 +24,6 @@ const CLAUDE_FACING_KEYS = [
   'ask.verdict',
   'ask.failed',
 ]
-
-type Dollar = { command: { run: (e: { command: string; args?: string }) => Promise<unknown> } }
-const council = ($: unknown, args = '') => ($ as Dollar).command.run({ command: 'council', args })
 
 describe('the strings table', () => {
   test('plain mode carries no theme text', () => {
@@ -130,7 +127,7 @@ describe('the loot roll (themed, the default)', () => {
     const call = { tool: 'Bash', command: 'sudo systemctl restart nginx' } as const
     expect(await $.tool.call(call)).toEqual({ result: 'ran' })
     expect(w.ran).toEqual([call])
-    expect(auditLines(w)[0]).toMatchObject({ decision: 'allow-once', outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ decision: 'allow-once', outcome: 'ran' })
   })
 
   test('Pass: keep blocked refuses the call, and the refusal Claude reads has no theme text', async ($, on) => {
@@ -139,7 +136,7 @@ describe('the loot roll (themed, the default)', () => {
     expect(deny).toContain('Decided by: the user (keep blocked).')
     expect(deny).not.toMatch(THEME)
     expect(w.ran).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ decision: 'keep-blocked', outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ decision: 'keep-blocked', outcome: 'refused' })
   })
 
   test('the plain labels are not the answer here: they reach Claude as an instruction', async ($, on) => {
@@ -154,7 +151,7 @@ describe('the loot roll (themed, the default)', () => {
     const deny = denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))
     expect(deny).toContain('Decided by: the destructive-operations reviewer (block).')
     expect(deny).not.toMatch(THEME)
-    const line = auditLines(w)[0]
+    const line = (await auditLines(w))[0]
     expect(JSON.stringify(line?.reason ?? '')).not.toMatch(THEME)
   })
 

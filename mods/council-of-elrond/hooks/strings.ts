@@ -55,6 +55,9 @@ const TABLE = {
   // Reasons and alternatives the council supplies itself
   'reason.userKeptBlocked': { plain: 'The user chose to keep this call blocked.' },
   'reason.userDismissed': { plain: 'The user dismissed the question without allowing the call.' },
+  'reason.allowlistNotWritten': {
+    plain: 'You chose to add this finding to the allowlist, but the entry could not be written, so the call stays blocked.',
+  },
   'reason.userWantsChat': { plain: 'The user wants to discuss this call before anything runs.' },
   'reason.nobodyToAsk': { plain: 'The call needs the user, and nobody can be asked in this session. {why}' },
   'reason.failure': { plain: 'The council could not complete its review ({problem}), and it fails closed.' },
@@ -132,6 +135,8 @@ const TABLE = {
     plain: 'Council: new here? Try /council shadow on for the first days. Reviewers then log verdicts without refusing; rules, protected paths and the secrets scan still enforce.',
   },
   'notice.commandFailed': { plain: 'Council: /council could not be registered ({problem})' },
+  'notice.auditFailed': { plain: 'Council: audit write failed: {problem}' },
+  'notice.sessionMalformed': { plain: 'Council: the stored session record has an unexpected shape; it is read as a fresh one' },
 
   // Mode labels by the prompt
   'mode.bypass': { plain: 'council: bypass', themed: 'council: Leeroy mode' },
@@ -141,6 +146,13 @@ const TABLE = {
   'cmd.title': { plain: 'Council' },
   'cmd.help': {
     plain: 'Usage: /council [on | off | shadow on|off | log [n] | rules | test "<command>" | model [<member> <model> [--save]] | reload | report | debate]',
+  },
+  'cmd.description': { plain: 'The council: status, bypass, shadow mode, log, rules, test a command, models, reload, report, debate pane' },
+  'cmd.argumentHint': {
+    plain: '[on|off|shadow on|off|log [n]|rules|test "<cmd>"|model [<member> <model> [--save]]|reload|report|debate]',
+  },
+  'cmd.needsPerson': {
+    plain: 'Nothing was changed: off, shadow on and model only run when a person types them, not from a plugin, another session or a scheduled prompt.',
   },
   'cmd.unknown': { plain: 'Unknown subcommand "{sub}".' },
   'cmd.mode': { plain: 'Mode: {mode}' },

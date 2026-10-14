@@ -32,9 +32,96 @@ const MAX_PROMPT_CHARS = 4_000
 
 const MAX_REVIEW_TIMES = 200
 
-/** A value of another shape version reads as a fresh session. */
-export const sessionOf = (value: CouncilSession | undefined): CouncilSession =>
-  value !== undefined && value.v === 4 ? value : INITIAL_SESSION
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+
+const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string')
+
+const isOptionalString = (value: unknown): boolean => value === undefined || typeof value === 'string'
+
+// Copied from types/index.d.ts, and checked against it in both directions at compile time: a member
+// missing here would make every stored record fail the shape check, and `sessionOf` would reset
+// the session (lockouts included) on each read.
+const DEBATE_KINDS = ['review', 'council'] as const satisfies readonly CouncilDebate['kind'][]
+const DEBATE_STATUSES = ['sitting', 'done'] as const satisfies readonly CouncilDebate['status'][]
+const DEBATE_VERDICTS = ['approve', 'revise', 'block', 'failed', 'aborted'] as const satisfies readonly NonNullable<CouncilDebate['verdict']>[]
+const VOICE_STATUSES = ['waiting', 'approve', 'revise', 'block', 'failed', 'skipped'] as const satisfies readonly CouncilDebateVoice['status'][]
+const CHECK_STATUSES = ['running', 'passed', 'failed', 'timed-out', 'error', 'stopped'] as const satisfies readonly CouncilDebateCheck['status'][]
+
+/** Resolves to the members of a union that a list leaves out; only `never` compiles (see `Complete`). */
+type Missing<Union, List extends readonly unknown[]> = Exclude<Union, List[number]>
+type Complete<_Check extends never> = true
+type _ListsAreComplete = [
+  Complete<Missing<CouncilDebate['kind'], typeof DEBATE_KINDS>>,
+  Complete<Missing<CouncilDebate['status'], typeof DEBATE_STATUSES>>,
+  Complete<Missing<NonNullable<CouncilDebate['verdict']>, typeof DEBATE_VERDICTS>>,
+  Complete<Missing<CouncilDebateVoice['status'], typeof VOICE_STATUSES>>,
+  Complete<Missing<CouncilDebateCheck['status'], typeof CHECK_STATUSES>>,
+]
+
+const isOneOf = (list: readonly unknown[], value: unknown): boolean => list.includes(value)
+
+const isVoice = (value: unknown): boolean =>
+  isRecord(value) && typeof value.member === 'string' && isOneOf(VOICE_STATUSES, value.status) && isOptionalString(value.profile) && isOptionalString(value.reason) && isOptionalString(value.alternative)
+
+const isCheck = (value: unknown): boolean => isRecord(value) && typeof value.name === 'string' && isOneOf(CHECK_STATUSES, value.status)
+
+const isDebate = (value: unknown): boolean =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  isOptionalString(value.agentId) &&
+  typeof value.tool === 'string' &&
+  typeof value.call === 'string' &&
+  isOneOf(DEBATE_KINDS, value.kind) &&
+  isOneOf(DEBATE_STATUSES, value.status) &&
+  (value.verdict === undefined || isOneOf(DEBATE_VERDICTS, value.verdict)) &&
+  Array.isArray(value.voices) &&
+  value.voices.every(isVoice) &&
+  Array.isArray(value.checks) &&
+  value.checks.every(isCheck)
+
+const isOp = (value: unknown): boolean => isRecord(value) && isNumber(value.rounds) && isNumber(value.wipes)
+
+const isCounts = (value: unknown): boolean =>
+  isRecord(value) && isNumber(value.approved) && isNumber(value.revised) && isNumber(value.blocked) && isNumber(value.failed)
+
+/**
+ * Whether a stored value has the session's shape: every field, and the
+ * elements of every container the pipeline indexes into. The version alone
+ * says nothing about a value another writer or an older build left behind.
+ */
+export function isSession(value: unknown): value is CouncilSession {
+  return (
+    isRecord(value) &&
+    value.v === 4 &&
+    typeof value.latestPrompt === 'string' &&
+    isNumber(value.promptEpoch) &&
+    isNumber(value.tokensSpent) &&
+    typeof value.bypass === 'boolean' &&
+    (value.shadow === null || typeof value.shadow === 'boolean') &&
+    isRecord(value.models) &&
+    Object.values(value.models).every(model => typeof model === 'string') &&
+    isStringArray(value.written) &&
+    isRecord(value.counts) &&
+    Object.values(value.counts).every(isCounts) &&
+    Array.isArray(value.reviewMs) &&
+    value.reviewMs.every(isNumber) &&
+    isRecord(value.ops) &&
+    Object.values(value.ops).every(isOp) &&
+    isRecord(value.verbWipes) &&
+    Object.values(value.verbWipes).every(isNumber) &&
+    isStringArray(value.cache) &&
+    isStringArray(value.declinedRules) &&
+    Array.isArray(value.debates) &&
+    value.debates.every(isDebate) &&
+    isNumber(value.epicUntil) &&
+    typeof value.debateOpened === 'boolean'
+  )
+}
+
+/** A value of another shape version, or of no valid shape, reads as a fresh session. */
+export const sessionOf = (value: unknown): CouncilSession => (isSession(value) ? value : INITIAL_SESSION)
 
 /**
  * A new prompt from the user: what resets per prompt resets here. Rounds,

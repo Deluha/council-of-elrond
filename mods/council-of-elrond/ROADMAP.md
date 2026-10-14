@@ -33,7 +33,7 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (426 after the final deliverables)
+cd mods/council-of-elrond && claude plugin test .     # all tests (498 after H2)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
@@ -318,7 +318,9 @@ are grouped below into three hardening briefs, H1 to H3.
 2. **H1, the secrets scan and protected paths** (below). It ships in 0.6.0, since 0.6.0 already
    changes what the scan refuses. *(Done: every H1 row, the C5 `**/` prefixes, `db/migrate/**`
    included, and the allowlist-oracle note; decisions in DESIGN §13.3.)*
-3. **H2, pipeline robustness** (below). Also in 0.6.0.
+3. **H2, pipeline robustness** (below). Also in 0.6.0. *(Done: every H2 row but the
+   `$.ui.status` one, which goes to C2 as the table says; decisions in DESIGN §13.4,
+   [Deluha/council-of-elrond#19](https://github.com/Deluha/council-of-elrond/pull/19).)*
 4. **C2**, which needs no cloud run and helps whatever C3 shows. Then **C3** once the maintainer
    can run the cloud probe, then **C4** if C3 calls for it, then **C5** and **C6**.
 5. **H3, review accuracy** (below).
@@ -346,7 +348,7 @@ are grouped below into three hardening briefs, H1 to H3.
 | §3.8 `LONG_TOKEN` defined twice | Keep one copy, in `redact.ts`. |
 | Protected paths anchored at the root | The `**/` prefixes above, with a test per entry in a nested repository. |
 
-**H2: pipeline robustness** (one implementer brief; DESIGN §4 rows and notes in the same brief).
+**H2: pipeline robustness** (one implementer brief; DESIGN §4 rows and notes in the same brief). *(Done, DESIGN §13.4.)*
 
 | Review item | Recommendation |
 | :- | :- |
@@ -405,7 +407,7 @@ it is committed; one that tightens it is decided, recorded and reported.
 - [ ] Cloud sessions: the setup-script install was tried and the mod loads and enforces (findings below, "Cloud sessions"); it is recorded in DESIGN.md §14 (C1); what remains is the `$.ui.ask` probe (C3). Repository settings do not load plugins in the cloud (docs/INSTALL.md, "Cloud sessions").
 - [ ] A `/config` switch for the allow-rule offer, only if feedback says the offer is noisy.
 - [ ] The terminal-check item above resolved: the `AskUserQuestion` re-entry path. (The user-refusal wordings were settled against the 2.1.296 binary, DESIGN §12.4.)
-- [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), decided 2026-10-13: performance notes and the concurrency model for DESIGN.md; the `register.ts` reducer refactor; the two-session audit race; the allowlist-oracle note in the README. Each is decided, as are the review items still open in the code (H1 to H3), under "Recommendations on the remaining open decisions" above.
+- [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), decided 2026-10-13: only the `register.ts` reducer refactor, which comes after 1.0. The performance notes, the concurrency model and the two-session audit race were done in H2 (DESIGN §13.4), the allowlist-oracle note in H1 (DESIGN §13.3). H3 is the review item still open in the code, under "Recommendations on the remaining open decisions" above.
 - [ ] The cloud-session work items C2 to C6 below (C1 is done), in the order given under "Recommendations on the remaining open decisions".
 
 ### Cloud sessions: findings and work items

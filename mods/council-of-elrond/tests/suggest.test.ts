@@ -166,7 +166,7 @@ describe('the offer after "allow once"', () => {
     expect(rules.rules[0]?.reason).toBe('You allowed this exact call after the council stopped it, and added this rule.')
     // The dialog showed the rule exactly as written.
     expect(w.asked[1]?.question).toContain(JSON.stringify(rules.rules[0], null, 2))
-    expect(auditLines(w)[0]).toMatchObject({ decision: 'allow-once', outcome: 'ran', ruleAdded: 'allow-apt-update' })
+    expect((await auditLines(w))[0]).toMatchObject({ decision: 'allow-once', outcome: 'ran', ruleAdded: 'allow-apt-update' })
     expect(w.logs.join('\n')).toContain('added the allow rule allow-apt-update')
 
     // Reloaded: the same call now passes without a question; a different one is still asked.
@@ -183,7 +183,7 @@ describe('the offer after "allow once"', () => {
     await $.tool.call({ tool: 'Bash', command: 'sudo apt update' })
     expect(w.asked.map(asked => asked.options[0])).toEqual([ALLOW_ONCE, 'Add the rule', ALLOW_ONCE])
     expect(w.files.has(RULES)).toBe(false)
-    expect(auditLines(w)[0]?.ruleAdded).toBeUndefined()
+    expect((await auditLines(w))[0]?.ruleAdded).toBeUndefined()
   })
 
   test('dismissing the offer writes nothing and the call still ran', async ($, on) => {
@@ -233,6 +233,6 @@ describe('the offer after "allow once"', () => {
     expect(await $.tool.call({ tool: 'Bash', command: 'sudo apt update' })).toEqual({ result: 'ran' })
     expect(w.files.get(RULES)).toBe('{ "schemaVersion": 1, ')
     expect(w.logs.join('\n')).toContain('the allow rule was not written (the rules file is not valid JSON)')
-    expect(auditLines(w)[0]?.ruleAdded).toBeUndefined()
+    expect((await auditLines(w))[0]?.ruleAdded).toBeUndefined()
   })
 })

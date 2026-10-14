@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, ProcessRunResult, ProcessSpawnResult, Register, RenderElement, ToolCallResult } from 'claude-code'
 
 import type { CouncilPanel } from '../types'
-import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, ROTATED_FILES } from './audit.js'
+import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, isRotation, ROTATED_FILES } from './audit.js'
 import type { AuditRecord, Decision } from './audit.js'
 import { OVERRIDES_PATH } from './config/defaults.js'
 import { loadConfig, MODEL_ID } from './config/schema.js'
@@ -11,7 +11,7 @@ import { MODEL_SLOTS } from './config/types.js'
 import type { GimliCommand, MemberName, ModelSlot } from './config/types.js'
 import { withAllowlistEntry, withRule } from './config/write.js'
 import type { FileEdit } from './config/write.js'
-import { isSlot, logOutput, modelsOutput, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
+import { isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
 import { combine, hasRealBlock } from './elrond/combine.js'
 import type { Voice } from './elrond/combine.js'
 import { bigOperationOf, councilSeats, needsCurrentBranch, rangeOf } from './elrond/council.js'
@@ -72,6 +72,7 @@ import {
   count,
   declineRule,
   INITIAL_SESSION,
+  isSession,
   isShadow,
   markDebateOpened,
   noteCheck,
@@ -109,7 +110,11 @@ const panel = atom({ plugin: 'council-of-elrond', key: 'panel' } as const, { tit
 /** Margin kept on the hook's own 10 s budget before any pass-through. */
 const BUDGET_GUARD_MS = 1_000
 
-/** Prompt origins that are the user's own and reset the per-prompt state. */
+/**
+ * Prompt origins that are a person's own: they reset the per-prompt state, and
+ * only they may run the `/council` subcommands that loosen the gate. `sdk` counts
+ * until the web client's kind is known (ROADMAP C3).
+ */
 const HUMAN_ORIGINS: ReadonlySet<string> = new Set(['composer', 'bridge', 'sdk'])
 
 const MAX_SCRIPTS = 3
@@ -627,56 +632,66 @@ async function convene(
 ): Promise<Held> {
   const started = await $.clock.now()
   const stop = new AbortController()
-  let isCheckFailed = false
-  // The debate record is only watching: a note that fails or lags changes nothing here.
-  const noted: Promise<void>[] = []
-  const note = (event: Progress): void => {
-    noted.push(Promise.resolve().then(() => progress(event)).catch(() => undefined))
-  }
-  const checking = Promise.all(
-    checks.map(command =>
-      runCheck($, command, root, stop.signal).then(run => {
-        if (isGimliBlock(run)) {
-          isCheckFailed = true
-          stop.abort()
-        }
-        note({ kind: 'check', run })
-        return run
-      }),
-    ),
-  )
-  const tokens: number[] = sittings.map(() => 0)
-  const baseOf = (sitting: Sitting) => ({ who: sitting.who, member: sitting.seat.member, ...(sitting.seat.member === 'aragorn' && { profile: sitting.seat.profile }) })
-  const ask = async (sitting: Sitting, index: number): Promise<Voice> => {
-    const base = baseOf(sitting)
-    if (sitting.brief === undefined) return { kind: 'skipped', ...base, why: sitting.skip ?? '' }
-    const remaining = Math.floor(deadlineMs - ((await $.clock.now()) - started))
-    if (remaining < 1) return { kind: 'failed', ...base, problem: text('council.deadline') }
-    const result = await review($, sitting.brief, model, remaining, signal)
-    tokens[index] = result.tokens
-    return result.ok ? { kind: 'verdict', ...base, verdict: result.verdict } : { kind: 'failed', ...base, problem: result.problem }
-  }
-  const resolved = (index: number, voice: Voice): Voice => {
-    note({ kind: 'voice', index, voice })
-    return voice
-  }
-  let voices: Voice[]
-  if (isSequential) {
-    voices = []
-    for (const [index, sitting] of sittings.entries()) {
-      const isBlocked = isCheckFailed || voices.some(voice => voice.kind === 'failed' || (voice.kind === 'verdict' && voice.verdict.verdict === 'block'))
-      voices.push(
-        resolved(index, isBlocked ? { kind: 'skipped', ...baseOf(sitting), why: text('council.stopped') } : await ask(sitting, index)),
-      )
+  // Esc ends the checks through the engine killing their children; chaining the signal makes that ours too.
+  const onAbort = (): void => stop.abort()
+  signal.addEventListener('abort', onAbort)
+  if (signal.aborted) onAbort()
+  try {
+    let isCheckFailed = false
+    // The debate record is only watching: a note that fails or lags changes nothing here.
+    const noted: Promise<void>[] = []
+    const note = (event: Progress): void => {
+      noted.push(Promise.resolve().then(() => progress(event)).catch(() => undefined))
     }
-  } else {
-    voices = await Promise.all(sittings.map(async (sitting, index) => resolved(index, await ask(sitting, index))))
+    const checking = Promise.all(
+      checks.map(command =>
+        runCheck($, command, root, stop.signal).then(run => {
+          if (isGimliBlock(run)) {
+            isCheckFailed = true
+            stop.abort()
+          }
+          note({ kind: 'check', run })
+          return run
+        }),
+      ),
+    )
+    const tokens: number[] = sittings.map(() => 0)
+    const baseOf = (sitting: Sitting) => ({ who: sitting.who, member: sitting.seat.member, ...(sitting.seat.member === 'aragorn' && { profile: sitting.seat.profile }) })
+    const ask = async (sitting: Sitting, index: number): Promise<Voice> => {
+      const base = baseOf(sitting)
+      if (sitting.brief === undefined) return { kind: 'skipped', ...base, why: sitting.skip ?? '' }
+      const remaining = Math.floor(deadlineMs - ((await $.clock.now()) - started))
+      if (remaining < 1) return { kind: 'failed', ...base, problem: text('council.deadline') }
+      const result = await review($, sitting.brief, model, remaining, signal)
+      tokens[index] = result.tokens
+      return result.ok ? { kind: 'verdict', ...base, verdict: result.verdict } : { kind: 'failed', ...base, problem: result.problem }
+    }
+    const resolved = (index: number, voice: Voice): Voice => {
+      note({ kind: 'voice', index, voice })
+      return voice
+    }
+    let voices: Voice[]
+    if (isSequential) {
+      voices = []
+      for (const [index, sitting] of sittings.entries()) {
+        const isBlocked = isCheckFailed || voices.some(voice => voice.kind === 'failed' || (voice.kind === 'verdict' && voice.verdict.verdict === 'block'))
+        voices.push(
+          resolved(index, isBlocked ? { kind: 'skipped', ...baseOf(sitting), why: text('council.stopped') } : await ask(sitting, index)),
+        )
+      }
+    } else {
+      voices = await Promise.all(sittings.map(async (sitting, index) => resolved(index, await ask(sitting, index))))
+    }
+    // A check can only add a block: once a member has blocked, one still running cannot matter.
+    if (hasRealBlock(voices)) stop.abort()
+    const runs = await checking
+    await Promise.all(noted)
+    return { voices, tokens, runs }
+  } finally {
+    // A throw above would otherwise leave a check running to its own timeout (up to 600 s).
+    stop.abort()
+    signal.removeEventListener('abort', onAbort)
   }
-  // A check can only add a block: once a member has blocked, one still running cannot matter.
-  if (hasRealBlock(voices)) stop.abort()
-  const runs = await checking
-  await Promise.all(noted)
-  return { voices, tokens, runs }
 }
 
 /** Puts the call to the user; where nobody can be asked, says so. */
@@ -764,7 +779,7 @@ async function appendAudit($: EngineInterface, record: AuditRecord, root: string
   const current = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
   const maxBytes = settings.auditMaxKb * 1024
   const older: (string | undefined)[] = []
-  if (current !== '' && current.length + line.length > maxBytes) {
+  if (isRotation(current, line, maxBytes)) {
     for (let n = 1; n < ROTATED_FILES - 1; n++) {
       const rotated = `${path}.${n}`
       older.push((await $.fs.exists(rotated)) ? await $.fs.read(rotated) : undefined)
@@ -773,13 +788,17 @@ async function appendAudit($: EngineInterface, record: AuditRecord, root: string
   for (const write of appendPlan(path, current, line, maxBytes, older)) await $.fs.write(write.path, write.text)
 }
 
-/** Appends one audit line; writes are serialized, and a failed write never changes a decision. */
-async function audit($: EngineInterface, record: AuditRecord, root: string): Promise<void> {
-  const queued = auditQueue.then(() => appendAudit($, record, root))
-  auditQueue = queued.catch((error: unknown) => {
-    $.ui.log(`Council: audit write failed: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
-  })
-  await auditQueue
+/**
+ * Queues one audit line. Writes run in order, but nobody waits for them: a
+ * failed write is logged and a hanging one holds back only the lines queued
+ * after it, never a decision or the call that follows.
+ */
+function audit($: EngineInterface, record: AuditRecord, root: string): void {
+  auditQueue = auditQueue
+    .then(() => appendAudit($, record, root))
+    .catch((error: unknown) => {
+      $.ui.log(text('notice.auditFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
+    })
 }
 
 /** Notes a file Claude wrote, once the write has run. */
@@ -1060,8 +1079,8 @@ export const register: Register = (on, options) => {
     await $.command
       .register({
         name: COMMAND,
-        description: 'The council: status, bypass, shadow mode, log, rules, test a command, models, reload, report, debate pane',
-        argumentHint: '[on|off|shadow on|off|log [n]|rules|test "<cmd>"|model [<member> <model> [--save]]|reload|report|debate]',
+        description: text('cmd.description'),
+        argumentHint: text('cmd.argumentHint'),
       })
       .catch((error: unknown) => {
         $.ui.log(text('notice.commandFailed', { problem: error instanceof Error ? error.message : String(error) }))
@@ -1086,7 +1105,8 @@ export const register: Register = (on, options) => {
   // Output goes to the user only (decision 1): no text for Claude to read.
   on('command.run', { command: COMMAND }, async ($, e) => {
     const command = parseCouncil(e.args)
-    if (command.kind === 'debate') await showDebate($)
+    if (needsPerson(command) && !HUMAN_ORIGINS.has(e.origin.kind)) await show($, { title: text('cmd.title'), lines: [text('cmd.needsPerson')] })
+    else if (command.kind === 'debate') await showDebate($)
     else await show($, await councilOutput($, command))
     return {}
   }).catch(($, e) => {
@@ -1126,7 +1146,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', async ($, e, next) => {
-    const started = Date.now()
+    const started = await $.clock.now()
     const call = callOf(e as unknown as Readonly<Record<string, unknown>>)
 
     /** The one way a call passes: never with the hook's own budget spent. */
@@ -1155,12 +1175,14 @@ export const register: Register = (on, options) => {
         const first = scan.high[0]
         if (first !== undefined) {
           const deny = refusalText({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') })
-          await audit(
+          const fingerprint = await fingerprintOf(call.tool, call.input)
+          const now = await $.clock.now()
+          audit(
             $,
             {
-              ts: new Date().toISOString(),
+              ts: new Date(now).toISOString(),
               tool: call.tool,
-              fingerprint: await fingerprintOf(call.tool, call.input),
+              fingerprint,
               opKey: null,
               tier: 'allow',
               ruleId: classification.decided?.ruleId ?? null,
@@ -1173,7 +1195,7 @@ export const register: Register = (on, options) => {
               bypass: false,
               decision: null,
               outcome: 'refused',
-              latencyMs: Date.now() - started,
+              latencyMs: now - started,
               tokens: 0,
               ...(e.agentId !== undefined && { agentId: e.agentId }),
             },
@@ -1188,7 +1210,10 @@ export const register: Register = (on, options) => {
     }
 
     // A gated call: everything from here is audited.
-    const state = sessionOf(await read($, session))
+    const stored = await read($, session)
+    const state = sessionOf(stored)
+    // Read as a fresh session, so the call is decided normally; said once, here, since updaters stay pure.
+    if (stored !== undefined && !isSession(stored)) $.ui.log(text('notice.sessionMalformed'), { to: 'debug' })
     // The prompt this call belongs to. A review runs while `next(e)` is in
     // flight; if the user sends a new prompt meanwhile, resetForPrompt bumps
     // the epoch, and a round, wipe or cached approve written afterwards must
@@ -1199,14 +1224,20 @@ export const register: Register = (on, options) => {
     const operation = operationOf(call, classification, where)
     const decided = classification.decided
     const shadow = isShadow(state, settings.shadowMode)
-    const shownCall = `${call.tool}: ${callText(call, ctx.patterns)}`
+    // Built on first use: a block, lockout or cached call never shows it, and a write can be megabytes.
+    let callTextMemo: string | undefined
+    const callTextOf = (): string => {
+      if (callTextMemo === undefined) callTextMemo = callText(call, ctx.patterns)
+      return callTextMemo
+    }
+    const shownCall = (): string => `${call.tool}: ${callTextOf()}`
     // The debate record: keyed by the call's id, tagged with the agent that made it. It only watches.
     const debateId = e.tool_use_id
     const debateOf = (kind: CouncilDebate['kind'], voices: CouncilDebate['voices'], checks: CouncilDebate['checks'] = []): CouncilDebate => ({
       id: debateId,
       ...(e.agentId !== undefined && { agentId: e.agentId }),
       tool: call.tool,
-      call: tidyCall(callText(call, ctx.patterns)),
+      call: tidyCall(callTextOf()),
       kind,
       status: 'sitting',
       voices,
@@ -1237,8 +1268,9 @@ export const register: Register = (on, options) => {
     /** Audits the call, then counts it: a failed attempt, or a success that clears its operation. */
     const finish = async (result: ToolCallResult, isWipe = false): Promise<ToolCallResult> => {
       const outcome = outcomeOf(result)
+      const now = await $.clock.now()
       const record: AuditRecord = {
-        ts: new Date().toISOString(),
+        ts: new Date(now).toISOString(),
         tool: call.tool,
         fingerprint,
         opKey: operation.key,
@@ -1253,7 +1285,7 @@ export const register: Register = (on, options) => {
         bypass: state.bypass,
         decision,
         outcome,
-        latencyMs: Date.now() - started,
+        latencyMs: now - started,
         ...(reviewMs !== undefined && { reviewMs }),
         ...(ruleAdded !== undefined && { ruleAdded }),
         tokens,
@@ -1261,7 +1293,7 @@ export const register: Register = (on, options) => {
         ...(councilRecord !== undefined && { council: councilRecord }),
         ...(e.agentId !== undefined && { agentId: e.agentId }),
       }
-      await audit($, record, ctx.root)
+      audit($, record, ctx.root)
       const counts = result.deny !== undefined ? isWipe : isWipeOutcome(outcome, wipePolicy())
       if (counts || outcome === 'ran') {
         await update($, session, value => {
@@ -1312,7 +1344,7 @@ export const register: Register = (on, options) => {
     ): Promise<'allowed' | ToolCallResult> => {
       const question = questionText(
         {
-          call: shownCall,
+          call: shownCall(),
           ruleReason: decided?.reason ?? '',
           why,
           opinions,
@@ -1350,6 +1382,9 @@ export const register: Register = (on, options) => {
             return 'allowed'
           }
           $.ui.log(text('notice.allowlistFailed', { problem: written.problem }))
+          decision = 'keep-blocked'
+          // The write failed, not Claude's attempt: it stays blocked but is not counted against it.
+          return refuse({ who: 'who.user', verdict: 'keep blocked', reason: text('reason.allowlistNotWritten'), alternative: text('alternative.removeSecret') }, false)
         }
         decision = 'keep-blocked'
         return refuse({ who: 'who.user', verdict: 'keep blocked', reason: text('reason.userKeptBlocked'), alternative: text('alternative.removeSecret') }, true)
@@ -1389,7 +1424,8 @@ export const register: Register = (on, options) => {
     }
 
     // 5. Lockout: too many failed attempts on this operation since the user last wrote.
-    const lockout = lockoutOf(state, operation)
+    // Decided on a fresh read: a parallel call's failed attempts may have landed since the first.
+    const lockout = lockoutOf(sessionOf(await read($, session)), operation)
     if (lockout !== undefined) {
       member = null
       verdictText = 'locked out'
@@ -1451,7 +1487,8 @@ export const register: Register = (on, options) => {
       profile = null
       const seats = councilSeats(call, classification, enabledMembers(), { ranges: settings.galadrielEnabled })
       if (seats.length === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', [])
-      if (state.tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
+      // A fresh read, so reviews running in parallel are counted when this one decides.
+      if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
       const choice = modelChoice('council', ctx, state.models)
       model = choice.model
       const range = rangeOf(classification)
@@ -1501,7 +1538,7 @@ export const register: Register = (on, options) => {
         const detail = { reason: redacted(outcome.reason), alternative: redacted(outcome.alternative) }
         await update($, session, value => noteVoice(sessionOf(value), debateId, event.index, outcome.status, detail))
       }
-      const reviewStarted = Date.now()
+      const reviewStarted = await $.clock.now()
       const held = await convene($, sittings, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), settings.councilSequential, checks, ctx.root, next.signal, progress)
       // Esc aborts the model calls and kills the checks. That is not a verdict
       // and not the user keeping the call blocked: refuse plainly, no wipe, no
@@ -1514,7 +1551,7 @@ export const register: Register = (on, options) => {
       }
       const runs = held.runs.map(run => ({ ...run, tail: redact(run.tail, ctx.patterns) }))
       const combined = combine(held.voices, runs)
-      const councilMs = Date.now() - reviewStarted
+      const councilMs = (await $.clock.now()) - reviewStarted
       reviewMs = councilMs
       tokens = held.tokens.reduce((sum, n) => sum + n, 0)
       isShadowed = shadow
@@ -1571,7 +1608,7 @@ export const register: Register = (on, options) => {
       if (big !== undefined) return holdCouncil(big)
     }
     if (seated === undefined || seated.kind === 'none') return shadow ? passInShadow() : askUser('escalate.memberOff', [])
-    if (state.tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
+    if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
 
     // 10. Review, and act on the verdict.
     const brief = await briefOf($, seated, call, classification, cwd, realPath, state, preview, ctx)
@@ -1583,7 +1620,7 @@ export const register: Register = (on, options) => {
     const debate = debateOf('review', [{ member: brief.member, ...(brief.profile !== undefined && { profile: brief.profile }), status: 'waiting' }])
     await update($, session, value => openDebate(sessionOf(value), debate)).catch(() => undefined)
     await openDebatePane($).catch(() => undefined)
-    const reviewStarted = Date.now()
+    const reviewStarted = await $.clock.now()
     const verdict = await review($, brief, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), next.signal)
     if (next.signal.aborted) {
       verdictText = 'aborted'
@@ -1591,7 +1628,7 @@ export const register: Register = (on, options) => {
       await update($, session, value => closeDebate(sessionOf(value), debateId, 'aborted')).catch(() => undefined)
       return finish({ deny: refusalText({ who, verdict: 'interrupted', reason: text('reason.aborted'), alternative: '' }) }, false)
     }
-    const memberMs = Date.now() - reviewStarted
+    const memberMs = (await $.clock.now()) - reviewStarted
     reviewMs = memberMs
     tokens = verdict.tokens
     isShadowed = shadow
