@@ -5,6 +5,7 @@ import type { MockClock } from 'claude-code/testing'
 import { SHIPPED } from '../hooks/config/defaults.js'
 import { compileConfig } from '../hooks/config/schema.js'
 import type { CompiledConfig } from '../hooks/config/schema.js'
+import { PROBE_TAG } from '../hooks/probe.js'
 import type { ClassifyContext } from '../hooks/rules/classify.js'
 
 /**
@@ -100,9 +101,11 @@ export type World = {
   /** Symbolic links: path -> where it really lands. */
   links: Map<string, string>
   surfaces: string[]
-  /** What the user answers: a label, free text, `dismiss` or `chat` (the engine's "Chat about this": the call rejects like a dismissal). Queued `answers` go first. */
+  /** What the user answers: a label, free text, `dismiss`, `hang` (no answer until Esc aborts the ask, then a denial) or `chat` (the engine's "Chat about this": the call rejects like a dismissal). Queued `answers` go first. */
   answer: string
   answers: string[]
+  /** Whether the ask is answered when no surface is listed (the C3 probe's question); else the engine has no such tool, as `-p` on 2.1.299 (DESIGN §12.5). */
+  askWithoutSurface: boolean
   /** Model replies, in order; the last one repeats. */
   replies: ModelReply[]
   /** A reply chosen by the request itself (its prompt), asked before `replies`; undefined falls through. */
@@ -112,6 +115,8 @@ export type World = {
   asked: Asked[]
   modelRequests: Record<string, unknown>[]
   logs: string[]
+  /** The C3 probe's own debug lines (kept out of `logs`). */
+  probeLogs: string[]
   toasts: string[]
   toolResult: Record<string, unknown>
   /** Every process the mod started, as argv. */
@@ -160,7 +165,7 @@ const strip = (e: Record<string, unknown>): Record<string, unknown> => {
 
 export function world(
   on: On,
-  setup: Partial<Pick<World, 'answer' | 'answers' | 'replies' | 'surfaces' | 'cwd'>> & {
+  setup: Partial<Pick<World, 'answer' | 'answers' | 'replies' | 'surfaces' | 'cwd' | 'askWithoutSurface'>> & {
     cwdFails?: boolean
     /** Makes `$.session.append` resolve `{ deny }`. */
     appendFails?: boolean
@@ -181,12 +186,14 @@ export function world(
     surfaces: setup.surfaces ?? ['terminal'],
     answer: setup.answer ?? KEEP_BLOCKED,
     answers: setup.answers ?? [],
+    askWithoutSurface: setup.askWithoutSurface ?? false,
     replies: setup.replies ?? [APPROVE],
     replyFor: undefined,
     ran: [],
     asked: [],
     modelRequests: [],
     logs: [],
+    probeLogs: [],
     toasts: [],
     toolResult: { result: 'ran' },
     processes: [],
@@ -341,7 +348,8 @@ export function world(
   on('session.attach', ($, e) => ({ clientId: e.clientId }))
   on('session.detach', ($, e) => ({ clientId: e.clientId }))
   on('ui.log', ($, e) => {
-    w.logs.push(e.text)
+    const lines = e.text.startsWith(`${PROBE_TAG} `) ? w.probeLogs : w.logs
+    lines.push(e.text)
     return { value: undefined }
   })
   on('ui.toast', ($, e) => {
@@ -365,13 +373,20 @@ export function world(
     if (reply === undefined || reply === 'refuse-request') return { deny: 'model is blocked by policy' }
     return { value: reply as never }
   })
-  on('tool.call', ($, e) => {
+  on('tool.call', ($, e, next) => {
     if (e.tool === 'AskUserQuestion') {
+      // With no surface nobody sees a question, so it is not recorded in `asked` (a question a person saw).
+      if (w.surfaces.length === 0 && !w.askWithoutSurface) return { deny: 'no tool named "AskUserQuestion" in this session' }
       const question = (e as unknown as { questions: { question: string; header?: string; options: { label: string }[] }[] })
         .questions[0]
       if (question === undefined) return { deny: 'no question' }
       w.asked.push({ question: question.question, options: question.options.map(o => o.label), header: question.header })
       const answer = w.answers.shift() ?? w.answer
+      if (answer === 'hang') {
+        return new Promise<never>(resolve => {
+          next.signal.addEventListener('abort', () => resolve({ deny: 'aborted' } as never), { once: true })
+        })
+      }
       if (answer === 'dismiss') return { deny: 'dismissed' }
       if (answer === 'chat') return { deny: "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\nThe user wants to clarify these questions." }
       return { result: { answers: { [question.question]: answer } } as never }

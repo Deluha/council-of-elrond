@@ -59,6 +59,7 @@ import type { CallDiff, Current } from './members/legolas.js'
 import type { GollumFinding } from './members/gollum.js'
 import { newNonce, parseVerdict, truncate } from './members/shared.js'
 import type { Verdict } from './members/shared.js'
+import { capped, PROBE_FILE, PROBE_TAG, probeLine } from './probe.js'
 import { redact } from './redact.js'
 import type { SecretPattern } from './redact.js'
 import { classify, FILE_PATH_FIELDS, SHELL_TOOLS } from './rules/classify.js'
@@ -219,6 +220,9 @@ type Review =
 let settings: Settings = settingsOf({})
 let context: Promise<Context> | undefined
 let auditQueue: Promise<void> = Promise.resolve()
+// The C3 probe's own line counter and queue (hooks/probe.ts); a probe branch only, never merged.
+let probeSeq = 0
+let probeQueue: Promise<void> = Promise.resolve()
 let isGitignoreChecked = false
 const warned = new Set<string>()
 
@@ -695,18 +699,71 @@ async function convene(
   }
 }
 
-/** Puts the call to the user; where nobody can be asked, says so. */
-async function escalate($: EngineInterface, question: string, withAllowlist: boolean): Promise<Answer | Unanswered> {
+/**
+ * C3 probe: queues one line for the probe log, in order and never awaited. A failed
+ * write is logged to debug and the queue goes on. It never touches state or throws.
+ */
+function probe($: EngineInterface, event: string, fields: Readonly<Record<string, unknown>>, since?: number): void {
+  probeQueue = probeQueue
+    .then(async () => {
+      const at = await $.clock.now()
+      const patterns = (await contextOf($).catch(() => undefined))?.patterns
+      const line = probeLine(++probeSeq, event, at, fields, since, patterns)
+      $.ui.log(`${PROBE_TAG} ${line}`, { to: 'debug' })
+      const path = `${await $.session.root()}/${PROBE_FILE}`
+      const current = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+      await $.fs.write(path, `${current}${line}\n`)
+    })
+    .catch((error: unknown) => {
+      $.ui.log(`${PROBE_TAG} write failed: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+    })
+}
+
+/** C3 probe: the roster as the engine reports it now, with the event's own fields. */
+async function probeRoster($: EngineInterface, event: string, fields: Readonly<Record<string, unknown>>): Promise<void> {
+  const surfaces = await $.session.surfaces().catch(() => 'rejected')
+  probe($, event, { surfaces, ...fields })
+}
+
+/**
+ * Puts the call to the user. C3 probe: where no surface is listed it still tries the
+ * ask, and logs what happens; main skips it and says nobody can be asked.
+ */
+async function escalate(
+  $: EngineInterface,
+  question: string,
+  withAllowlist: boolean,
+  probing: { remainingMs: () => number; signal: AbortSignal },
+): Promise<Answer | Unanswered> {
   const surfaces = await $.session.surfaces().catch(() => [])
-  if (surfaces.length === 0) return 'unavailable'
+  const isUnseen = surfaces.length === 0
+  const since = isUnseen ? await $.clock.now() : undefined
+  const onAbort = (): void => probe($, 'ask.aborted', {}, since)
   try {
     // One mode for the labels offered and the labels compared: they must match exactly.
     const mode = currentMode()
-    const answer = await $.ui.ask(question, { options: optionsOf(mode, withAllowlist), header: text('ask.rollHeader', {}, mode) })
-    return interpretAnswer(answer, mode, withAllowlist)
-  } catch {
-    // The engine's "Chat about this" rejects exactly like a dismissal and cannot be told apart (DESIGN §12.4).
-    return 'dismissed'
+    const options = optionsOf(mode, withAllowlist)
+    const header = text('ask.rollHeader', {}, mode)
+    if (isUnseen) {
+      probe($, 'ask.start', { surfaces, remainingMs: probing.remainingMs(), questionLength: question.length, options, header })
+      probing.signal.addEventListener('abort', onAbort, { once: true })
+    }
+    // No timeout on purpose: whether the ask can hang here is what the probe measures. A `$` call stops
+    // the hook's own-time clock (HookBudget), so a hung ask holds the call rather than tripping the 10 s
+    // budget, and `remainingMs` before and after shows it live.
+    const answer = await $.ui.ask(question, { options, header })
+    const interpreted = interpretAnswer(answer, mode, withAllowlist)
+    if (isUnseen) probe($, 'ask.answered', { remainingMs: probing.remainingMs(), answer: capped(answer, 200), interpreted }, since)
+    return interpreted
+  } catch (error) {
+    if (!isUnseen) {
+      // The engine's "Chat about this" rejects exactly like a dismissal and cannot be told apart (DESIGN §12.4).
+      return 'dismissed'
+    }
+    probe($, 'ask.rejected', { remainingMs: probing.remainingMs(), message: capped(error instanceof Error ? error.message : String(error), 2000) }, since)
+    return 'unavailable'
+  } finally {
+    probing.signal.removeEventListener('abort', onAbort)
   }
 }
 
@@ -1137,12 +1194,14 @@ export const register: Register = (on, options) => {
     }
     await syncIndicator($).catch(() => undefined)
     await announce($)
+    await probeRoster($, 'session.start', { surface: e.surface, isInteractive: e.isInteractive }).catch(() => undefined)
     return next(e)
   })
 
   // The status line follows the roster: a surface that leaves takes its label with it.
   on('session.detach', async ($, e, next) => {
     const result = await next(e)
+    await probeRoster($, 'session.detach', { surface: e.surface, reason: e.reason }).catch(() => undefined)
     // At the end of the session this runs inside a short bound: skip it.
     if (e.reason !== 'end') await syncIndicator($).catch(() => undefined)
     return result
@@ -1150,11 +1209,18 @@ export const register: Register = (on, options) => {
 
   on('session.attach', async ($, e, next) => {
     const result = await next(e)
+    await probeRoster($, 'session.attach', { surface: e.surface }).catch(() => undefined)
     await syncIndicator($).catch(() => undefined)
     return result
   })
 
   on('prompt.submit', async ($, e, next) => {
+    probe($, 'prompt.submit', {
+      origin: e.origin,
+      command: e.command === undefined ? null : { name: e.command.name, args: capped(e.command.args, 200) },
+      isMeta: e.isMeta === true,
+      textLength: e.text.length,
+    })
     // `/council` never asks the model, so it is not a new task; a skill or prompt command is.
     if (HUMAN_ORIGINS.has(e.origin.kind) && !isCouncilCommand(e.command, COMMAND)) {
       const patterns = (await contextOf($).catch(() => undefined))?.patterns
@@ -1169,6 +1235,7 @@ export const register: Register = (on, options) => {
   // Output goes to the user (decision 1). The one exception: where nothing draws, a person's
   // status, report, rules and test also reach Claude as `context`, to relay (ROADMAP C2).
   on('command.run', { command: COMMAND }, async ($, e) => {
+    probe($, 'command.run', { origin: e.origin, args: capped(e.args, 200), presentation: e.presentation })
     const command = parseCouncil(e.args)
     if (needsPerson(command) && !HUMAN_ORIGINS.has(e.origin.kind)) {
       await show($, { title: text('cmd.title'), lines: [text('cmd.needsPerson')] })
@@ -1429,7 +1496,7 @@ export const register: Register = (on, options) => {
         currentMode(),
       )
       // One entry per confirm: the allowlist is offered for a single finding only.
-      const answer = await escalate($, question, secrets.length === 1)
+      const answer = await escalate($, question, secrets.length === 1, { remainingMs: () => next.budget.remainingMs, signal: next.signal })
       if (answer === 'unavailable') {
         decision = answer
         // Only reached where escalate found no surface, so the model is the only way to tell the person (ROADMAP C2).
@@ -1751,10 +1818,19 @@ export const register: Register = (on, options) => {
       return passInShadow()
     }
     return refuse({ who, verdict: verdict.verdict.verdict, reason: verdict.verdict.reason, alternative: verdict.verdict.safer_alternative }, true)
-  }).catch(($, e, next) =>
+  }).catch(($, e, next) => {
+    try {
+      probe($, 'tool.call.catch', {
+        kind: next.error?.kind,
+        called: next.called,
+        message: next.error?.message === undefined ? undefined : capped(next.error.message, 500),
+      })
+    } catch {
+      // The probe never changes what the catch decides.
+    }
     // A failure after the call ran replays its result; one before it refuses.
-    next.called
+    return next.called
       ? next(e)
-      : { deny: refusalText({ who: 'who.council', verdict: 'error', reason: text('reason.internal'), alternative: text('alternative.ask') }) },
-  )
+      : { deny: refusalText({ who: 'who.council', verdict: 'error', reason: text('reason.internal'), alternative: text('alternative.ask') }) }
+  })
 }
