@@ -8,7 +8,7 @@ taken, and [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for how it works and
 
 ```sh
 cd council-of-elrond
-claude plugin test mods/council-of-elrond       # 498 tests, about 40 s
+claude plugin test mods/council-of-elrond       # 524 tests, about 40 s
 tsc -p mods                                    # strict, against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
 ```
@@ -39,6 +39,7 @@ mods/
     hooks/members/               one file per member, plus brief.ts and shared.ts
     hooks/elrond/                routing, council seats, verdict combination, operations,
                                  escalation, refusal text, model choice, commands, suggest, report,
+                                 relay (what reaches Claude where nothing draws),
                                  view (the rows the debate pane and the band draw)
     types/index.d.ts             the $.state contract (CouncilSession, CouncilDebate, CouncilPanel)
     tests/                       *.test.ts, run by `claude plugin test`; fixtures.ts is the fake world
@@ -57,7 +58,8 @@ function in that file (passing `$` to an imported function fails validation). Ke
   when the hook's remaining own-time budget is under one second. The `.catch` replays the real
   result if `next.called`, else refuses.
 - `prompt.submit` runs `resetForPrompt`, the single per-prompt reset.
-- `session.start` loads the config and registers `/council`; `command.run` answers it.
+- `session.start` loads the config, registers `/council` and, where nothing draws, appends the start
+  notice; `command.run` answers it; `session.attach` and `session.detach` keep the status line in step.
 - `ui.render` draws the `/council` pane, the debate pane, the council check band and the mode
   label. The debate pane and the band only read state; their rows come from `elrond/view.ts`.
   Drawing is done with the global `h(Element, props, ...children)` and elements from `$.ui.resolve(e)`, so the file stays `.ts`.
@@ -141,7 +143,8 @@ claude -p --plugin-dir /path/to/council-of-elrond/mods/council-of-elrond \
 - A refusal reaches Claude as the tool's error text. A question can't be answered in `-p`, so
   escalations refuse with "nobody can be asked"; that is the path you are testing.
 - `/council …` output arrives as `system/ui_log` lines in stream-json; in plain `-p` it prints
-  nothing.
+  nothing. In `-p` nothing draws, so a start notice is appended for Claude and a person's
+  `/council` status, report, rules and test also return a `context` for it (DESIGN §13.5).
 - Loading writes `.claude-plugin/types/` and `tsconfig.json` into the mod folder (gitignored),
   and the probe's `.claude/council-of-elrond/audit/` into the throwaway repo.
 - Interactive UI (the dialog, the pane, the band, the mode label) can only be checked by the
@@ -185,7 +188,8 @@ that the proposed command is never among `w.processes`.
 The parser is pure (`hooks/elrond/commands.ts`): add the subcommand there with a test in
 `tests/commands.test.ts`, then the output builder (pure, returning lines), then one arm in
 register.ts that gathers inputs and calls `show()`. Output goes to the pane or `ui.log`, never to
-Claude (approved decision 1).
+Claude (approved decision 1), except the four subcommands `hooks/elrond/relay.ts` relays where
+nothing draws (C2, DESIGN §13.5): a new one is not added to that list without the maintainer.
 
 ### Add a member
 

@@ -17,6 +17,9 @@ import type { ClassifyContext } from '../hooks/rules/classify.js'
 export const THEME =
   /gandalf|legolas|aragorn|gimli|gollum|galadriel|elrond|boromir|mordor|middle-earth|shall not pass|leeroy|wipe|loot|raid|\bneed:|\bpass:|greed|legendary|epic|threat|ready check|precious|isengard|rivendell|\belf\b/i
 
+/** The plugin's own name (it is in the rules path and the start notice) is an identifier, not theme text. */
+export const withoutPluginName = (shown: string): string => shown.replaceAll('council-of-elrond', '')
+
 /** Member ids (`[gandalf]`, `[aragorn/git]`) are config keys the user types, not theme text. */
 export const withoutIds = (shown: string): string => shown.replace(/\[[a-z/]+\]/g, '')
 
@@ -144,6 +147,10 @@ export type World = {
   commands: string[]
   /** What each command was registered with. */
   commandSpecs: { name: string; description: string; argumentHint?: string }[]
+  /** Every row the mod appended to the conversation (`$.session.append`), as it sent it. */
+  appended: { type: string; content: { type: string; text?: string }[] }[]
+  /** Whether an append is refused (it resolves `{ deny }`; the kit skips a hook that throws, so a rejection cannot be made). */
+  appendFails: boolean
 }
 
 const strip = (e: Record<string, unknown>): Record<string, unknown> => {
@@ -155,6 +162,8 @@ export function world(
   on: On,
   setup: Partial<Pick<World, 'answer' | 'answers' | 'replies' | 'surfaces' | 'cwd'>> & {
     cwdFails?: boolean
+    /** Makes `$.session.append` resolve `{ deny }`. */
+    appendFails?: boolean
     /** A mocked clock (`w.clock`) answers `$.clock`; else `$.clock.now` reads real time. */
     isClockMocked?: boolean
     /** The engine's own band above the prompt, beneath the plugin: it draws "engine band". */
@@ -200,6 +209,8 @@ export function world(
     configSets: [],
     commands: [],
     commandSpecs: [],
+    appended: [],
+    appendFails: setup.appendFails === true,
   }
 
   on('session.root', () => ({ value: ROOT }))
@@ -321,6 +332,14 @@ export function world(
     w.commandSpecs.push({ name: e.name, description: e.description, ...(e.argumentHint !== undefined && { argumentHint: e.argumentHint }) })
     return { value: { command: e.name } }
   })
+  on('session.append', ($, e, next) => {
+    if (w.appendFails) return { deny: 'a plugin above refused it' }
+    w.appended.push(e.message as unknown as World['appended'][number])
+    return next(e)
+  })
+  // The roster events: the engine's own bottom just echoes the client.
+  on('session.attach', ($, e) => ({ clientId: e.clientId }))
+  on('session.detach', ($, e) => ({ clientId: e.clientId }))
   on('ui.log', ($, e) => {
     w.logs.push(e.text)
     return { value: undefined }

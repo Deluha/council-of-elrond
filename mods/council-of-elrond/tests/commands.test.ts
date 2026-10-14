@@ -35,11 +35,12 @@ describe('which subcommands need a person', () => {
 })
 
 describe('/council', () => {
-  test('its output never reaches Claude: no text in the result, lines to the transcript where nothing draws', async ($, on) => {
+  test('its output is not the command text: lines to the transcript where nothing draws, and Claude gets it only as relay context (tests/relay.test.ts)', async ($, on) => {
     const w = world(on, { surfaces: [] })
-    const result = (await council($)) as { text?: string; context?: unknown }
+    const result = (await council($)) as { text?: string; context?: string[] }
     expect(result.text).toBeUndefined()
-    expect(result.context).toBeUndefined()
+    expect(result.context).toHaveLength(1)
+    expect(result.context?.[0]).toContain('The user ran /council status.')
     expect(w.logs.join('\n')).toContain('Mode: enforcing')
     expect(w.logs.join('\n')).toContain('Review tokens this session: 0 of 1500000')
   })

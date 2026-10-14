@@ -50,11 +50,13 @@ describe('fallback where nothing draws', () => {
     expect(w.panes).toEqual([])
   })
 
-  test('fallback where nothing draws: /council logs its lines, returns no text for Claude, and opens no pane', async ($, on) => {
+  test('fallback where nothing draws: /council logs its lines, returns no text (its context relays them), and opens no pane', async ($, on) => {
     const w = world(on, { surfaces: [] })
-    const result = (await council($)) as { text?: string; context?: unknown }
+    const result = (await council($)) as { text?: string; context?: string[] }
     expect(result.text).toBeUndefined()
-    expect(result.context).toBeUndefined()
+    // Where nothing draws, a person's status also goes to Claude as context, to relay (ROADMAP C2).
+    expect(result.context).toHaveLength(1)
+    expect(result.context?.[0]).toContain('The user ran /council status.')
     expect(w.logs.join('\n')).toContain('Mode: enforcing')
     expect(w.opens).toEqual([])
     expect(w.panes).toEqual([])

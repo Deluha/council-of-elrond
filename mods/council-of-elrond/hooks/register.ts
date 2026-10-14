@@ -16,7 +16,7 @@ import { combine, hasRealBlock } from './elrond/combine.js'
 import type { Voice } from './elrond/combine.js'
 import { bigOperationOf, councilSeats, needsCurrentBranch, rangeOf } from './elrond/council.js'
 import type { Big, CouncilSeat } from './elrond/council.js'
-import type { CouncilCommand, Output } from './elrond/commands.js'
+import type { CouncilCommand, Output, StatusInput } from './elrond/commands.js'
 import { interpretAnswer, optionsOf, questionText } from './elrond/escalation.js'
 import type { Answer, MemberOpinion, Unanswered } from './elrond/escalation.js'
 import { deadlineFor, profileOf, resolveModel } from './elrond/models.js'
@@ -36,6 +36,7 @@ import {
 } from './elrond/operations.js'
 import type { WipePolicy } from './elrond/operations.js'
 import { refusalText } from './elrond/refusal.js'
+import { isRelayed, noticeText, nobodyToAsk, relayContext } from './elrond/relay.js'
 import { reportOutput } from './elrond/report.js'
 import { bandRows, debateRows, voiceNote } from './elrond/view.js'
 import type { Row } from './elrond/view.js'
@@ -89,8 +90,8 @@ import {
   withShadow,
 } from './state.js'
 import type { CouncilDebate, CouncilSession } from '../types'
-import { currentMode, setMode, text } from './strings.js'
-import type { StringKey } from './strings.js'
+import { currentMode, setMode, text, withMode } from './strings.js'
+import type { Mode, StringKey } from './strings.js'
 
 /**
  * Elrond, the chair: the one `tool.call` hook every call passes through.
@@ -809,15 +810,47 @@ async function noteWrite($: EngineInterface, call: Call, cwd: string, home: stri
   if (isWritten) await update($, session, value => noteWritten(sessionOf(value), resolve(given, cwd, home)))
 }
 
-/** The label by the prompt where SessionMode is not drawn (other surfaces): the status line. */
+/**
+ * The label by the prompt where SessionMode is not drawn (other surfaces): the
+ * status line. Cleared when no such surface is left, so a line set for a phone
+ * does not outlive it.
+ */
 async function syncIndicator($: EngineInterface): Promise<void> {
   const state = sessionOf(await read($, session))
   const label = state.bypass ? text('mode.bypass') : isShadow(state, settings.shadowMode) ? text('mode.shadow') : undefined
   const surfaces = await $.session.surfaces().catch(() => [])
-  if (surfaces.some(surface => surface !== 'terminal' && surface !== 'desktop')) $.ui.status(label)
+  $.ui.status(surfaces.some(surface => surface !== 'terminal' && surface !== 'desktop') ? label : undefined)
 }
 
-/** Shows `/council` output to the user: in its pane where one draws, else as transcript lines. Never to Claude. */
+/**
+ * Where nothing draws, the start notice goes in as a row the model reads (the
+ * only channel to the person). A refusal or a failure is logged, never raised:
+ * session start goes on.
+ */
+async function announce($: EngineInterface): Promise<void> {
+  try {
+    if ((await $.session.surfaces()).length > 0) return
+    const result = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: noticeText() }] } })
+    if (result.deny !== undefined) $.ui.log(text('notice.appendFailed', { problem: result.deny }), { to: 'debug' })
+  } catch (error) {
+    $.ui.log(text('notice.appendFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
+  }
+}
+
+/**
+ * `/council` output as the command's `context`, for a person's command where
+ * nothing draws; else undefined. It is built again, in plain (nothing Claude
+ * reads is themed) and, for rules, without the allowlist's characters; every
+ * line is then redacted (relay.ts).
+ */
+async function relayOf($: EngineInterface, command: CouncilCommand, origin: string): Promise<readonly string[] | undefined> {
+  if (!isRelayed(command) || !HUMAN_ORIGINS.has(origin)) return undefined
+  if ((await $.session.surfaces()).length > 0) return undefined
+  const ctx = await contextOf($)
+  return [relayContext(command, await councilOutput($, command, 'plain'), ctx.patterns, newNonce())]
+}
+
+/** Shows `/council` output to the user: in its pane where one draws, else as transcript lines. */
 async function show($: EngineInterface, output: Output): Promise<void> {
   const surfaces = await $.session.surfaces().catch(() => [])
   if (surfaces.length > 0) {
@@ -883,7 +916,7 @@ async function epicDrop($: EngineInterface): Promise<void> {
 }
 
 /** `/council report`: the rotated files (oldest first), then the current one; an unreadable file is named and left out. */
-async function reportFrom($: EngineInterface, path: string): Promise<Output> {
+async function reportFrom($: EngineInterface, path: string, mode?: Mode): Promise<Output> {
   const files: string[] = []
   const unreadable: string[] = []
   for (const file of [...Array.from({ length: ROTATED_FILES - 1 }, (_, i) => `${path}.${ROTATED_FILES - 1 - i}`), path]) {
@@ -893,7 +926,7 @@ async function reportFrom($: EngineInterface, path: string): Promise<Output> {
       unreadable.push(`${file}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  return reportOutput(files, unreadable)
+  return mode === undefined ? reportOutput(files, unreadable) : withMode(mode, () => reportOutput(files, unreadable))
 }
 
 /** A one-request check that a model answers: an API error is a no, a timeout unsure. */
@@ -958,16 +991,23 @@ async function councilModel($: EngineInterface, command: Extract<CouncilCommand,
   return { title, lines }
 }
 
-async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand, { kind: 'debate' }>): Promise<Output> {
+/**
+ * The output of one subcommand. The `$` reads come first; the pure builders then
+ * run in `mode` when one is given (the copy Claude reads is built in plain). A
+ * mode is given only for that copy, so it also hides the allowlist entries.
+ */
+async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand, { kind: 'debate' }>, mode?: Mode): Promise<Output> {
   const title = text('cmd.title')
+  // Synchronous builders only: nothing that reads `$` goes inside.
+  const inMode = (build: () => Output): Output => (mode === undefined ? build() : withMode(mode, build))
   switch (command.kind) {
     case 'status': {
       const ctx = await contextOf($)
       const state = sessionOf(await read($, session))
-      const mode = state.bypass ? 'bypass' : isShadow(state, settings.shadowMode) ? 'shadow' : 'enforcing'
-      return statusOutput({
+      const runMode = state.bypass ? 'bypass' : isShadow(state, settings.shadowMode) ? 'shadow' : 'enforcing'
+      const input: StatusInput = {
         session: state,
-        mode,
+        mode: runMode,
         members: {
           gandalf: { enabled: settings.gandalfEnabled, choice: modelChoice('gandalf', ctx, state.models) },
           legolas: { enabled: settings.legolasEnabled, choice: modelChoice('legolas', ctx, state.models) },
@@ -978,29 +1018,31 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
         gollumEnabled: settings.gollumEnabled,
         galadrielEnabled: settings.galadrielEnabled,
         tokenBudget: settings.tokenBudget,
-      })
+      }
+      return inMode(() => statusOutput(input))
     }
     case 'bypass':
       await update($, session, value => withBypass(sessionOf(value), command.on))
       await syncIndicator($)
-      return { title, lines: [text(command.on ? 'cmd.bypassOn' : 'cmd.bypassOff')] }
+      return inMode(() => ({ title, lines: [text(command.on ? 'cmd.bypassOn' : 'cmd.bypassOff')] }))
     case 'shadow':
       await update($, session, value => withShadow(sessionOf(value), command.on))
       await syncIndicator($)
-      return { title, lines: [text(command.on ? 'cmd.shadowOn' : 'cmd.shadowOff')] }
+      return inMode(() => ({ title, lines: [text(command.on ? 'cmd.shadowOn' : 'cmd.shadowOff')] }))
     case 'log': {
       const ctx = await contextOf($)
       const path = resolve(settings.auditLogPath, ctx.root)
       try {
         const logText = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
-        return logOutput(logText, command.count)
+        return inMode(() => logOutput(logText, command.count))
       } catch (error) {
-        return { title, lines: [text('cmd.logUnreadable', { problem: error instanceof Error ? error.message : String(error) })] }
+        const problem = error instanceof Error ? error.message : String(error)
+        return inMode(() => ({ title, lines: [text('cmd.logUnreadable', { problem })] }))
       }
     }
     case 'rules': {
       const ctx = await contextOf($)
-      return rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors)
+      return inMode(() => rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors, mode !== undefined))
     }
     case 'test': {
       // Classification only: nothing the command names is run, read or stat'ed.
@@ -1029,28 +1071,31 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
               checks: settings.gimliEnabled ? ctx.loaded.compiled.config.gimli.commands.map(check => check.name) : [],
               isBranchAssumed: big.entry === 'merge-to-protected' && needsCurrentBranch(classification, ctx.loaded.compiled),
             }
-      return testOutput(redact(command.command, ctx.patterns), classification, operation, reviewer, council)
+      const typed = redact(command.command, ctx.patterns)
+      return inMode(() => testOutput(typed, classification, operation, reviewer, council))
     }
     case 'models': {
       const ctx = await contextOf($)
       const state = sessionOf(await read($, session))
       const choices = Object.fromEntries(MODEL_SLOTS.map(slot => [slot, modelChoice(slot, ctx, state.models)])) as Record<ModelSlot, ModelChoice>
-      return modelsOutput(choices)
+      return inMode(() => modelsOutput(choices))
     }
     case 'model':
       return councilModel($, command)
     case 'reload': {
       const ctx = await reloadContext($)
-      const lines = [text('cmd.reloaded', { count: ctx.loaded.compiled.rules.length, origin: ctx.loaded.origin })]
-      if (ctx.loaded.errors.length > 0) lines.push(text('cmd.configErrors', { errors: ctx.loaded.errors.join('; ') }))
-      return { title, lines }
+      return inMode(() => {
+        const lines = [text('cmd.reloaded', { count: ctx.loaded.compiled.rules.length, origin: ctx.loaded.origin })]
+        if (ctx.loaded.errors.length > 0) lines.push(text('cmd.configErrors', { errors: ctx.loaded.errors.join('; ') }))
+        return { title, lines }
+      })
     }
     case 'report': {
       const ctx = await contextOf($)
-      return reportFrom($, resolve(settings.auditLogPath, ctx.root))
+      return reportFrom($, resolve(settings.auditLogPath, ctx.root), mode)
     }
     case 'usage':
-      return { title, lines: [text(command.key, command.params ?? {}), ...(command.key === 'cmd.unknown' ? [text('cmd.help')] : [])] }
+      return inMode(() => ({ title, lines: [text(command.key, command.params ?? {}), ...(command.key === 'cmd.unknown' ? [text('cmd.help')] : [])] }))
   }
 }
 
@@ -1091,7 +1136,22 @@ export const register: Register = (on, options) => {
       if (isEmpty) warnOnce($, 'shadow-suggest', text('notice.shadowSuggest'), text('notice.shadowSuggest'))
     }
     await syncIndicator($).catch(() => undefined)
+    await announce($)
     return next(e)
+  })
+
+  // The status line follows the roster: a surface that leaves takes its label with it.
+  on('session.detach', async ($, e, next) => {
+    const result = await next(e)
+    // At the end of the session this runs inside a short bound: skip it.
+    if (e.reason !== 'end') await syncIndicator($).catch(() => undefined)
+    return result
+  })
+
+  on('session.attach', async ($, e, next) => {
+    const result = await next(e)
+    await syncIndicator($).catch(() => undefined)
+    return result
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -1102,13 +1162,23 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // Output goes to the user only (decision 1): no text for Claude to read.
+  // Output goes to the user (decision 1). The one exception: where nothing draws, a person's
+  // status, report, rules and test also reach Claude as `context`, to relay (ROADMAP C2).
   on('command.run', { command: COMMAND }, async ($, e) => {
     const command = parseCouncil(e.args)
-    if (needsPerson(command) && !HUMAN_ORIGINS.has(e.origin.kind)) await show($, { title: text('cmd.title'), lines: [text('cmd.needsPerson')] })
-    else if (command.kind === 'debate') await showDebate($)
-    else await show($, await councilOutput($, command))
-    return {}
+    if (needsPerson(command) && !HUMAN_ORIGINS.has(e.origin.kind)) {
+      await show($, { title: text('cmd.title'), lines: [text('cmd.needsPerson')] })
+      return {}
+    }
+    if (command.kind === 'debate') {
+      await showDebate($)
+      return {}
+    }
+    const output = await councilOutput($, command)
+    await show($, output)
+    // Built after the output is shown: a failure here must not cost the person the pane or the lines.
+    const context = await relayOf($, command, e.origin.kind).catch(() => undefined)
+    return context === undefined ? {} : { context }
   }).catch(($, e) => {
     $.ui.log(text('cmd.help'))
     return {}
@@ -1356,11 +1426,23 @@ export const register: Register = (on, options) => {
       )
       // One entry per confirm: the allowlist is offered for a single finding only.
       const answer = await escalate($, question, secrets.length === 1)
-      if (answer === 'unavailable' || answer === 'dismissed') {
+      if (answer === 'unavailable') {
         decision = answer
-        const reason = answer === 'unavailable' ? text('reason.nobodyToAsk', { why: text(why) }) : text('reason.userDismissed')
-        // Dismissing (or the engine's "Chat about this") and nobody to ask are failed attempts.
-        return refuse({ who: 'who.user', verdict: 'not allowed', reason, alternative: text('alternative.ask') }, true)
+        // Only reached where escalate found no surface, so the model is the only way to tell the person (ROADMAP C2).
+        // The operation and the names of who is behind it; never the call, a preview, a finding or a diff.
+        const unasked = nobodyToAsk({
+          why: text(why, {}, 'plain'),
+          operation: redact(operation.key, ctx.patterns),
+          ...(decided !== undefined && { ruleId: decided.ruleId }),
+          opinions,
+        })
+        // A failed attempt, as dismissing is.
+        return refuse({ who: 'who.user', verdict: 'not allowed', reason: unasked.reason, alternative: unasked.alternative }, true)
+      }
+      if (answer === 'dismissed') {
+        decision = answer
+        // Dismissing (or the engine's "Chat about this") is a failed attempt.
+        return refuse({ who: 'who.user', verdict: 'not allowed', reason: text('reason.userDismissed'), alternative: text('alternative.ask') }, true)
       }
       if (answer.kind === 'talk-first') {
         decision = 'chat'

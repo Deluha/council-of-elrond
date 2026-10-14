@@ -33,7 +33,7 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (498 after H2)
+cd mods/council-of-elrond && claude plugin test .     # all tests (524 after C2)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
@@ -59,7 +59,7 @@ claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: l
    - Keep exactly one `tool.call` hook.
    - It rejects on dismiss, on "Chat about this", and in `-p`. Dismiss and "Chat about this" reject with the same text (the call's result, cut to 120 characters), so the mod cannot tell them apart (DESIGN §12.4).
    - Guard it with `$.session.surfaces()` (empty means nobody can be asked: refuse).
-6. **Command output reaches Claude.** A command's `{ text }` is read by Claude (approved decision 1: don't put council internals there).
+6. **Command output reaches Claude.** A command's `{ text }` is read by Claude (approved decision 1: don't put council internals there). *(Amended by C2: where nothing draws, a person's `/council` status, report, rules and test also go to Claude as the result's `context`, redacted and fenced; DESIGN §13.5.)*
 7. **`$.state` needs a contract.**
    - Every key must be declared in `types/index.d.ts` (`PluginState`).
    - Refs must be literals.
@@ -97,7 +97,7 @@ claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: l
 
 From the Step 0 review and the model discussion. These are binding unless the user changes them.
 
-1. **Command output stays out of Claude's context.** `/council` subcommands draw in the pane where a surface draws, else `$.ui.log` (dim, not sent to the model). The `command.run` hook returns no Claude-readable text. This includes `/council off|on|shadow`. Verify where `ui.log` lines go in a plain `claude -p "/council report"` run.
+1. **Command output stays out of Claude's context.** *(Amended by C2, approved 2026-10-13, a scoped exception: where `$.session.surfaces()` is empty, `/council` status, report, rules and test, typed by a person, also return their lines as `context` for Claude to relay, redacted and fenced; every other case is as below. DESIGN §13.5.)* `/council` subcommands draw in the pane where a surface draws, else `$.ui.log` (dim, not sent to the model). The `command.run` hook returns no Claude-readable text. This includes `/council off|on|shadow`. Verify where `ui.log` lines go in a plain `claude -p "/council report"` run.
 2. **Models.**
    - No Haiku in any default; the latest Sonnet is the floor.
    - Built-in defaults: Gandalf `sonnet`, Legolas `sonnet`, Aragorn `opus`, full council `opus` (`BUILT_IN_MODELS` in `hooks/config/defaults.ts`).
@@ -319,7 +319,7 @@ are grouped below into three hardening briefs, H1 to H3.
    changes what the scan refuses. *(Done: every H1 row, the C5 `**/` prefixes, `db/migrate/**`
    included, and the allowlist-oracle note; decisions in DESIGN §13.3.)*
 3. **H2, pipeline robustness** (below). Also in 0.6.0. *(Done: every H2 row but the
-   `$.ui.status` one, which goes to C2 as the table says; decisions in DESIGN §13.4,
+   `$.ui.status` one, which went to C2 and is done there; decisions in DESIGN §13.4,
    [Deluha/council-of-elrond#19](https://github.com/Deluha/council-of-elrond/pull/19).)*
 4. **C2**, which needs no cloud run and helps whatever C3 shows. Then **C3** once the maintainer
    can run the cloud probe, then **C4** if C3 calls for it, then **C5** and **C6**.
@@ -363,7 +363,7 @@ are grouped below into three hardening briefs, H1 to H3.
 | §2.9 `sessionOf` checks only the version | Validate the shape and fall back to `INITIAL_SESSION` with a debug line. Today a malformed value denies every call until `/clear`. |
 | §2.9 `Date.now()` | Use `$.clock.now()` throughout. |
 | §2.9 literals outside `strings.ts` | Move the command's description, argument hint and the audit-write-failed line into `strings.ts` (a CLAUDE.md rule). |
-| §2.9 `$.ui.status` never cleared | Fold into C2, which reworks what shows where nothing draws. |
+| §2.9 `$.ui.status` never cleared | Fold into C2, which reworks what shows where nothing draws. *(Done in C2, DESIGN §13.5 f: the status is cleared when no other surface is left, and `session.detach` and `session.attach` hooks sync it.)* |
 | §2.10 DESIGN §4 rows | Rewrite "Esc during a council", "Writing the allowlist fails" and "Audit write fails", and add a row for `$.session.root`/`cwd` failing (denies every call, allow tier included: keep it, as it is fail-closed). |
 | §2.11 test gaps | Add a test with each fix above. Add the `.catch` replay after `next` ran, a prompt during an in-flight review, Esc mid-review and mid-council, `/council reload` clearing the cache, and a malformed session. Skip the `proceed()` budget-guard test unless the kit can set `remainingMs`. |
 
@@ -408,7 +408,7 @@ it is committed; one that tightens it is decided, recorded and reported.
 - [ ] A `/config` switch for the allow-rule offer, only if feedback says the offer is noisy.
 - [ ] The terminal-check item above resolved: the `AskUserQuestion` re-entry path. (The user-refusal wordings were settled against the 2.1.296 binary, DESIGN §12.4.)
 - [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), decided 2026-10-13: only the `register.ts` reducer refactor, which comes after 1.0. The performance notes, the concurrency model and the two-session audit race were done in H2 (DESIGN §13.4), the allowlist-oracle note in H1 (DESIGN §13.3). H3 is the review item still open in the code, under "Recommendations on the remaining open decisions" above.
-- [ ] The cloud-session work items C2 to C6 below (C1 is done), in the order given under "Recommendations on the remaining open decisions".
+- [ ] The cloud-session work items C3 to C6 below (C1 and C2 are done), in the order given under "Recommendations on the remaining open decisions".
 
 ### Cloud sessions: findings and work items
 
@@ -435,7 +435,7 @@ cold. Each is one brief with its own tests; C1 and C5 are documentation only.
 2026-10-13 ("I approve roadmap items C2 and C4"), so every item follows the usual loop.
 
 - [x] **C1. Record the cloud trial.** DESIGN.md gains a "Cloud sessions" subsection with the table above; docs/INSTALL.md "Cloud sessions" replaces "not confirmed" with the working recipe (setup script, pinned ref, loads at start, no restart) and a ready-made snippet that also writes the plugin's options to the user settings (`shadowMode` for a rollout, models, budget), since project settings are not read; docs/MAINTENANCE.md "Supported hosts" lists the cloud as tested, enforcing and non-drawing. Documentation only; `scribe`-sized once the wording is dictated. *(Done: DESIGN.md §14; the install recipe and its option keys checked against the CLI there.)*
-- [ ] **C2. Speak through Claude where nothing draws.** Command output never reaches Claude (a stage 2 decision); this is a scoped exception, approved 2026-10-13. When `$.session.surfaces()` is empty: `/council` (status, report, rules, test) also returns its lines as the `command.run` result's `context`, prefixed with an instruction to relay them verbatim; the session-start notice is appended as a model-readable row (`$.session.append`, `type: "user"`) saying the council is active and how to approve a call (C4); and the `nobodyToAsk` refusal names the refused operation, the rule or reviewer behind it, and the approval route. Never the secrets preview or a diff. Tests: the fixtures' `session.surfaces` answers `[]`, and the command result carries `context`; with a surface it carries none. Strings in `strings.ts`; README under "Where nothing draws"; CHANGELOG.
+- [x] **C2. Speak through Claude where nothing draws.** *(Done, DESIGN §13.5: the four subcommands for a person's command, the start notice, the refusal; the H2 status row with it. Not verified live: whether a model turn follows a command's `context`, and the roster timing of `session.detach`.)* Command output never reaches Claude (a stage 2 decision); this is a scoped exception, approved 2026-10-13. When `$.session.surfaces()` is empty: `/council` (status, report, rules, test) also returns its lines as the `command.run` result's `context`, prefixed with an instruction to relay them verbatim; the session-start notice is appended as a model-readable row (`$.session.append`, `type: "user"`) saying the council is active and how to approve a call (C4); and the `nobodyToAsk` refusal names the refused operation, the rule or reviewer behind it, and the approval route. Never the secrets preview or a diff. Tests: the fixtures' `session.surfaces` answers `[]`, and the command result carries `context`; with a surface it carries none. Strings in `strings.ts`; README under "Where nothing draws"; CHANGELOG.
 - [ ] **C3. Probe `$.ui.ask` in a cloud session.** A branch with a `cloudAsk` option (default off) that attempts the ask when surfaces is empty. The ask has no timeout today and the types give it none; a `$.clock` timer would count against the 10 s own-time budget (fact 3 above), so the probe runs without one and the hang risk is what it measures. Run it once in a throwaway cloud environment whose setup script installs that ref, with one gated call, and record in DESIGN.md: whether the web client shows the question, what the rejection's `message` is when it cannot, and how long it takes. If the client answers it, the surfaces guard in `escalate` becomes "no surface and no remote client" and C4 is a fallback only. If it rejects, `escalate` must map that message to `unavailable` (today every rejection is `dismissed`, a failed attempt).
 - [ ] **C4. A chat approval route for hosts that cannot ask.** A typed approval stands in for the dialog, approved 2026-10-13. A refusal in the no-surface case carries a short fingerprint of the operation key (`council:xxxx`, six hex characters of the audit hash) that Claude relays. The person types `council allow xxxx` (one call) or `council allow xxxx session` (the session, like "allow once" and the allow-rule offer) in chat. The `prompt.submit` hook recognises the line, records the allowance in `$.state` through `state.ts`, answers with a model-readable acknowledgement, and strips the line from the prompt. The next gated call with that fingerprint runs, audited as decided by the user via chat; the allowance is spent on use and at the next prompt. It never applies to a high-confidence secrets find, a block rule or a protected path (the same limits as the dialog), and `council deny xxxx` records a refusal with no failed attempt (a `chat` outcome). Tests: a refusal carries the fingerprint; the prompt line is parsed (and `council allow` with no fingerprint, or an unknown one, is answered and not stored); the allowed call runs once; a block rule still refuses; the allowance is gone after the next prompt. README section; CHANGELOG. Skipped if C3 shows the client answers the dialog.
 - [ ] **C5. Rules-file discovery in a multi-root environment.** When the session root holds no `rules.json`, resolve it per call: from the call's target (a file tool's path, a shell command's cwd) walk up to the nearest `.claude/council-of-elrond/rules.json` below the root; none found, use the root's defaults. `protectedPaths`, `productionPatterns` and `gimli.commands` then resolve against that file's directory, and the project checks run with it as cwd. One cache entry per directory, invalidated by `/council reload`. The audit log path, when relative, resolves the same way, so it lands in the repository. Until this ships, docs/INSTALL.md says: one repository per cloud environment, and never one that holds the mod's own checkout (that session would be gated by the mod it develops, against the rule above). Tests: a fixture root with two repositories, a rules file in one; a file edit in each resolves the right rules; a shell command under the second gets the root's defaults.

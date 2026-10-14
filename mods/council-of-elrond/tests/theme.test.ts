@@ -5,11 +5,12 @@ import type { Voice } from '../hooks/elrond/combine.js'
 import { refusalText } from '../hooks/elrond/refusal.js'
 import type { GimliRun } from '../hooks/members/gimli.js'
 import { allStrings, currentMode, flavourOf, setMode, text, themedKeys } from '../hooks/strings.js'
-import { ALLOW_ONCE, auditLines, BLOCK, council, denyOf, KEEP_BLOCKED, THEME, withoutIds, world } from './fixtures.js'
+import { ALLOW_ONCE, auditLines, BLOCK, council, denyOf, KEEP_BLOCKED, THEME, withoutIds, withoutPluginName, world } from './fixtures.js'
 
 /** What Claude reads: these families, and these single keys, never get a themed variant. */
-const CLAUDE_FACING_FAMILIES = ['refusal.', 'reason.', 'alternative.', 'council.', 'gimli.', 'escalate.', 'route.', 'suggest.', 'notice.', 'report.']
+const CLAUDE_FACING_FAMILIES = ['refusal.', 'reason.', 'alternative.', 'council.', 'gimli.', 'escalate.', 'route.', 'suggest.', 'notice.', 'report.', 'relay.']
 const CLAUDE_FACING_KEYS = [
+  'cmd.allowlistHidden',
   'ask.header',
   'ask.confirmAllowlist',
   'ask.confirmAdd',
@@ -27,7 +28,8 @@ const CLAUDE_FACING_KEYS = [
 
 describe('the strings table', () => {
   test('plain mode carries no theme text', () => {
-    for (const line of allStrings('plain')) expect(line, line).not.toMatch(THEME)
+    // The plugin's own name (in the start notice) is an identifier, not theme text, like a member id.
+    for (const line of allStrings('plain')) expect(withoutPluginName(line), line).not.toMatch(THEME)
   })
 
   test('nothing Claude reads has a themed variant', () => {
@@ -159,7 +161,7 @@ describe('the loot roll (themed, the default)', () => {
     world(on, { surfaces: [] })
     const deny = denyOf(await $.tool.call({ tool: 'Bash', command: 'sudo systemctl restart nginx' }))
     expect(deny).toContain('nobody can be asked')
-    expect(deny).not.toMatch(THEME)
+    expect(withoutPluginName(deny)).not.toMatch(THEME)
   })
 
   test('the user sees the characters: the status, the bypass and the wipes', async ($, on) => {
