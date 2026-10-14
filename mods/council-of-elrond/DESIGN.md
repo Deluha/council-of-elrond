@@ -153,6 +153,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | A `tool.call` raised beneath the hook's own frame (`re-entry`, from 2.1.294) | `.catch` answers with `called` false and refuses. A subagent's calls do not arrive this way, in the background or the foreground (verified live, §12.1). |
 | Hook overruns its 10 s own-time budget | **From 2.1.299 the engine cuts the hook off** (probed headless, §12.5): its `.catch` is asked with `kind` `timeout` and `called` false, and refuses; a `next(e)` the hook makes afterwards is refused by the engine. The Stage 0 probe found the test kit does not cut a hook off, even with `.catch`, so calls still pass only through `proceed()`, which refuses when `next.budget.remainingMs` < 1 s. The hook's own work is bounded to make an overrun unlikely: commands over 20,000 characters aren't parsed (review), parse depth ≤ 4, ≤ 200 parts. |
 | A hook blocks the hooks worker (no yield for 5 s) | From 2.1.299 the engine replaces the worker, keeps the plugin loaded and asks the hook's `.catch` with `kind` `throw` and `called` false: refused (probed headless, §12.5). `session.start` runs again in the new worker. |
+| The `prompt.submit` hook fails (throws, times out, or blocks the worker) | Its `.catch` passes the prompt through unchanged and the mod stays loaded; the per-prompt reset is skipped for that prompt (§13.6). |
 | Model error, timeout (`timeoutMs`), empty reply, malformed verdict, request refused | Escalate to you; "keep blocked" refuses. |
 | Token budget spent / no enabled member can take the call (the named one and Gandalf off) | Escalate without a model call. |
 | The file a diff needs can't be read (over 4 MiB, permissions) | The diff shows the call's own text and the prompt says so; the review goes on. |
@@ -594,8 +595,8 @@ repository.
 - **A slash command in `-p` raises no `prompt.submit`.** `/probe hello` reached `command.run`
   (origin `sdk`) only; a plain `-p` prompt raised `prompt.submit` with origin `sdk` and no `command`.
   Whether a slash command typed in a terminal raises `prompt.submit` with the new `command` field
-  set is not checked. If it does, a person's `/council` command also runs the per-prompt reset
-  (`resetForPrompt`).
+  set is not checked. If it does, a person's `/council` command no longer runs the per-prompt
+  reset (§13.6).
 - **Skipped:** `/council` output as `ui_log` in stream-json, already checked live on 2.1.299 in C2
   (§13.5 h).
 
@@ -663,6 +664,24 @@ repository.
      - *Claude relays it.* After `/council test "git push --force origin main"`, a resumed run with the prompt "Go on." had Claude repeat the four lines verbatim in a code block, then add one sentence.
      - *The nobody-to-ask refusal.* `sudo -n true` was refused with the rule (`privileged`), the operation and the route, and Claude told the user which call was refused, why, and both ways to let it run. The audit line reads `decision: unavailable`. The operation key drops `sudo` (`shell:true`, as the audit log has always keyed it), so for such a call the rule id carries the meaning. Changing the key is H3's, not C2's.
      - *Not checked live:* the cloud web client itself; whether `$.session.surfaces()` already leaves out a detaching client when `session.detach`'s `next(e)` resolves (if not, the label stays until the next sync); and whether a remote client can attach after `session.start`, which would leave a stale notice (the refusal and the relay re-read surfaces per call). `-p` and SDK runs now get the notice too, as checked above.
+
+6. **`prompt.submit` hardening, after the 2.1.299 types** (`hooks/register.ts`, `hooks/elrond/commands.ts`). Approved by the maintainer on 2026-10-14; both are tightenings.
+   - **(a) The hook has a `.catch` that passes the prompt through.** A hook that fails without a `.catch`
+     is skipped, and one that blocks the hooks worker can cost the plugin for the session; with a
+     `.catch` the plugin stays loaded (probed headless on 2.1.299, §12.5). The `.catch` answers
+     `next(e)` whether or not `next.called`: the prompt enters as typed, is never dropped or
+     rewritten, and the handler makes no `$` call and no state write, since it gets only 1,000 ms.
+     On that path the per-prompt reset is skipped, which can only mean stale counters and so more
+     refusals, never fewer (a tightening). A test makes the state write fail and reads, through a
+     plugin above the mod, that the engine settled the hook as `caught`, not `skipped`.
+   - **(b) A person's `/council` command no longer resets the per-prompt state.** When `e.command` names
+     `/council` (`isCouncilCommand` in `elrond/commands.ts`), the hook skips `resetForPrompt` and
+     passes `e` down unchanged (`command` is pinned). Only `/council`: a skill or prompt command
+     (`/review the diff`) starts a new task and still resets, while `/council` never asks the model.
+     The rounds, failed attempts, cached approvals and the prompt the reviewers see therefore stay
+     as they were, so a `/council status` between two refused attempts can no longer clear a
+     lockout (a tightening). Whether a slash command typed in a terminal raises `prompt.submit` at
+     all is not checked (in `-p` it does not, §12.5), so this guard may never fire there.
 
 ## 14. Cloud sessions
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { needsPerson, parseCouncil, words } from '../hooks/elrond/commands.js'
+import { isCouncilCommand, needsPerson, parseCouncil, words } from '../hooks/elrond/commands.js'
 import { text } from '../hooks/strings.js'
 import { ALLOW_ONCE, APPROVE, auditLines, BLOCK, council, denyOf, KEEP_BLOCKED, ROOT, settled, USAGE, world } from './fixtures.js'
 
@@ -31,6 +31,14 @@ describe('which subcommands need a person', () => {
     for (const args of needing) expect(needsPerson(parseCouncil(args)), args).toBe(true)
     const open = ['', 'status', 'on', 'shadow off', 'shadow', 'model', 'models', 'log 5', 'rules', 'test "ls"', 'reload', 'report', 'debate', 'frobnicate']
     for (const args of open) expect(needsPerson(parseCouncil(args)), args).toBe(false)
+  })
+})
+
+describe('which submissions are the council command', () => {
+  test('only one whose command is named so; none, or another command, is not', () => {
+    expect(isCouncilCommand(undefined, 'council')).toBe(false)
+    expect(isCouncilCommand({ name: 'review' }, 'council')).toBe(false)
+    expect(isCouncilCommand({ name: 'council' }, 'council')).toBe(true)
   })
 })
 

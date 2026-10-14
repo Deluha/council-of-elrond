@@ -423,7 +423,7 @@ operation. A push keys on its remote and branch, and SQL on its database.
 - **Rounds:** after a reviewer refuses the same operation twice, further attempts come to you without another model call. Typing an instruction starts the rounds over.
 - **Failed attempts:** a refusal by a rule, a reviewer or the secrets scan, your "keep blocked" (or a dismissed question, or nobody to ask), your refusal at Claude Code's own permission prompt, and a gated call that ran and errored all count. Claude Code's own "Chat about this" counts like a dismissal. "Talk first" does not, nor does Claude Code denying a call on its own with nobody asked (in `claude -p`, or by a deny rule), nor an allowlist entry the mod could not write (the call stays blocked, but the failure is not Claude's).
 - **Lockout:** three failed attempts on one operation, or five on one kind of operation (say `git push` to any target), lock it out. Claude is told to stop retrying, tell you what failed and propose another approach.
-- A call that runs successfully clears its own operation. Everything resets when you send a new prompt.
+- A call that runs successfully clears its own operation. Everything resets when you send a new prompt (a `/council` command is not one).
 - **Cache:** a reviewer's approve is reused for the identical call until your next prompt. A block or revise never is.
 
 ## Escalation

@@ -8,7 +8,7 @@ taken, and [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for how it works and
 
 ```sh
 cd council-of-elrond
-claude plugin test mods/council-of-elrond       # 524 tests, about 40 s
+claude plugin test mods/council-of-elrond       # 529 tests, about 40 s
 tsc -p mods                                    # strict, against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
 ```
@@ -57,7 +57,9 @@ function in that file (passing `$` to an imported function fails validation). Ke
 - `tool.call` runs Elrond's pipeline. Every pass-through goes through `proceed()`, which refuses
   when the hook's remaining own-time budget is under one second. The `.catch` replays the real
   result if `next.called`, else refuses.
-- `prompt.submit` runs `resetForPrompt`, the single per-prompt reset.
+- `prompt.submit` runs `resetForPrompt`, the single per-prompt reset, except for a `/council`
+  command; its `.catch` passes the prompt through, so a failure there never costs the prompt or the
+  plugin.
 - `session.start` loads the config, registers `/council` and, where nothing draws, appends the start
   notice; `command.run` answers it; `session.attach` and `session.detach` keep the status line in step.
 - `ui.render` draws the `/council` pane, the debate pane, the council check band and the mode
