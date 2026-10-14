@@ -16,8 +16,9 @@ import type { Route, Seat } from './routing.js'
 
 /**
  * `/council`: one command, its subcommands parsed from the raw argument
- * string, and its output built as lines. The output is for the user only:
- * register.ts draws it in a pane or logs it, and never hands it to Claude.
+ * string, and its output built as lines. The output is for the user: register.ts
+ * draws it in a pane or logs it. Where nothing draws, four subcommands also reach
+ * Claude, redacted (relay.ts, ROADMAP C2).
  */
 
 export type CouncilCommand =
@@ -200,7 +201,11 @@ export function logOutput(logText: string, count: number): Output {
   }
 }
 
-export function rulesOutput(compiled: CompiledConfig, origin: string, errors: readonly string[]): Output {
+/**
+ * `forModel`: the copy relayed through Claude (relay.ts). An exact-string allowlist
+ * entry shows no character at all, where the person's own copy shows its first three.
+ */
+export function rulesOutput(compiled: CompiledConfig, origin: string, errors: readonly string[], forModel = false): Output {
   const rules = [...compiled.rules].sort((a, b) => TIERS.indexOf(b.tier) - TIERS.indexOf(a.tier))
   const list = (key: StringKey, items: readonly string[]): string[] =>
     items.length === 0 ? [] : [text('cmd.listLine', { name: text(key), items: items.join(', ') })]
@@ -213,7 +218,10 @@ export function rulesOutput(compiled: CompiledConfig, origin: string, errors: re
       ...list('cmd.list.protectedBranches', compiled.config.protectedBranches),
       ...list('cmd.list.production', compiled.config.productionPatterns),
       ...list('cmd.list.secretPatterns', compiled.config.gollum.patterns.map(pattern => `${pattern.id} (${pattern.level})`)),
-      ...list('cmd.list.allowlist', compiled.config.gollum.allowlist.map(entry => (entry.startsWith('sha256:') ? entry : `${entry.slice(0, 3)}…`))),
+      ...list(
+        'cmd.list.allowlist',
+        compiled.config.gollum.allowlist.map(entry => (entry.startsWith('sha256:') ? entry : forModel ? text('cmd.allowlistHidden') : `${entry.slice(0, 3)}…`)),
+      ),
     ],
   }
 }

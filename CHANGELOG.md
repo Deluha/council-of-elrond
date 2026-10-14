@@ -47,8 +47,23 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   your last prompt, and each reviewer's blocks as a bar and a number.
 - **The epic drop** (themed mode only): after a push or merge the full council approved and that
   ran, "Legendary commit acquired" as a toast and a band row for eight seconds.
+- **`/council` answers through Claude where nothing draws.** In the cloud web client, `claude -p`
+  and the SDK, nothing the mod draws reaches you, so when you type `/council` status, report, rules
+  or test there, the same lines also go to Claude, fenced as the council's output and redacted line
+  by line, with an instruction to repeat them to you in its next reply. A scoped exception to "command
+  output never reaches Claude": no other subcommand, no command from a plugin or another session, and
+  nothing at all where a surface draws. `/council rules` shows an exact-string allowlist entry to
+  Claude as `(an exact string, not shown)`, not its first three characters. See "Where nothing
+  draws" in the README.
+- **A start notice where nothing draws.** The session starts with a row Claude reads, saying the
+  council is active, that a call needing your approval is refused here with the reason, and how you
+  can let it run (an allow rule in `rules.json` that you add yourself, or a terminal session).
 
 ### Changed
+- **The nobody-to-ask refusal says what was refused.** Where nothing draws and a call needs you, the
+  refusal names the operation (the audit log's redacted key), the rule behind it and the reviewers
+  by name, and tells Claude to tell you and how you can let the call run. Never the call's text, a
+  preview, a secrets finding, a diff or a reviewer's reason. Still a failed attempt.
 - **Protected paths hold at any depth.** The shipped CI, `.git`, `db/migrate` and
   `.claude/council-of-elrond` / `.claude/settings*.json` entries now start with `**/`, so they
   protect every repository below the session root, a rules file at any depth included, and the
@@ -81,6 +96,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   allowed call still pass: the mod never asks on an allowed call.
 
 ### Fixed
+- **The status line is cleared when its surface leaves.** A label set for a phone or VS Code
+  (`council: shadow`) used to stay after that client detached; it is now cleared, and set again when
+  a client attaches.
 - **A failed allowlist write is no longer a failed attempt.** When the entry could not be written
   the call stays blocked, with the transcript line and a reason that says the entry could not be
   written (not that you chose to keep it blocked), but the failure is the mod's and no longer

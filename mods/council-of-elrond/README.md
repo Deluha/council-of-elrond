@@ -285,8 +285,11 @@ Each theme term and its plain name are in the [Glossary](#glossary).
 
 ## Commands
 
-Everything `/council` prints is for you only: it draws in a pane where a surface draws one, else as
-dim transcript lines. Claude never reads it. In a plain `claude -p "/council"` run nothing prints;
+Everything `/council` prints is for you: it draws in a pane where a surface draws one, else as
+dim transcript lines. Claude does not read it, with one exception: where nothing draws at all (the
+cloud web client, `claude -p`, the SDK), `/council` status, report, rules and test also go to Claude
+to show you, because Claude is then the only way to reach you; see
+[Where nothing draws](#where-nothing-draws). In a plain `claude -p "/council"` run nothing prints;
 use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 
 | Command | What it does |
@@ -330,7 +333,43 @@ Three things show you a review as it happens, none of them read by Claude:
 
 The pane has its own tab (`council-debate`), beside the `/council` output pane. It opens on its own once per session, the first time a model review or a full council starts; Claude Code keeps an unasked pane hidden below 144 terminal columns, so on a narrow terminal it stays hidden. `/council debate` opens it at any width, and is the way back after you close it. It follows the agent in view: with a subagent's transcript on screen, it shows that subagent's reviews.
 
-What draws where: the pane on every surface Claude Code draws panes for (terminal, desktop, VS Code, mobile; whether VS Code paints it is for a live check to say), and the band on the terminal and desktop only. Where a surface draws nothing (a `claude -p` run, the SDK, cloud), nothing is drawn and nothing is lost: `/council debate` prints the rows as transcript lines, and the audit log and `/council` keep the full record. In a cloud session the web client does not show those transcript lines either, so there the audit log is the record. The mod does not reach a cloud session from repository settings; see [Cloud sessions](../../docs/INSTALL.md#cloud-sessions).
+What draws where: the pane on every surface Claude Code draws panes for (terminal, desktop, VS Code, mobile; whether VS Code paints it is for a live check to say), and the band on the terminal and desktop only. Where a surface draws nothing (a `claude -p` run, the SDK, cloud), nothing is drawn and nothing is lost: `/council debate` prints the rows as transcript lines, and the audit log and `/council` keep the full record. In a cloud session the web client does not show those transcript lines either, so there the audit log is the record, and a few things reach you through Claude instead ([Where nothing draws](#where-nothing-draws); the debate pane's rows are not among them). The mod does not reach a cloud session from repository settings; see [Cloud sessions](../../docs/INSTALL.md#cloud-sessions).
+
+## Where nothing draws
+
+Some clients draw nothing the mod makes: the cloud web client, `claude -p` and the SDK report no
+surface (no pane, no status line, no toast), and the transcript lines `/council` prints are not
+shown there. In those sessions the only way to reach you is Claude, so a few things go through it.
+This applies only where nothing draws; with a terminal, desktop app, VS Code or the phone app
+attached, nothing changes and Claude reads none of it.
+
+**What reaches you through Claude**
+
+- **`/council` status, report, rules and test, when you type them.** The same lines the pane would
+  show are handed to Claude with an instruction to repeat them to you verbatim, in a code block, when
+  it next replies. They sit inside a fenced block that Claude is told to treat as the council's output,
+  not as instructions. Every line is redacted first, a typed command included, and `/council rules`
+  shows an exact-string allowlist entry as `(an exact string, not shown)` instead of its first three
+  characters. (A command does not start a reply by itself: Claude repeats the lines when you next
+  write to it, for example "go on".)
+- **A notice at the start of the session**, saying the council is active, that a call needing your
+  approval is refused here with the reason, and that Claude should tell you which call was refused
+  and why.
+- **The refusal when a call needs you and nobody can be asked.** It names the operation (the same
+  redacted key the audit log holds), the rule behind it and the reviewers that looked at it, by
+  name only, and the way to let it run.
+
+**What never goes through Claude:** the read-only preview and any secrets finding (its label, its
+snippet and the secret), a diff, the call's own text or what a write would put in a file, a
+reviewer's reason or failure, and every other subcommand (`log`, `off`, `on`, `shadow`, `model`,
+`models`, `reload`, `debate`). Only a person's own command is answered this way: one that arrives
+from a plugin, another Claude session or a scheduled prompt gets nothing back, so Claude cannot
+probe how a command would be classified.
+
+**Letting a refused call run.** You can add an allow rule for it to `.claude/council-of-elrond/rules.json`
+yourself (Claude is told not to edit that file: it is a protected path), or continue the session in a
+terminal, where the council can ask you. Neither the notice nor the refusal offers turning the council
+off or shadow mode as a way round, and a chat approval does not exist yet.
 
 ## Secrets scan
 
@@ -398,7 +437,8 @@ the read-only preview when there is one, and each reviewer's verdict. You can:
 - **Type an instruction:** it is refused and your text is passed to Claude.
 
 Dismissing the question, or choosing Claude Code's own "Chat about this", refuses the call and counts as a failed attempt (Claude Code does not tell the mod which of the two you chose). Where nobody can be asked (`claude -p`, nothing
-attached), the call is refused with the reason.
+attached), the call is refused, and the refusal tells Claude which operation, which rule and which
+reviewers to name to you, and how you can let it run; see [Where nothing draws](#where-nothing-draws).
 
 ### Allow rules after "allow once"
 

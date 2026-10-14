@@ -111,7 +111,9 @@ Tested: `claude -p` (headless, in the live checks), and a cloud session (Claude 
 with the mod installed by the environment's setup script. In the cloud it loads at session start
 and enforces (rules, reviews, previews, the audit log) but draws nothing, since the web client is
 not a render surface (`$.session.surfaces()` is empty), and every call that would come to the
-user is refused as "nobody can be asked" (DESIGN.md §14; work items C2 to C6 in the ROADMAP). A
+user is refused as "nobody can be asked" (DESIGN.md §14; work items C3 to C6 in the ROADMAP). Since C2
+the model is the channel to the person there: a start notice, four `/council` outputs for a person's
+own command and the refusal's details go through it (DESIGN.md §13.5). A
 repository's settings do not load plugins there; the setup script or organization managed
 settings do (docs/INSTALL.md, "Cloud sessions"). The terminal's interactive screens await the
 maintainer's check (ROADMAP "Final deliverables"). Expected to work with no drawing: the desktop
