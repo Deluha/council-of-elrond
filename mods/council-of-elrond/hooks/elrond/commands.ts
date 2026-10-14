@@ -102,6 +102,12 @@ export function parseCouncil(args: string): CouncilCommand {
 export const needsPerson = (command: CouncilCommand): boolean =>
   (command.kind === 'bypass' && command.on) || (command.kind === 'shadow' && command.on) || command.kind === 'model'
 
+/**
+ * Whether a prompt submission runs the `/council` command (`name`): it never asks
+ * the model, so unlike a skill or prompt command it does not start a new task.
+ */
+export const isCouncilCommand = (command: { name: string } | undefined, name: string): boolean => command?.name === name
+
 export const isSlot = (value: string): value is ModelSlot => (MODEL_SLOTS as readonly string[]).includes(value)
 
 export const WHO_OF_SLOT: Readonly<Record<ModelSlot, StringKey>> = {

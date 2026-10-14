@@ -92,6 +92,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   engine changes found by probe: a hook that overruns its time budget, or blocks the hooks worker,
   is now cut off and its `.catch` asked; the mod refuses the call in both cases, as it already did
   for any failure before a call ran.
+- **`/council` no longer resets the review rounds.** A `/council` command you type keeps the
+  current prompt's rounds, failed attempts and cached approvals, and the prompt the reviewers see,
+  as they were. Other slash commands still start afresh.
 
 
 ### Security
@@ -133,6 +136,8 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   has been denied" and "Permission to read … has been denied" (read from the 2.1.296 binary) now
   read as `denied-by-permission`, like "Permission to use … has been denied", so they never count
   as a failed attempt; before, they were ordinary tool errors.
+- **A failure in the prompt hook no longer risks the mod.** The mod's prompt hook now has its own
+  error handler, so if it fails the prompt goes through as typed and the mod stays loaded.
 
 ## [0.5.0] - 2026-10-08
 

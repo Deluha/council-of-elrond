@@ -1,9 +1,14 @@
 import { describe, expect, test } from 'claude-code/testing'
+import type { Plugin } from 'claude-code/testing'
 
-import { APPROVE, auditLines, BLOCK, denyOf, KEEP_BLOCKED, REVISE, world } from './fixtures.js'
+import type { CouncilSession } from '../types'
+import { APPROVE, auditLines, BLOCK, denyOf, KEEP_BLOCKED, REVISE, watchState, world } from './fixtures.js'
 
 const submit = ($: { prompt: { submit: (e: never) => Promise<unknown> } }, text: string) =>
   $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } } as never)
+
+const submitCommand = ($: { prompt: { submit: (e: never) => Promise<unknown> } }, text: string, command: { name: string; args: string }) =>
+  $.prompt.submit({ text, command, wait: false, origin: { kind: 'composer' } } as never)
 
 describe('rounds', () => {
   test('two refusals use the rounds; a rephrased retry then goes to the user, not the model', async ($, on) => {
@@ -136,5 +141,81 @@ describe('cache', () => {
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).toEqual({ result: 'ran' })
     expect(w.modelRequests).toHaveLength(2)
+  })
+})
+
+/**
+ * A plugin above the mod that appends how the engine settled the mod's prompt hook to the
+ * text it hands back (a plugin runs apart from the test, so it cannot share a variable).
+ */
+const WATCHER: Plugin = {
+  name: 'watcher',
+  tier: 'prepend',
+  register(on) {
+    on('prompt.submit', async ($, e, next) => {
+      const result = await next(e)
+      if (result.drop !== undefined) return result
+      const settled = next.trace.filter(entry => entry.plugin === 'council-of-elrond').map(entry => entry.outcome)
+      return { ...result, text: `${result.text} [${settled.join(',')}]` }
+    })
+  },
+}
+
+describe('the per-prompt reset and slash commands', () => {
+  const RM = { tool: 'Bash', command: 'rm -rf build' } as const
+  const lastOf = (written: readonly unknown[]): CouncilSession => written.at(-1) as CouncilSession
+
+  test('a person\'s /council command keeps the prompt\'s rounds, lockout, cache and latest prompt', async ($, on) => {
+    const w = world(on, { replies: [BLOCK, BLOCK, APPROVE], answer: KEEP_BLOCKED })
+    const state = watchState(on)
+    on('prompt.submit', ($$, e) => ({ text: e.text }))
+    await submit($ as never, 'delete the build output')
+    for (const command of ['rm -rf build', 'rm -r build', 'rm -rf build/']) await $.tool.call({ tool: 'Bash', command })
+    const writes = state.written.length
+    await submitCommand($ as never, '/council status', { name: 'council', args: 'status' })
+    expect(state.written).toHaveLength(writes)
+    expect(lastOf(state.written).latestPrompt).toBe('delete the build output')
+    expect(denyOf(await $.tool.call(RM))).toContain('locked out')
+    expect(w.modelRequests).toHaveLength(2)
+  })
+
+  test('and its cached approvals', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    on('prompt.submit', ($$, e) => ({ text: e.text }))
+    await submit($ as never, 'delete the build output')
+    await $.tool.call(RM)
+    await submitCommand($ as never, '/council report', { name: 'council', args: 'report' })
+    await $.tool.call(RM)
+    expect(w.modelRequests).toHaveLength(1)
+    expect(w.ran).toHaveLength(2)
+  })
+
+  test('another slash command starts afresh, as a plain prompt does', async ($, on) => {
+    const w = world(on, { replies: [BLOCK, BLOCK, APPROVE], answer: 'dismiss' })
+    const state = watchState(on)
+    on('prompt.submit', ($$, e) => ({ text: e.text }))
+    for (const command of ['rm -rf build', 'rm -r build', 'rm -rf build/']) await $.tool.call({ tool: 'Bash', command })
+    expect(denyOf(await $.tool.call(RM))).toContain('locked out')
+    await submitCommand($ as never, '/review the diff', { name: 'review', args: 'the diff' })
+    expect(lastOf(state.written).latestPrompt).toBe('/review the diff')
+    expect(lastOf(state.written).ops).toEqual({})
+    expect(await $.tool.call(RM)).not.toHaveProperty('deny')
+    expect(w.ran).toHaveLength(1)
+  })
+
+  test('a prompt hook that fails before next is caught, and the prompt still enters as typed', { plugins: [WATCHER] }, async ($, on) => {
+    world(on, {})
+    const state = watchState(on)
+    state.refuseWrite = () => true
+    const seen: string[] = []
+    on('prompt.submit', ($$, e) => {
+      seen.push(e.text)
+      return { text: e.text }
+    })
+    const result = await submit($ as never, 'carry on')
+    expect(seen).toEqual(['carry on'])
+    // Without its own .catch the engine would skip the hook, and a stuck one can cost the plugin.
+    expect(result).toMatchObject({ text: 'carry on [caught]' })
+    expect(state.written).toEqual([])
   })
 })

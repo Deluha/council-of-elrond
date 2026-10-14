@@ -11,7 +11,7 @@ import { MODEL_SLOTS } from './config/types.js'
 import type { GimliCommand, MemberName, ModelSlot } from './config/types.js'
 import { withAllowlistEntry, withRule } from './config/write.js'
 import type { FileEdit } from './config/write.js'
-import { isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
+import { isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
 import { combine, hasRealBlock } from './elrond/combine.js'
 import type { Voice } from './elrond/combine.js'
 import { bigOperationOf, councilSeats, needsCurrentBranch, rangeOf } from './elrond/council.js'
@@ -1155,12 +1155,16 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    if (HUMAN_ORIGINS.has(e.origin.kind)) {
+    // `/council` never asks the model, so it is not a new task; a skill or prompt command is.
+    if (HUMAN_ORIGINS.has(e.origin.kind) && !isCouncilCommand(e.command, COMMAND)) {
       const patterns = (await contextOf($).catch(() => undefined))?.patterns
       await update($, session, value => resetForPrompt(sessionOf(value), redact(e.text, patterns)))
     }
     return next(e)
-  })
+  }).catch(($, e, next) =>
+    // A failing hook must not cost the person's prompt or, left uncaught, the plugin; pass it as typed.
+    next(e),
+  )
 
   // Output goes to the user (decision 1). The one exception: where nothing draws, a person's
   // status, report, rules and test also reach Claude as `context`, to relay (ROADMAP C2).
