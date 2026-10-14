@@ -346,12 +346,12 @@ attached, nothing changes and Claude reads none of it.
 **What reaches you through Claude**
 
 - **`/council` status, report, rules and test, when you type them.** The same lines the pane would
-  show are handed to Claude with an instruction to repeat them to you verbatim, in a code block, in
-  its next reply. They sit inside a fenced block that Claude is told to treat as the council's output,
+  show are handed to Claude with an instruction to repeat them to you verbatim, in a code block, when
+  it next replies. They sit inside a fenced block that Claude is told to treat as the council's output,
   not as instructions. Every line is redacted first, a typed command included, and `/council rules`
   shows an exact-string allowlist entry as `(an exact string, not shown)` instead of its first three
-  characters. (Claude shows it in its next reply; whether that follows the command at once or after
-  your next message depends on the client, and has not been checked live.)
+  characters. (A command does not start a reply by itself: Claude repeats the lines when you next
+  write to it, for example "go on".)
 - **A notice at the start of the session**, saying the council is active, that a call needing your
   approval is refused here with the reason, and that Claude should tell you which call was refused
   and why.
