@@ -708,3 +708,46 @@ Decisions in recording it:
 2. **The guide shows `#main` and says to pin a release tag** once releases are tagged (`council-of-elrond--v<version>`, docs/MAINTENANCE.md "Releasing"): a gate that follows every merge changes under a team without its review.
 3. **The one-repository limit is in the guide now**, ahead of C5, since a second repository silently drops the project's rules and the audit log.
 4. **The README's "nothing is lost" note** now names the cloud as a place where `/council`'s transcript lines are not shown either.
+
+### 14.1 C3: `$.ui.ask` where nothing draws
+
+ROADMAP C3, run on 2026-10-19.
+
+**The probe.** A probe build ran on a branch that was never merged (`probe/c3-cloud-ask-DO-NOT-MERGE`).
+- Where `$.session.surfaces()` is empty, it attempted the escalation ask, with no timeout. On a rejection it fell back to the nobody-to-ask refusal.
+- It logged the ask, the hook's remaining own-time budget, the prompt and command origins, and the roster. The lines went to a file at the session root and to the debug log, with every string redacted.
+
+**The runs.**
+- **The cloud session.** The maintainer ran it once in a cloud session:
+  - Claude Code on the web, Claude Code 2.1.303, permission mode Auto;
+  - one repository, with the mod installed by the environment's setup script;
+  - one gated call, `sudo -n true` (rule `privileged`, ask tier, no reviewer).
+- **The terminal.** A second check ran `main` with the same call in a terminal (a GitHub Codespace, 2.1.303, Auto mode).
+
+| Question | Result |
+| :- | :- |
+| The roster in a cloud session | `surfaces: []`, `surface: null` and `isInteractive: false` at every session start, as in the first trial (the table above). |
+| The web client's prompts | Origin `composer`, `isMeta` false, no `command`. Not `bridge`, not `sdk`. |
+| Whether the ask reaches the person | **No.** The web client did not show the question. The engine sent the `AskUserQuestion` permission request to the remote host. The host answered 35.8 s later with the first option, "Need: allow once". The answer came back as a `control_response` with no device attestation, and the debug log reads "Slow permission decision: 35750ms for AskUserQuestion (mode=auto, behavior=allow)". The call ran (audit `decision: allow-once`, `outcome: ran`). The person saw nothing and chose nothing. |
+| The budget | A pending ask holds the call and does not count against the hook's own-time budget. `remainingMs` was 9989 when the ask started and 9988 when it was answered 35.8 s later. No `.catch` was asked, and the `tool.call` hook settled in 36,054 ms. This is ROADMAP fact 3, confirmed live. |
+| Re-entry | The engine skipped the mod's own `tool.call` hook for its `AskUserQuestion` (`skipped: re-entry`), as the types say (§12.1). |
+| The start notice | Claude read C2's notice as part of the person's first message, not as a row of its own. It said it could not tell whether the plugin was running. |
+| A terminal in Auto mode (`main`) | The question was shown and waited for the person, who answered it after about six minutes (`latencyMs` 365,433). Auto mode does not answer it there. |
+| Not measured | The run stopped once the ask had been answered without the person, so these were not measured: the origin of a `/council` command typed in the web client; whether such a command raises `prompt.submit` with `command` set; and the rejection message for a dismissal in the web client. Also not tried: a permission mode other than Auto in the cloud, and the desktop, VS Code and mobile surfaces in Auto mode. |
+
+Decisions:
+
+1. **Never ask where nothing draws.**
+   - An answer from `$.ui.ask` does not prove a person chose it: in a cloud session the host answered for them.
+   - `escalate` keeps returning `unavailable` before any ask when surfaces is empty, so `main` is unchanged, and no `cloudAsk` option exists.
+   - The C3 alternative, mapping a rejection to `unavailable`, does not arise.
+2. **C4 goes ahead.** The ROADMAP item was to be skipped only if the client answered the dialog for the person, and it does not: the question never reaches them. A person's prompt in the web client has origin `composer`, which is already in C4's list.
+3. **`sdk` in `HUMAN_ORIGINS` is reviewed with C4.**
+   - It counted as a person's until C3 named the web client's kind, and C3 named `composer`.
+   - Dropping `sdk` would be a tightening. `-p` and Agent SDK turns would then no longer:
+     - reset the per-prompt state;
+     - run `/council off`, `shadow on` or `model`;
+     - get the C2 relay.
+   - It changes code, so it goes with C4 and is not made here.
+4. **The probe build was installable** by anyone who named its branch while the branch existed. The branch is to be deleted once these results are recorded.
+5. **The types are 2.1.299; the run was on 2.1.303.** Regenerate them (`/upgrade-types`) before C4.
