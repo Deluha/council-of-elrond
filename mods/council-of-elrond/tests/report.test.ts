@@ -3,12 +3,9 @@ import { describe, expect, test } from 'claude-code/testing'
 import { auditLine } from '../hooks/audit.js'
 import type { AuditRecord } from '../hooks/audit.js'
 import { parseAudit, reportOutput } from '../hooks/elrond/report.js'
-import { auditLines, ROOT, world } from './fixtures.js'
+import { auditLines, council, ROOT, world } from './fixtures.js'
 
 const LOG = `${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`
-
-type Dollar = { command: { run: (e: { command: string; args?: string }) => Promise<unknown> } }
-const council = ($: unknown, args = '') => ($ as Dollar).command.run({ command: 'council', args })
 
 /** One audit line, as the mod writes it, with the fields a test names. */
 const line = (fields: Partial<AuditRecord>): string =>
@@ -153,9 +150,9 @@ describe('/council report', () => {
   test('reads what the mod itself logs: a review records its time, and the report counts it', async ($, on) => {
     const w = world(on, { surfaces: [] })
     await $.tool.call({ tool: 'Bash', command: 'rm -r build' })
-    expect(typeof auditLines(w)[0]?.reviewMs).toBe('number')
+    expect(typeof (await auditLines(w))[0]?.reviewMs).toBe('number')
     await council($, 'report')
-    expect(w.logs.join('\n')).toContain('the destructive-operations reviewer [gandalf]: 1 reviews alone, 1000 tokens')
+    expect(w.logs.join('\n')).toContain('Gandalf [gandalf]: 1 reviews alone, 1000 tokens')
   })
 
   test('an unreadable rotated file is named and left out; the rest is reported', async ($, on) => {

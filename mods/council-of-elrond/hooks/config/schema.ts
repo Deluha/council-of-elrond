@@ -1,4 +1,5 @@
-import { globToRegExp, slashRegex, toolMatcher } from '../rules/globs.js'
+import { globToRegExp, protectedMatcher, slashRegex, toolMatcher } from '../rules/globs.js'
+import type { ProtectedMatcher } from '../rules/globs.js'
 import { SHIPPED } from './defaults.js'
 import {
   BIG_CHECKS,
@@ -6,6 +7,7 @@ import {
   MEMBERS,
   MODEL_SLOTS,
   PROFILES,
+  SECRET_KINDS,
   SECRET_LEVELS,
   TIERS,
 } from './types.js'
@@ -44,7 +46,7 @@ export type CompiledConfig = {
   config: Config
   /** Project rules first, in file order, then the enabled shipped rules. */
   rules: readonly CompiledRule[]
-  protectedPaths: readonly { glob: string; re: RegExp }[]
+  protectedPaths: readonly ProtectedMatcher[]
   protectedBranches: readonly RegExp[]
   production: readonly RegExp[]
   bigOperations: readonly BigOperation[]
@@ -80,7 +82,7 @@ export const GIMLI_TIMEOUT = { default: 120_000, min: 1_000, max: 600_000 } as c
 const MAX_GIMLI_COMMANDS = 8
 
 const GOLLUM_KEYS = ['patterns', 'allowlist'] as const
-const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label'] as const
+const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label', 'kind'] as const
 
 /** A fingerprint as the dialog shows it; anything else in the allowlist is an exact string. */
 export const SECRET_FINGERPRINT = /^sha256:[0-9a-f]{16}$/
@@ -222,6 +224,7 @@ function validateGollum(raw: unknown, errors: string[]): Overrides['gollum'] {
         if (problem !== undefined) errors.push(`${field}.regex: ${problem}`)
         else if (new RegExp(item.regex as string).test('')) errors.push(`${field}.regex: must not match empty text`)
         if (typeof item.label !== 'string' || item.label.trim() === '') errors.push(`${field}.label: required string`)
+        if (item.kind !== undefined && !includes(SECRET_KINDS, item.kind)) errors.push(`${field}.kind: one of ${SECRET_KINDS.join(', ')}`)
         if (errors.length > before) return
         seen.add(item.id as string)
         out.patterns?.push({
@@ -229,6 +232,7 @@ function validateGollum(raw: unknown, errors: string[]): Overrides['gollum'] {
           level: item.level as GollumPattern['level'],
           regex: item.regex as string,
           label: (item.label as string).trim(),
+          ...(item.kind === undefined ? {} : { kind: item.kind as GollumPattern['kind'] }),
         })
       })
     }
@@ -484,7 +488,7 @@ export function compileConfig(config: Config, projectRuleIds: ReadonlySet<string
   return {
     config,
     rules,
-    protectedPaths: config.protectedPaths.map(glob => ({ glob, re: globToRegExp(glob) })),
+    protectedPaths: config.protectedPaths.map(protectedMatcher),
     protectedBranches: config.protectedBranches.map(branchToRegExp),
     production: config.productionPatterns.map(pattern => new RegExp(pattern, 'i')),
     bigOperations: config.bigOperations.map(compileBigOperation),

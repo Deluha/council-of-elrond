@@ -9,7 +9,7 @@ The mod sits on three things that move without it:
 | Dependency | How it breaks | How you notice |
 | :- | :- | :- |
 | Claude Code's plugin API (`mods/types/claude-code.d.ts`) | A method changes shape or goes away; a new event the mod should handle appears. | `tsc -p mods` fails after regenerating the types; or behaviour changes with no type change (probe it). |
-| Wording read from Claude Code's binary | The permission-prompt refusal text ("The user doesn't want to proceed with this tool use", "…take this action right now") and the automatic denial text ("… needs approval …") change. The mod tells a user's refusal from a tool error by that wording. | A user's refusal at the permission prompt stops counting as a failed attempt; `outcome` in the audit log reads `error` where it should read `refused-by-user`. |
+| Wording read from Claude Code's binary | The permission-prompt refusal text ("The user doesn't want to proceed with this tool use", "…take this action right now") and the automatic denial text ("… needs approval …", "This command requires approval", the deny-rule wording) change. The mod tells a user's refusal from a tool error by that wording. | A user's refusal at the permission prompt stops counting as a failed attempt; `outcome` in the audit log reads `error` where it should read `refused-by-user`. |
 | Model aliases | `sonnet`, `opus`, `fable`, `haiku` resolve to the newest model the build knows; token caps, effort and deadlines are set per family in `hooks/elrond/models.ts`. A new family needs a profile; a slower model needs a longer deadline. | `/council model` probe fails; reviews time out. |
 
 ## When Claude Code updates
@@ -31,18 +31,19 @@ Run this whenever `claude --version` differs from the version at the top of DESI
    ```sh
    BIN=$(readlink -f "$(command -v claude)")
    grep -a -o "The user doesn't want to [a-z ]*" "$BIN" | sort -u
-   grep -a -o "needs approval[^\"]*" "$BIN" | sort -u | head
+   grep -a -o -E "[a-z ]*(needs|requires) approval[^\"]{0,80}" "$BIN" | sort -u | head
+   grep -a -o -E "requested permissions? to (use|write|edit|read|run)[^\"]{0,80}|haven't granted it yet[^\"]{0,40}|permission to use [^\"]{0,60} has been denied" "$BIN" | sort -u | head
    ```
    If the wording changed, update `hooks/elrond/operations.ts` (`outcomeOf`) and its tests.
 5. **Re-probe what the tests can't.** The behaviours established by live probes (DESIGN.md §1,
-   §4): the own-time budget not cutting a hook off, `$.ui.ask` rejecting in `-p`, `$.process.spawn`
-   ending on `return()`, `ui_log` lines in stream-json. One headless run per behaviour, in a
-   throwaway repo.
+   §4): the own-time budget cutting a hook off (from 2.1.299, a `timeout` `.catch`), `$.ui.ask`
+   rejecting in `-p`, `$.process.spawn` ending on `return()`, `ui_log` lines in stream-json. One
+   headless run per behaviour, in a throwaway repo.
 6. **Record it.** The version line at the top of DESIGN.md, the drift in one sentence, and any
    changed decision. Mention the version in CHANGELOG.
 7. **Pin CI if needed.** `.github/workflows/ci.yml` installs the latest `@anthropic-ai/claude-code`.
    If a newer release breaks the vendored types before you have time to upgrade, pin the version
-   there (`npm install -g @anthropic-ai/claude-code@2.1.291`) and open an issue.
+   there (`npm install -g @anthropic-ai/claude-code@2.1.294`) and open an issue.
 
 ## Releasing
 
@@ -58,15 +59,17 @@ Versions are the `version` field in `mods/council-of-elrond/.claude-plugin/plugi
    claude plugin tag mods/council-of-elrond --dry-run
    claude plugin tag mods/council-of-elrond -m "council-of-elrond %s" --push
    ```
-   It creates a `council-of-elrond--v0.5.0` tag. Pushing it runs `.github/workflows/release.yml`,
+   It creates a `council-of-elrond--v0.6.0` tag. Pushing it runs `.github/workflows/release.yml`,
    which checks the tag against `plugin.json` and `CHANGELOG.md`, re-runs the gates and publishes
    the GitHub release with that version's changelog section as its body. Nothing is built.
 5. Users on the marketplace get it with `claude plugin marketplace update` and
    `claude plugin update`.
 
-**When is it 1.0.0?** When Stage 6 and the final deliverables (ROADMAP) are done, the definition of
-done (SPEC §22) is checked off, and the shipped rules have had a few weeks of shadow-mode reports
-from real projects without a change.
+**When is it 1.0.0?** When the maintainer's terminal check has passed (ROADMAP "Final
+deliverables"), the ~40-case live eval has run and its results are in DESIGN.md (ROADMAP "Before
+1.0"), and the shipped rules have had a few weeks of shadow-mode reports from real projects
+without a change. Stage 6 and the final deliverables are done; the definition of done (SPEC §22)
+is checked off (DESIGN.md §12.2).
 
 ## Reviewing a pull request
 
@@ -104,8 +107,17 @@ time. If a contributor adds a field, check it against this list.
 
 ## Supported hosts
 
-Tested: the terminal (interactive, by the maintainer) and `claude -p` (headless, in the live
-checks). Expected to work with no drawing: the desktop app, VS Code and JetBrains panels, the
-Agent SDK, cloud sessions, where `$.ui.ask` may or may not be answerable (it rejects where it
-can't be shown, which refuses the call). Windows shells are not parsed (POSIX only). Say so in
-issues rather than guessing.
+Tested: `claude -p` (headless, in the live checks), and a cloud session (Claude Code on the web)
+with the mod installed by the environment's setup script. In the cloud it loads at session start
+and enforces (rules, reviews, previews, the audit log) but draws nothing, since the web client is
+not a render surface (`$.session.surfaces()` is empty), and every call that would come to the
+user is refused as "nobody can be asked" (DESIGN.md §14; work items C3 to C6 in the ROADMAP). Since C2
+the model is the channel to the person there: a start notice, four `/council` outputs for a person's
+own command and the refusal's details go through it (DESIGN.md §13.5). A
+repository's settings do not load plugins there; the setup script or organization managed
+settings do (docs/INSTALL.md, "Cloud sessions"). The terminal's interactive screens await the
+maintainer's check (ROADMAP "Final deliverables"). Expected to work with no drawing: the desktop
+app, VS Code and JetBrains panels and the Agent SDK. Where `$.ui.ask` can't be shown it rejects,
+which refuses the call; where no surface is attached, as in the cloud, the mod refuses without
+trying it (ROADMAP C3 probes it). Windows shells are not parsed (POSIX only). Say so in issues
+rather than guessing.

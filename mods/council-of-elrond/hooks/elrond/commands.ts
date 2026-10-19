@@ -11,13 +11,14 @@ import { text } from '../strings.js'
 import type { StringKey } from '../strings.js'
 import type { ModelChoice } from './models.js'
 import type { Operation } from './operations.js'
-import { KEY_WIPE_CAP } from './operations.js'
+import { attemptsOf } from './operations.js'
 import type { Route, Seat } from './routing.js'
 
 /**
  * `/council`: one command, its subcommands parsed from the raw argument
- * string, and its output built as lines. The output is for the user only:
- * register.ts draws it in a pane or logs it, and never hands it to Claude.
+ * string, and its output built as lines. The output is for the user: register.ts
+ * draws it in a pane or logs it. Where nothing draws, four subcommands also reach
+ * Claude, redacted (relay.ts, ROADMAP C2).
  */
 
 export type CouncilCommand =
@@ -31,6 +32,7 @@ export type CouncilCommand =
   | { kind: 'model'; slot: string; model: string; save: boolean }
   | { kind: 'reload' }
   | { kind: 'report' }
+  | { kind: 'debate' }
   | { kind: 'usage'; key: StringKey; params?: Record<string, string> }
 
 export type Output = { title: string; lines: string[] }
@@ -85,10 +87,26 @@ export function parseCouncil(args: string): CouncilCommand {
       return { kind: 'reload' }
     case 'report':
       return { kind: 'report' }
+    case 'debate':
+      return { kind: 'debate' }
     default:
       return { kind: 'usage', key: 'cmd.unknown', params: { sub } }
   }
 }
+
+/**
+ * Whether a subcommand loosens the gate (bypass on, shadow on, a model switch),
+ * so only a person typing it may run it. `models` (the listing), `on`,
+ * `shadow off` and the rest change nothing that lets more through.
+ */
+export const needsPerson = (command: CouncilCommand): boolean =>
+  (command.kind === 'bypass' && command.on) || (command.kind === 'shadow' && command.on) || command.kind === 'model'
+
+/**
+ * Whether a prompt submission runs the `/council` command (`name`): it never asks
+ * the model, so unlike a skill or prompt command it does not start a new task.
+ */
+export const isCouncilCommand = (command: { name: string } | undefined, name: string): boolean => command?.name === name
 
 export const isSlot = (value: string): value is ModelSlot => (MODEL_SLOTS as readonly string[]).includes(value)
 
@@ -114,8 +132,7 @@ const ZERO_COUNTS = { approved: 0, revised: 0, blocked: 0, failed: 0 }
 
 export function statusOutput(input: StatusInput): Output {
   const { session } = input
-  const ops = Object.values(session.ops)
-  const wipes = Object.values(session.verbWipes).reduce((sum, n) => sum + n, 0)
+  const attempts = attemptsOf(session)
   const typical = median(session.reviewMs)
   const onOff = (on: boolean): string => text(on ? 'cmd.on' : 'cmd.off')
   return {
@@ -149,7 +166,7 @@ export function statusOutput(input: StatusInput): Output {
       }),
       text('cmd.memberCode', { who: text('who.gollum'), state: onOff(input.gollumEnabled) }),
       text('cmd.memberCode', { who: text('who.galadriel'), state: onOff(input.galadrielEnabled) }),
-      text('cmd.attempts', { count: wipes, ops: ops.length, locked: ops.filter(op => op.wipes >= KEY_WIPE_CAP).length }),
+      text('cmd.attempts', attempts),
       text('cmd.tokens', { spent: session.tokensSpent, budget: input.tokenBudget }),
       typical === undefined
         ? text('cmd.noReviews')
@@ -190,7 +207,11 @@ export function logOutput(logText: string, count: number): Output {
   }
 }
 
-export function rulesOutput(compiled: CompiledConfig, origin: string, errors: readonly string[]): Output {
+/**
+ * `forModel`: the copy relayed through Claude (relay.ts). An exact-string allowlist
+ * entry shows no character at all, where the person's own copy shows its first three.
+ */
+export function rulesOutput(compiled: CompiledConfig, origin: string, errors: readonly string[], forModel = false): Output {
   const rules = [...compiled.rules].sort((a, b) => TIERS.indexOf(b.tier) - TIERS.indexOf(a.tier))
   const list = (key: StringKey, items: readonly string[]): string[] =>
     items.length === 0 ? [] : [text('cmd.listLine', { name: text(key), items: items.join(', ') })]
@@ -203,7 +224,10 @@ export function rulesOutput(compiled: CompiledConfig, origin: string, errors: re
       ...list('cmd.list.protectedBranches', compiled.config.protectedBranches),
       ...list('cmd.list.production', compiled.config.productionPatterns),
       ...list('cmd.list.secretPatterns', compiled.config.gollum.patterns.map(pattern => `${pattern.id} (${pattern.level})`)),
-      ...list('cmd.list.allowlist', compiled.config.gollum.allowlist.map(entry => (entry.startsWith('sha256:') ? entry : `${entry.slice(0, 3)}…`))),
+      ...list(
+        'cmd.list.allowlist',
+        compiled.config.gollum.allowlist.map(entry => (entry.startsWith('sha256:') ? entry : forModel ? text('cmd.allowlistHidden') : `${entry.slice(0, 3)}…`)),
+      ),
     ],
   }
 }

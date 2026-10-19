@@ -68,21 +68,27 @@ export function auditLine(record: AuditRecord): string {
   return `${JSON.stringify({ ...record, reason })}\n`
 }
 
-/** Collapses whitespace in every string, sorting keys, so a reformatted call matches. */
-function canonical(value: unknown): unknown {
-  if (typeof value === 'string') return value.replace(/\s+/g, ' ').trim()
-  if (Array.isArray(value)) return value.map(canonical)
+// Fields whose whitespace carries no meaning, so a reformatted value is the
+// same call. A shell command is one; a file's content is NOT (indentation is
+// significant in YAML, Python, Makefiles), so it is hashed exactly, or a
+// re-indented write would reuse an earlier approve without review.
+const INSIGNIFICANT_WHITESPACE = new Set(['command'])
+
+/** Sorts keys; collapses whitespace only in fields where it has no meaning. */
+function canonical(value: unknown, collapseWhitespace = false): unknown {
+  if (typeof value === 'string') return collapseWhitespace ? value.replace(/\s+/g, ' ').trim() : value
+  if (Array.isArray(value)) return value.map(item => canonical(item, collapseWhitespace))
   if (typeof value === 'object' && value !== null) {
     return Object.fromEntries(
       Object.keys(value)
         .sort()
-        .map(key => [key, canonical((value as Record<string, unknown>)[key])]),
+        .map(key => [key, canonical((value as Record<string, unknown>)[key], INSIGNIFICANT_WHITESPACE.has(key))]),
     )
   }
   return value
 }
 
-/** The text a fingerprint hashes: tool name plus arguments, whitespace collapsed. */
+/** The text a fingerprint hashes: tool name plus arguments, canonicalised. */
 export const fingerprintText = (tool: string, input: unknown): string => `${tool}\u0000${JSON.stringify(canonical(input))}`
 
 export async function fingerprintOf(tool: string, input: unknown): Promise<string> {
@@ -92,6 +98,15 @@ export async function fingerprintOf(tool: string, input: unknown): Promise<strin
 }
 
 export const ROTATED_FILES = 3
+
+const encoder = new TextEncoder()
+
+/** The UTF-8 size of a text: the unit the log's limit is in, which `.length` is not. */
+export const byteLength = (value: string): number => encoder.encode(value).length
+
+/** Whether appending `line` to `current` takes the file past `maxBytes`: the older files are read, and the log rotates, only then. */
+export const isRotation = (current: string, line: string, maxBytes: number): boolean =>
+  current !== '' && byteLength(current) + byteLength(line) > maxBytes
 
 /**
  * The writes that append `line` to a log holding `current`: the new current
@@ -105,8 +120,7 @@ export function appendPlan(
   maxBytes: number,
   older: readonly (string | undefined)[],
 ): { path: string; text: string }[] {
-  const size = new TextEncoder().encode(current).length + new TextEncoder().encode(line).length
-  if (current === '' || size <= maxBytes) return [{ path, text: current + line }]
+  if (!isRotation(current, line, maxBytes)) return [{ path, text: current + line }]
   const writes: { path: string; text: string }[] = []
   for (let n = ROTATED_FILES - 1; n >= 1; n--) {
     const source = n === 1 ? current : older[n - 2]

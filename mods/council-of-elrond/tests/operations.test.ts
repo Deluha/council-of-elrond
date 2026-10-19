@@ -16,7 +16,7 @@ import type { OpsState } from '../hooks/elrond/operations.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
 import { INITIAL_SESSION, resetForPrompt } from '../hooks/state.js'
-import { CONTEXT, ROOT, SHIPPED_COMPILED } from './fixtures.js'
+import { CONTEXT, FAKE_GITHUB_TOKEN, ROOT, SHIPPED_COMPILED } from './fixtures.js'
 
 const opOf = (call: Call, cwd = ROOT) => {
   const where = { ...CONTEXT, cwd }
@@ -56,6 +56,12 @@ describe('operation keys', () => {
     expect(key).toContain('psql')
     expect(key).not.toContain('hunter22')
     expect(bash('psql -d staging -c "select 1"').key).toBe('shell:psql staging')
+  })
+
+  test('a secret in a target never reaches the key (it is written to the audit log)', () => {
+    const token = FAKE_GITHUB_TOKEN // the established fixture token
+    const key = bash(`git push https://user:${token}@github.com/o/r main`).key
+    expect(key).not.toContain(token)
   })
 
   test('Edit and Write on one file share a key; their verbs differ', () => {
@@ -119,6 +125,18 @@ describe('outcomes', () => {
     expect(outcomeOf({ isError: true, text: "The user doesn't want to take this action right now. STOP what you are doing." })).toBe('refused-by-user')
     expect(outcomeOf({ isError: true, text: AUTO })).toBe('denied-by-permission')
     expect(outcomeOf({ isError: true, text: 'Permission to use Bash has been denied.' })).toBe('denied-by-permission')
+    expect(outcomeOf({ isError: true, text: 'This command requires approval' })).toBe('denied-by-permission')
+    expect(outcomeOf({ isError: true, text: 'The build requires a newer compiler' })).toBe('error')
+  })
+
+  test('a deny rule on a file reads as an automatic denial', () => {
+    for (const text of [
+      'Permission to edit /work/src/app.ts has been denied.',
+      'Permission to read /work/.env has been denied.',
+      'Permission to read /work/link has been denied (it resolves, through a symbolic link, to a path a Read rule denies).',
+    ]) {
+      expect(outcomeOf({ isError: true, text })).toBe('denied-by-permission')
+    }
   })
 
   test('the person refusing counts; an automatic denial never does', () => {

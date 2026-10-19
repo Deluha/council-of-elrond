@@ -6,7 +6,7 @@ import { route } from '../hooks/elrond/routing.js'
 import type { Enabled } from '../hooks/elrond/routing.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
-import { APPROVE, auditLines, BLOCK, CONTEXT, denyOf, REVISE, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
+import { APPROVE, auditLines, BLOCK, CONTEXT, denyOf, KEEP_BLOCKED, REVISE, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
 
 const ALL: Enabled = { gandalf: true, legolas: true, aragorn: true }
 
@@ -107,7 +107,7 @@ describe('in the pipeline', () => {
       expect(await $.tool.call(c.call as never)).toEqual({ result: 'ran' })
       expect(w.ran).toEqual([c.call])
       expect(w.modelRequests[0]).toMatchObject({ model: c.model })
-      expect(auditLines(w)[0]).toMatchObject({ member: c.member, profile: c.profile, verdict: 'approve', outcome: 'ran' })
+      expect((await auditLines(w))[0]).toMatchObject({ member: c.member, profile: c.profile, verdict: 'approve', outcome: 'ran' })
     })
 
     test(`${c.name}: revise and block refuse, naming the member`, async ($, on) => {
@@ -115,7 +115,7 @@ describe('in the pipeline', () => {
       expect(denyOf(await $.tool.call(c.call as never))).toContain(`Decided by: ${c.who} (revise).`)
       expect(denyOf(await $.tool.call(c.call as never))).toContain(`Decided by: ${c.who} (block).`)
       expect(w.ran).toEqual([])
-      expect(auditLines(w).map(line => [line.member, line.verdict])).toEqual([
+      expect((await auditLines(w)).map(line => [line.member, line.verdict])).toEqual([
         [c.member, 'revise'],
         [c.member, 'block'],
       ])
@@ -138,11 +138,11 @@ describe('in the pipeline', () => {
     const w = world(on, { replies: [BLOCK] })
     const deny = denyOf(await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/new.ts`, content: 'x' }))
     expect(deny).toContain('Decided by: the destructive-operations reviewer (block).')
-    expect(auditLines(w)[0]).toMatchObject({ member: 'gandalf' })
+    expect((await auditLines(w))[0]).toMatchObject({ member: 'gandalf' })
   })
 
   test('with the member and Gandalf off, the call comes to the user', { options: { aragornEnabled: false, gandalfEnabled: false } }, async ($, on) => {
-    const w = world(on, { answer: 'Keep blocked' })
+    const w = world(on, { answer: KEEP_BLOCKED })
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'git rebase main' }))).toContain('(keep blocked)')
     expect(w.modelRequests).toEqual([])
     expect(w.asked[0]?.question).toContain('Its reviewer is switched off.')
@@ -158,8 +158,8 @@ describe('in the pipeline', () => {
   })
 
   test('a failed review names the member in the question', async ($, on) => {
-    const w = world(on, { replies: [{ isAnswered: true, text: 'nope', usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }], answer: 'Keep blocked' })
+    const w = world(on, { replies: [{ isAnswered: true, text: 'nope', usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }], answer: KEEP_BLOCKED })
     await $.tool.call({ tool: 'Bash', command: 'git rebase main' })
-    expect(w.asked[0]?.question).toContain('the git reviewer: no verdict (malformed verdict')
+    expect(w.asked[0]?.question).toContain('Aragorn (git): no verdict (malformed verdict')
   })
 })

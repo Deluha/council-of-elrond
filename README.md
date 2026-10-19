@@ -14,8 +14,9 @@ the mod never takes part in Claude Code's own permission decision.
 > security product. The limits are stated plainly in the
 > [user manual](mods/council-of-elrond/README.md#what-it-does-not-protect-against).
 
-**Status:** Stage 5 of 6 (version 0.4.0). Everything but the theme and its UI is in place, in
-plain mode. See [ROADMAP.md](mods/council-of-elrond/ROADMAP.md).
+**Status:** all six stages and the final deliverables are done (version 0.5.0; 0.6.0 follows the
+maintainer's terminal check). See [ROADMAP.md](mods/council-of-elrond/ROADMAP.md) for what is
+decided, deferred and declined.
 
 ## Quick start
 
@@ -43,7 +44,7 @@ Full instructions, configuration, updating and removal: [docs/INSTALL.md](docs/I
 | :- | :- |
 | Users | [User manual](mods/council-of-elrond/README.md): tiers, reviewers, the full council, rules, models, options, commands, the secrets scan, escalation, the audit log, limits. [Installing and using](docs/INSTALL.md). |
 | Contributors | [CONTRIBUTING.md](CONTRIBUTING.md), [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (layout, conventions, tests, live checks, recipes), [ROADMAP.md](mods/council-of-elrond/ROADMAP.md) (status, next tasks, decisions, API facts). |
-| Maintainers | [docs/MAINTENANCE.md](docs/MAINTENANCE.md) (Claude Code updates, releases, review, triage), [docs/GITHUB.md](docs/GITHUB.md) (workflows, hooks, repository settings), [docs/REVIEW-2026-10.md](docs/REVIEW-2026-10.md) (the Stage 5 review: findings and proposed amendments). |
+| Maintainers | [docs/MAINTENANCE.md](docs/MAINTENANCE.md) (Claude Code updates, releases, review, triage), [docs/GITHUB.md](docs/GITHUB.md) (workflows, hooks, repository settings), [docs/REVIEW-2026-10.md](docs/REVIEW-2026-10.md) (the Stage 5 review: findings, since fixed in 0.5.0, and amendments, since decided). |
 | Design | [DESIGN.md](mods/council-of-elrond/DESIGN.md) (how it works, failure modes, every decision), [SPEC.md](mods/council-of-elrond/SPEC.md) (the original spec). |
 | Security | [SECURITY.md](SECURITY.md): what counts as a bypass and how to report one privately. [SUPPORT.md](SUPPORT.md) for everything else. |
 
@@ -51,10 +52,11 @@ Full instructions, configuration, updating and removal: [docs/INSTALL.md](docs/I
 
 ```
 mods/council-of-elrond/   the mod: manifest, hooks, tests, user manual, design, roadmap, spec
-mods/types/               Claude Code's generated API types for the build it targets (2.1.291)
+mods/types/               Claude Code's generated API types for the build it targets (2.1.299)
 docs/                     install, development, maintenance guides and reviews
 .claude-plugin/           marketplace manifest, so `claude plugin install` works from this repo
 .claude/skills/           skills for Claude Code sessions working on this repo
+.claude/agents/           agents those sessions delegate to (scribe: dictated edits and verify runs)
 .github/                  CI, release workflow, issue and pull request templates, CODEOWNERS
 .githooks/ scripts/       pre-commit and commit-msg hooks, setup and hygiene scripts
 ```
@@ -73,4 +75,5 @@ passes the gate when it should not is a security report: please use
 
 ## Licence
 
-[MIT](LICENSE).
+[MIT](LICENSE), except `mods/types/claude-code.d.ts`, which is Claude Code's generated API
+declaration file redistributed unchanged for typechecking; see [its notice](mods/types/NOTICE.md).

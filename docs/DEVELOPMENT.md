@@ -8,7 +8,7 @@ taken, and [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for how it works and
 
 ```sh
 cd council-of-elrond
-claude plugin test mods/council-of-elrond       # 242 tests, about 15 s
+claude plugin test mods/council-of-elrond       # 529 tests, about 40 s
 tsc -p mods                                    # strict, against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
 ```
@@ -25,7 +25,7 @@ claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ ca
 ```
 mods/
   tsconfig.json              strict typecheck for every mod under mods/
-  types/claude-code.d.ts     Claude Code's generated API types (2.1.291), vendored
+  types/claude-code.d.ts     Claude Code's generated API types (2.1.299), vendored
   council-of-elrond/
     .claude-plugin/plugin.json   manifest: name, version, userConfig (the /config rows)
     hooks/hooks.json             "modules": ["./register.ts"]
@@ -38,8 +38,10 @@ mods/
     hooks/config/                shipped defaults, rules.json schema, types, the writer
     hooks/members/               one file per member, plus brief.ts and shared.ts
     hooks/elrond/                routing, council seats, verdict combination, operations,
-                                 escalation, refusal text, model choice, commands, suggest, report
-    types/index.d.ts             the $.state contract (CouncilSession, CouncilPanel)
+                                 escalation, refusal text, model choice, commands, suggest, report,
+                                 relay (what reaches Claude where nothing draws),
+                                 view (the rows the debate pane and the band draw)
+    types/index.d.ts             the $.state contract (CouncilSession, CouncilDebate, CouncilPanel)
     tests/                       *.test.ts, run by `claude plugin test`; fixtures.ts is the fake world
     README.md DESIGN.md ROADMAP.md SPEC.md
 ```
@@ -55,10 +57,14 @@ function in that file (passing `$` to an imported function fails validation). Ke
 - `tool.call` runs Elrond's pipeline. Every pass-through goes through `proceed()`, which refuses
   when the hook's remaining own-time budget is under one second. The `.catch` replays the real
   result if `next.called`, else refuses.
-- `prompt.submit` runs `resetForPrompt`, the single per-prompt reset.
-- `session.start` loads the config and registers `/council`; `command.run` answers it.
-- `ui.render` draws the `/council` pane and the mode label. Drawing is done with the global
-  `h(Element, props, ...children)` and elements from `$.ui.resolve(e)`, so the file stays `.ts`.
+- `prompt.submit` runs `resetForPrompt`, the single per-prompt reset, except for a `/council`
+  command; its `.catch` passes the prompt through, so a failure there never costs the prompt or the
+  plugin.
+- `session.start` loads the config, registers `/council` and, where nothing draws, appends the start
+  notice; `command.run` answers it; `session.attach` and `session.detach` keep the status line in step.
+- `ui.render` draws the `/council` pane, the debate pane, the council check band and the mode
+  label. The debate pane and the band only read state; their rows come from `elrond/view.ts`.
+  Drawing is done with the global `h(Element, props, ...children)` and elements from `$.ui.resolve(e)`, so the file stays `.ts`.
 
 Everything that decides something lives in a sibling module and gets its inputs as plain values.
 If you find yourself deciding in register.ts, move it out and test it directly.
@@ -104,18 +110,25 @@ Patterns to keep:
 
 - **Pure modules get direct tests** (`rules.test.ts`, `operations.test.ts`, `report.test.ts`).
   Integration through register.ts goes in `pipeline.test.ts`, `council.test.ts`,
-  `commands.test.ts`, `suggest.test.ts`.
+  `commands.test.ts`, `suggest.test.ts`. `done.test.ts` holds the definition-of-done evidence and
+  the owner tests SPEC §19 names (DESIGN.md §12); keep its names in step with that table.
 - **Safety tests are mutation-checked.** For a path that decides whether a call runs, break the
   code on purpose and confirm the test fails. Say so in the pull request.
 - **One registration per event per test.** Registering the same event twice fails the load; use
   the fixture's switches (`replies`, `answers`, `surfaces`, `processReply`, `spawnReply`).
 - **Mock the clock for anything that waits.** A test has 5 s. `world(on, { isClockMocked: true })`
   gives `w.clock`; `w.modelDelays` sets how long each model request takes.
+- **Mounted drawings** (`$.ui.mount`): a mounted tree re-reads on its own after a `$.state` write,
+  so mount once, drive the calls, and read `drawn()`, `find` or `findAll({ type: 'Text' })`. The
+  engine keeps one instance per pane id, so unmount before mounting the same pane again. Mount
+  the debate pane on all four surfaces and the band on `terminal` and `desktop`. The fixture's
+  `isBandDrawn` adds the engine's own band beneath the plugin, so a pass-through shows
+  "engine band"; `replyFor` picks a model reply by the request, for calls in flight together.
 - **Kit specifics** (bottom hooks that must return `{ cwd }`, `{ result }`, async generators for
   `process.spawn`) are in the ROADMAP's API facts, item 12 and 14.
 
 Run one file while iterating: `claude plugin test` has no filter, so comment with `test.only` if the
-kit supports it, or keep the suite fast enough that it doesn't matter (it is about 15 s today).
+kit supports it, or keep the suite fast enough that it doesn't matter (it is about 40 s today).
 
 ## Live checks
 
@@ -132,7 +145,8 @@ claude -p --plugin-dir /path/to/council-of-elrond/mods/council-of-elrond \
 - A refusal reaches Claude as the tool's error text. A question can't be answered in `-p`, so
   escalations refuse with "nobody can be asked"; that is the path you are testing.
 - `/council …` output arrives as `system/ui_log` lines in stream-json; in plain `-p` it prints
-  nothing.
+  nothing. In `-p` nothing draws, so a start notice is appended for Claude and a person's
+  `/council` status, report, rules and test also return a `context` for it (DESIGN §13.5).
 - Loading writes `.claude-plugin/types/` and `tsconfig.json` into the mod folder (gitignored),
   and the probe's `.claude/council-of-elrond/audit/` into the throwaway repo.
 - Interactive UI (the dialog, the pane, the band, the mode label) can only be checked by the
@@ -159,8 +173,9 @@ Galadriel's table in `hooks/members/galadriel.ts` is the only place a process is
 takes the call's targets as data; the proposed command never runs. Validate anything that becomes
 an argument (refs: no leading `-`, no `..`), keep it read-only (`git` runs with
 `GIT_OPTIONAL_LOCKS=0`, no pager, no prompts), and remember each inspection has 5 s and the
-preview at most 3. Test in `tests/galadriel.test.ts` that the proposed command is never among
-`w.processes`.
+preview at most 3. A git inspection may carry an `orElse` fallback (a second fixed entry, tried only
+when the first fails); it is an alternative, not a fourth step. Test in `tests/galadriel.test.ts`
+that the proposed command is never among `w.processes`.
 
 ### Add a `/config` option
 
@@ -175,7 +190,8 @@ preview at most 3. Test in `tests/galadriel.test.ts` that the proposed command i
 The parser is pure (`hooks/elrond/commands.ts`): add the subcommand there with a test in
 `tests/commands.test.ts`, then the output builder (pure, returning lines), then one arm in
 register.ts that gathers inputs and calls `show()`. Output goes to the pane or `ui.log`, never to
-Claude (approved decision 1).
+Claude (approved decision 1), except the four subcommands `hooks/elrond/relay.ts` relays where
+nothing draws (C2, DESIGN §13.5): a new one is not added to that list without the maintainer.
 
 ### Add a member
 
@@ -213,7 +229,11 @@ from a `ui.render` hook.
 
 ## Working with Claude Code on this repo
 
-The root `CLAUDE.md` holds the rules a session must follow. Three project skills help:
+The root `CLAUDE.md` holds the rules a session must follow, and its "Orchestration" section the
+three lanes a session delegates in: Opus orchestrates and reviews, Sonnet implements, Haiku reads,
+verifies and transcribes. `.claude/agents/scribe.md` is the Haiku agent for dictated edits and
+verify runs; sweeps and the diff pre-check go to the built-in `Explore` agent called with
+`model: "haiku"`. Three project skills help:
 
 - `/checkpoint`: runs the three checks and drafts the stage summary SPEC §20 asks for.
 - `/live-check`: the headless probe procedure above, step by step.

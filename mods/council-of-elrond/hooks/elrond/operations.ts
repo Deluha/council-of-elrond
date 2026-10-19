@@ -141,7 +141,9 @@ export function operationOf(call: Call, classification: Classification, context:
     const ops = parts.map(finding => partOperation(finding.part as ShellPart, finding.cwd ?? context.cwd, context))
     const verbs = sortedUnique(ops.map(op => op.verb))
     const key = sortedUnique(ops.map(op => `${op.verb} ${sortedUnique(op.targets).slice(0, MAX_TARGETS).join(' ')}`.trim()))
-    return { key: cap(`shell:${key.join(' ; ')}`), verbKey: cap(`shell:${verbs.join(' ; ')}`) }
+    // The key can hold a target a command named verbatim (a push URL with a
+    // token, a connection string); it is written to the audit log, so redact.
+    return { key: cap(redact(`shell:${key.join(' ; ')}`)), verbKey: cap(`shell:${verbs.join(' ; ')}`) }
   }
   const field = FILE_PATH_FIELDS[call.tool]
   const given = field === undefined ? undefined : call.input[field]
@@ -198,6 +200,20 @@ export function noteRound<T extends OpsState>(state: T, key: string, isApprove: 
 
 export const roundsLeft = (state: OpsState, key: string): number => Math.max(0, ROUND_CAP - opOf(state, key).rounds)
 
+/**
+ * Failed attempts since the user last wrote, for the status and the debate
+ * pane: how many (the per-verb counter, which only a new prompt clears), over
+ * how many operations, and how many of those are locked out.
+ */
+export function attemptsOf(state: OpsState): { count: number; ops: number; locked: number } {
+  const ops = Object.values(state.ops)
+  return {
+    count: Object.values(state.verbWipes).reduce((sum, n) => sum + n, 0),
+    ops: ops.length,
+    locked: ops.filter(op => op.wipes >= KEY_WIPE_CAP).length,
+  }
+}
+
 /** Out of rounds: the next attempt goes to the user, with no model call. */
 export const isOutOfRounds = (state: OpsState, key: string): boolean => opOf(state, key).rounds >= ROUND_CAP
 
@@ -240,9 +256,11 @@ const USER_REFUSAL: readonly RegExp[] = [
  */
 const AUTOMATIC_DENIAL: readonly RegExp[] = [
   /needs? approval/i,
+  // Seen on 2.1.294: a `git push` in `-p` ("This command requires approval").
+  /\brequires? approval\b/i,
   /requested permissions? to (use|write|edit|read|run)/i,
   /haven'?t granted it yet/i,
-  /permission to use .+ has been denied/i,
+  /permission to (use|edit|read) .+ has been denied/i,
 ]
 
 export const isUserRefusal = (text: string): boolean => USER_REFUSAL.some(re => re.test(text))

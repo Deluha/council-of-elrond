@@ -6,13 +6,15 @@ options) is in the [user manual](../mods/council-of-elrond/README.md).
 
 ## Requirements
 
-- Claude Code **2.1.287 or later**. The mod was built on 2.1.289 and checked on 2.1.291; see the
+- Claude Code **2.1.287 or later**. The mod was built on 2.1.289 and checked on 2.1.294; see the
   top of [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for the version it currently targets.
   Mods ("function hooks") are on by default; nothing has to be enabled.
 - `git` on the PATH, for the read-only previews. Without it, previews are left out and nothing
   else changes.
 - Model access for the reviewers. They use your Claude Code account through the plugin API; no
   separate key.
+- **A POSIX system** (Linux, macOS, WSL). Windows is unsupported: the shell parser reads POSIX
+  shells only, paths are resolved against `HOME`, and PowerShell is not parsed.
 
 ## Try it for one session
 
@@ -44,9 +46,7 @@ claude plugin marketplace update council-of-elrond
 claude plugin update council-of-elrond@council-of-elrond
 ```
 
-Installed plugins live under `~/.claude/plugins/`. Use `--scope project` on `marketplace add` to
-record the marketplace in the project's settings instead of your user settings, so a team shares
-it.
+Installed plugins live under `~/.claude/plugins/`. Use `--scope project` on `marketplace add` to record the marketplace in the project's settings instead of your user settings. That turns the mod on for the team but does not download it: each collaborator runs `claude plugin install council-of-elrond@council-of-elrond --scope project` once, and Claude Code asks them to trust the folder before it applies the project's marketplace.
 
 ### From a local checkout
 
@@ -66,10 +66,44 @@ Put the export in your shell profile, or in `~/.claude/settings.json` under `env
 Several paths are separated with `:` (`;` on Windows). Loading from a folder writes two generated,
 gitignored files into it (`.claude-plugin/types/` and `tsconfig.json`); that is expected.
 
+## Cloud sessions
+
+A repository's `.claude/settings.json` does not load plugins in a cloud session. Anthropic's documentation says `enabledPlugins` and `extraKnownMarketplaces` in a repository are not applied there, and neither are plugins from the user settings on your own machine. Two routes work:
+
+- **The environment's setup script** (tried: the mod loads at session start and enforces, with no restart). Install it there, and write the plugin's options in the same step, since a cloud session reads them from the user settings only, never from the repository:
+
+  ```sh
+  claude plugin marketplace add 'Deluha/council-of-elrond#main'
+  claude plugin install council-of-elrond@council-of-elrond --config shadowMode=true
+  ```
+
+  The part after `#` is a branch or a tag, not a commit. `#main` follows every merge; once releases are tagged, pin one (`#council-of-elrond--v0.6.0`) so the gate does not change under you. Both commands write to the user settings (`~/.claude/settings.json`): the marketplace with its ref, the plugin enabled, and each `--config` option under `pluginConfigs`. Add one `--config KEY=VALUE` per option; the keys are the ones under [Options](../mods/council-of-elrond/README.md#options-config), for example `gandalfModel=opus`, `councilModel=sonnet` or `tokenBudget=500000`. Shadow mode suits a team's first days, as on a local install. The clone needs network access to github.com; don't attach this repository to the session (see "One repository per environment" below).
+
+- **Organization server-managed settings** (Owner role: Organization settings, Claude Code, Managed settings). Put the same entries there; they apply to every user in the organization. This route has not been tried.
+
+  ```json
+  {
+    "extraKnownMarketplaces": {
+      "council-of-elrond": {
+        "source": { "source": "github", "repo": "Deluha/council-of-elrond" }
+      }
+    },
+    "enabledPlugins": { "council-of-elrond@council-of-elrond": true }
+  }
+  ```
+
+What a cloud session does differently (recorded in [DESIGN.md §14](../mods/council-of-elrond/DESIGN.md#14-cloud-sessions)):
+
+- **Nothing the mod draws reaches you.** The web client is not a surface the mod draws on: no pane, no label, no toast, and the transcript lines `/council` prints are not shown. The audit log is still written. What reaches you instead goes through Claude: the session opens with a notice that the council is active, and when you type `/council` status, report, rules or test, Claude is given the output and asked to repeat it in its next reply (see [Where nothing draws](../mods/council-of-elrond/README.md#where-nothing-draws)). Every other subcommand shows nothing.
+- **Nobody can be asked.** Every call that would come to you is refused as "nobody can be asked", and each refusal counts as a failed attempt toward the lockout. The refusal tells Claude to tell you which operation was refused, which rule and which reviewers were behind it, and how you can let it run: add an allow rule for it to `.claude/council-of-elrond/rules.json` yourself, or continue the session in a terminal where the council can ask you. In shadow mode the reviewers never refuse, but the ask-tier rules, protected paths and the secrets scan still do.
+- **One repository per environment.** With two repositories attached, the session's root is their parent, so the project's `.claude/council-of-elrond/rules.json` is not found: its checks, protected paths and production patterns don't apply, and the audit log is written outside the repository and lost with the container. Never use an environment that holds this repository's own checkout: a session developing the mod must not be gated by it.
+
+If you see something else, report it in an issue.
+
 ## Check it loaded
 
 - `/plugin` shows the mod in the mods line.
-- `/council` prints the status pane (or dim transcript lines where no pane draws).
+- `/council` prints the status pane (or dim transcript lines where no pane draws; where nothing draws at all, as in the cloud, Claude repeats it to you).
 - `claude plugin validate <folder>` lists the hooks it registers and the API calls it makes.
 
 If none of that happens, see [Troubleshooting](#troubleshooting).
@@ -158,9 +192,10 @@ model with `/council model <member> sonnet`.
 is in force. Fix the file and `/council reload`. Common causes: a missing `schemaVersion: 1`, a rule
 without an `id`, a regex with the `g` or `y` flag.
 
-**`/council` prints nothing in `claude -p`.** By design: command output never reaches Claude, and
-there is no pane in headless mode. Use `--output-format stream-json --verbose`; the lines arrive as
-`system/ui_log` messages.
+**`/council` prints nothing in `claude -p`.** There is no pane in headless mode, and the transcript
+lines are not printed. Use `--output-format stream-json --verbose`; the lines arrive as
+`system/ui_log` messages. Where nothing draws, a person's `/council` status, report, rules and test
+also go to Claude, with an instruction to repeat them to you (README, "Where nothing draws").
 
 **Claude keeps retrying a refused command.** After three failed attempts on one operation (five on
 one kind) the mod locks it out and tells Claude to stop and ask you. Everything resets on your next

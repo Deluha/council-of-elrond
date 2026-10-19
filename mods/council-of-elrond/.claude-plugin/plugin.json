@@ -1,6 +1,6 @@
 {
   "name": "council-of-elrond",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A council of specialist reviewers that gates risky tool calls before they run. Rules decide the tier; model members give a second opinion; anything uncertain comes to you.",
   "author": {
     "name": "Deluhathol",
@@ -193,6 +193,13 @@
       "default": 1024,
       "min": 16,
       "max": 3072
+    },
+    "plainMode": {
+      "type": "boolean",
+      "title": "Plain mode",
+      "description": "On: no theme text anywhere (names, flavour, the loot roll). Off: themed. Claude always reads plain refusals.",
+      "required": false,
+      "default": false
     }
   }
 }

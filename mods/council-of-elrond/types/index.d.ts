@@ -4,7 +4,7 @@
  */
 export type CouncilSession = {
   /** Shape version; a value of another version reads as a fresh session. */
-  v: 3
+  v: 4
   /** The user's latest prompt, redacted and cut, for reviewer context. */
   latestPrompt: string
   /** Bumped on every prompt the user sends. */
@@ -31,6 +31,42 @@ export type CouncilSession = {
   cache: readonly string[]
   /** Allow-rule patterns the user declined after "allow once": not offered again this session. */
   declinedRules: readonly string[]
+  /** The newest reviews for the debate pane and the council check band (newest last, capped at 8). */
+  debates: readonly CouncilDebate[]
+  /** The `$.clock.now()` time the epic drop row hides at; 0 means none. */
+  epicUntil: number
+  /** Whether the debate pane was opened unasked this session: it is not opened that way twice. */
+  debateOpened: boolean
+}
+
+/** One gated call's review, as the debate pane and the band show it. */
+export type CouncilDebate = {
+  /** The call's `tool_use_id`. */
+  id: string
+  /** The subagent the call ran in; absent in the main conversation. */
+  agentId?: string
+  tool: string
+  /** The call as shown: redacted, on one line, cut to 300 characters. */
+  call: string
+  kind: 'review' | 'council'
+  status: 'sitting' | 'done'
+  verdict?: 'approve' | 'revise' | 'block' | 'failed' | 'aborted'
+  voices: readonly CouncilDebateVoice[]
+  checks: readonly CouncilDebateCheck[]
+}
+
+export type CouncilDebateVoice = {
+  member: string
+  profile?: string
+  status: 'waiting' | 'approve' | 'revise' | 'block' | 'failed' | 'skipped'
+  /** Redacted, cut to 400 characters. */
+  reason?: string
+  alternative?: string
+}
+
+export type CouncilDebateCheck = {
+  name: string
+  status: 'running' | 'passed' | 'failed' | 'timed-out' | 'error' | 'stopped'
 }
 
 export type CouncilOp = { rounds: number; wipes: number }
