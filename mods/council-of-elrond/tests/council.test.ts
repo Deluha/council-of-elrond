@@ -10,7 +10,7 @@ import { statusOf, tailOf } from '../hooks/members/gimli.js'
 import type { GimliRun } from '../hooks/members/gimli.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
-import { APPROVE, auditLines, BLOCK, CONTEXT, denyOf, REVISE, ROOT, SHIPPED_COMPILED, verdict, world } from './fixtures.js'
+import { APPROVE, auditLines, BLOCK, CONTEXT, council, denyOf, KEEP_BLOCKED, REVISE, ROOT, SHIPPED_COMPILED, verdict, world } from './fixtures.js'
 import type { World } from './fixtures.js'
 
 const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
@@ -178,7 +178,7 @@ describe('the full council in the pipeline', () => {
     expect(systems[1]).toContain('the commits a git push would send')
     expect(String(w.modelRequests[1]?.prompt)).toContain('The changes the push would send: origin/feature..HEAD')
     expect(w.processes).toContainEqual(['git', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', 'origin/feature..HEAD', '--'])
-    expect(auditLines(w)[0]).toMatchObject({
+    expect((await auditLines(w))[0]).toMatchObject({
       member: 'council',
       model: 'opus',
       verdict: 'approve',
@@ -199,6 +199,31 @@ describe('the full council in the pipeline', () => {
     expect(w.modelRequests).toHaveLength(3)
   })
 
+  test('a new branch: the diff reviewer reads the remote default branch when its range is unreadable', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    w.processReply = argv => {
+      if (argv[1] !== 'diff') return { exitCode: 0, stdout: '' }
+      return argv.at(-2) === 'origin/feature..HEAD' ? { exitCode: 128, stdout: '' } : { exitCode: 0, stdout: '+export const started = true\n' }
+    }
+    expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })
+    expect(w.processes.filter(argv => argv[1] === 'diff').map(argv => argv.at(-2))).toEqual(['origin/feature..HEAD', 'origin/HEAD...HEAD'])
+    const prompt = String(w.modelRequests.find(request => String(request.system).includes('the commits a git push would send'))?.prompt)
+    expect(prompt).toContain('The changes the push would send: origin/HEAD...HEAD')
+    expect(prompt).toContain('+export const started = true')
+    expect((await auditLines(w))[0]).toMatchObject({ council: { voices: [{ member: 'gandalf' }, { member: 'legolas', verdict: 'approve' }, { member: 'aragorn' }] } })
+    expect(w.processes.filter(argv => argv[1] === 'push')).toEqual([])
+  })
+
+  test('when both ranges are unreadable, the diff reviewer sits out', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    w.processReply = argv => (argv[1] === 'diff' ? { exitCode: 128, stdout: '' } : { exitCode: 0, stdout: '' })
+    expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })
+    expect(w.processes.filter(argv => argv[1] === 'diff')).toHaveLength(2)
+    expect(w.modelRequests).toHaveLength(2)
+    expect(w.modelRequests.map(request => String(request.system)).join('\n')).not.toContain('the commits a git push would send')
+    expect((await auditLines(w))[0]).toMatchObject({ council: { voices: [{ member: 'gandalf' }, { member: 'legolas', verdict: 'skipped' }, { member: 'aragorn' }] } })
+  })
+
   test('strictest wins: one block among approvals refuses, every objection labelled', async ($, on) => {
     const w = world(on, { replies: [APPROVE, REVISE, verdict('block', 'Sends unrelated commits.', 'Push only the fix commit.')] })
     const deny = denyOf(await $.tool.call(PUSH))
@@ -209,7 +234,7 @@ describe('the full council in the pipeline', () => {
     expect(deny).toContain('- the git reviewer (block): Push only the fix commit.')
     expect(deny).not.toContain('Proportionate and requested.')
     expect(deny).toContain('Review rounds left on this operation: 1.')
-    expect(auditLines(w)[0]).toMatchObject({ member: 'council', verdict: 'block', outcome: 'refused' })
+    expect((await auditLines(w))[0]).toMatchObject({ member: 'council', verdict: 'block', outcome: 'refused' })
   })
 
   test('members never see each other: no verdict reaches another prompt', async ($, on) => {
@@ -219,13 +244,13 @@ describe('the full council in the pipeline', () => {
   })
 
   test('one member failing blocks; with no real objection the call comes to the user', async ($, on) => {
-    const w = world(on, { replies: [APPROVE, MALFORMED, APPROVE], answer: 'Keep blocked' })
+    const w = world(on, { replies: [APPROVE, MALFORMED, APPROVE], answer: KEEP_BLOCKED })
     expect(denyOf(await $.tool.call(PUSH))).toContain('(keep blocked)')
     const question = w.asked[0]?.question ?? ''
     expect(question).toContain('members of it could not give a verdict')
-    expect(question).toContain('the diff reviewer: no verdict (malformed verdict')
-    expect(question).toContain('the git reviewer: approve.')
-    expect(auditLines(w)[0]).toMatchObject({ member: 'council', verdict: 'failed', decision: 'keep-blocked' })
+    expect(question).toContain('Legolas: no verdict (malformed verdict')
+    expect(question).toContain('Aragorn (git): approve.')
+    expect((await auditLines(w))[0]).toMatchObject({ member: 'council', verdict: 'failed', decision: 'keep-blocked' })
   })
 
   test('one member failing beside a real block refuses, and with nobody to ask it refuses too', async ($, on) => {
@@ -241,7 +266,7 @@ describe('the full council in the pipeline', () => {
     const w = world(on, { replies: [APPROVE] })
     await $.tool.call(PUSH)
     expect(w.modelRequests).toHaveLength(1)
-    expect(auditLines(w)[0]).toMatchObject({ member: 'aragorn', profile: 'git' })
+    expect((await auditLines(w))[0]).toMatchObject({ member: 'aragorn', profile: 'git' })
   })
 
   test('a merge goes to the council only into a protected branch', async ($, on) => {
@@ -249,21 +274,21 @@ describe('the full council in the pipeline', () => {
     let branch = 'main'
     w.processReply = argv => (argv[1] === 'rev-parse' ? { exitCode: 0, stdout: `${branch}\n` } : { exitCode: 0, stdout: '' })
     await $.tool.call({ tool: 'Bash', command: 'git merge feature' })
-    expect(auditLines(w)[0]).toMatchObject({ member: 'council', council: { entry: 'merge-to-protected' } })
+    expect((await auditLines(w))[0]).toMatchObject({ member: 'council', council: { entry: 'merge-to-protected' } })
     expect(w.processes).toContainEqual(['git', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', 'HEAD...feature', '--'])
     branch = 'topic'
     await $.tool.call({ tool: 'Bash', command: 'git merge other' })
-    expect(auditLines(w)[1]).toMatchObject({ member: 'aragorn', profile: 'git' })
+    expect((await auditLines(w))[1]).toMatchObject({ member: 'aragorn', profile: 'git' })
   })
 
   test('in shadow mode the council logs its block and the call runs', { options: { shadowMode: true } }, async ($, on) => {
     const w = world(on, { replies: [BLOCK] })
     expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })
-    expect(auditLines(w)[0]).toMatchObject({ member: 'council', verdict: 'block', shadow: true, outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ member: 'council', verdict: 'block', shadow: true, outcome: 'ran' })
   })
 
   test('with every model member off, a big operation comes to the user', { options: { gandalfEnabled: false, legolasEnabled: false, aragornEnabled: false } }, async ($, on) => {
-    const w = world(on, { answer: 'Keep blocked' })
+    const w = world(on, { answer: KEEP_BLOCKED })
     expect(denyOf(await $.tool.call(PUSH))).toContain('(keep blocked)')
     expect(w.modelRequests).toEqual([])
     expect(w.spawned).toEqual([])
@@ -272,18 +297,18 @@ describe('the full council in the pipeline', () => {
 
 describe('the shared deadline', () => {
   test('in parallel every member gets the whole deadline; one slower than it counts as its block', { options: { reviewDeadlineSeconds: 10 } }, async ($, on) => {
-    const w = world(on, { replies: [APPROVE], isClockMocked: true, answer: 'Keep blocked' })
+    const w = world(on, { replies: [APPROVE], isClockMocked: true, answer: KEEP_BLOCKED })
     w.modelDelays = [1_000, 12_000, 2_000]
     const pending = $.tool.call(PUSH)
     await w.clock?.settle()
     await w.clock?.advance(12_000)
     expect(denyOf(await pending)).toContain('(keep blocked)')
     expect(w.modelRequests.map(request => request.timeoutMs)).toEqual([10_000, 10_000, 10_000])
-    expect(w.asked[0]?.question).toContain('the diff reviewer: no verdict (it ran out of time or was interrupted)')
+    expect(w.asked[0]?.question).toContain('Legolas: no verdict (it ran out of time or was interrupted)')
   })
 
   test('one at a time, each member gets what is left of the one deadline, and the first block stops the rest', { options: { councilSequential: true } }, async ($, on) => {
-    const w = world(on, { replies: [APPROVE, APPROVE, APPROVE], isClockMocked: true, answer: 'Keep blocked' })
+    const w = world(on, { replies: [APPROVE, APPROVE, APPROVE], isClockMocked: true, answer: KEEP_BLOCKED })
     w.modelDelays = [20_000, 24_000, 0]
     const pending = $.tool.call(PUSH)
     await w.clock?.settle()
@@ -297,11 +322,11 @@ describe('the shared deadline', () => {
     w.modelDelays = []
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'git push origin other' }))).toContain('the destructive-operations reviewer (block)')
     expect(w.modelRequests).toHaveLength(4)
-    expect(auditLines(w)[1]?.council).toMatchObject({ voices: [{ verdict: 'block' }, { verdict: 'skipped' }, { verdict: 'skipped' }] })
+    expect((await auditLines(w))[1]?.council).toMatchObject({ voices: [{ verdict: 'block' }, { verdict: 'skipped' }, { verdict: 'skipped' }] })
   })
 
   test('a member asked after the deadline has passed gives no verdict, and makes no request', { options: { councilSequential: true } }, async ($, on) => {
-    const w = world(on, { replies: [APPROVE], isClockMocked: true, answer: 'Keep blocked' })
+    const w = world(on, { replies: [APPROVE], isClockMocked: true, answer: KEEP_BLOCKED })
     w.modelDelays = [44_000, 1_000]
     const pending = $.tool.call(PUSH)
     await w.clock?.settle()
@@ -309,7 +334,7 @@ describe('the shared deadline', () => {
     await w.clock?.advance(1_000)
     expect(denyOf(await pending)).toContain('(keep blocked)')
     expect(w.modelRequests.map(request => request.timeoutMs)).toEqual([45_000, 1_000])
-    expect(w.asked[0]?.question).toContain('the diff reviewer: no verdict')
+    expect(w.asked[0]?.question).toContain('Legolas: no verdict')
   })
 })
 
@@ -329,7 +354,7 @@ describe('the project checks', () => {
     ])
     // Nothing of the call is ever run by the mod: only the table's read-only git.
     for (const argv of w.processes) expect(argv[0]).toBe('git')
-    expect(auditLines(w)[1]?.council).toMatchObject({ checks: [{ name: 'tests', status: 'passed' }, { name: 'lint', status: 'passed' }] })
+    expect((await auditLines(w))[1]?.council).toMatchObject({ checks: [{ name: 'tests', status: 'passed' }, { name: 'lint', status: 'passed' }] })
   })
 
   test('a failing check blocks, with its last lines for Claude; none of its output reaches the audit log', async ($, on) => {
@@ -341,10 +366,10 @@ describe('the project checks', () => {
     expect(deny).toContain('- the project checks (block): "tests" failed with exit code 1. Its last lines:\nPASS a.test.ts\nFAIL b.test.ts\n  expected 2, got 3')
     expect(deny).not.toContain('hunter2hunter2')
     expect(deny).toContain('Make the failing project checks ("tests") pass, then try again.')
-    const line = JSON.stringify(auditLines(w)[0])
+    const line = JSON.stringify((await auditLines(w))[0])
     expect(line).not.toContain('FAIL b.test.ts')
-    expect(auditLines(w)[0]?.reason).toBe('the project checks (block): "tests" failed with exit code 1.')
-    expect(auditLines(w)[0]).toMatchObject({ verdict: 'block', council: { checks: [{ name: 'tests', status: 'failed' }] } })
+    expect((await auditLines(w))[0]?.reason).toBe('the project checks (block): "tests" failed with exit code 1.')
+    expect((await auditLines(w))[0]).toMatchObject({ verdict: 'block', council: { checks: [{ name: 'tests', status: 'failed' }] } })
   })
 
   test('a check that cannot start blocks', async ($, on) => {
@@ -385,7 +410,7 @@ describe('the project checks', () => {
     expect(deny).not.toContain('"tests"')
     await w.clock?.advance(1_000)
     expect(w.ended).toBe(1)
-    expect(auditLines(w)[0]?.council).toMatchObject({ checks: [{ name: 'tests', status: 'stopped' }] })
+    expect((await auditLines(w))[0]?.council).toMatchObject({ checks: [{ name: 'tests', status: 'stopped' }] })
   })
 
   test('switched off, no check runs', { options: { gimliEnabled: false } }, async ($, on) => {
@@ -397,15 +422,13 @@ describe('the project checks', () => {
 })
 
 describe('commands', () => {
-  const council = ($: unknown, args = ''): Promise<unknown> => ($ as { command: { run: (e: { command: string; args: string }) => Promise<unknown> } }).command.run({ command: 'council', args })
-
   test('/council test names the full council, its seats and checks, and runs nothing', async ($, on) => {
     const w = world(on, { surfaces: [], isClockMocked: true })
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
     await council($, 'test "git merge feature"')
     const shown = w.logs.join('\n')
-    expect(shown).toContain('Reviewer: the full council (a big operation: merge-to-protected), model opus (built-in).')
-    expect(shown).toContain('the project checks would run alongside: "tests".')
+    expect(shown).toContain('Reviewer: the Council of Elrond (a big operation: merge-to-protected), model opus (built-in).')
+    expect(shown).toContain('Gimli would run alongside: "tests".')
     expect(shown).toContain('it assumed so')
     expect(w.processes).toEqual([])
     expect(w.spawned).toEqual([])
@@ -415,12 +438,12 @@ describe('commands', () => {
   test('/council test says when the council is off; status shows it and the checks', { options: { councilEnabled: false, councilSequential: true } }, async ($, on) => {
     const w = world(on, { surfaces: [] })
     await council($, 'test "git push origin feature"')
-    expect(w.logs.join('\n')).toContain('Reviewer: the git reviewer [aragorn/git]')
-    expect(w.logs.join('\n')).toContain('It is a big operation (/^git\\s+push(\\s|$)/), but the full council is switched off in /config')
+    expect(w.logs.join('\n')).toContain('Reviewer: Aragorn (git) [aragorn/git]')
+    expect(w.logs.join('\n')).toContain('It is a big operation (/^git\\s+push(\\s|$)/), but the Council of Elrond is switched off in /config')
     w.logs.length = 0
     await council($)
-    expect(w.logs.join('\n')).toContain('the full council [council], for big operations: off, model opus (built-in), members one at a time, stopping at the first block')
-    expect(w.logs.join('\n')).toContain('the project checks, for big operations: on, 0 commands configured')
+    expect(w.logs.join('\n')).toContain('the Council of Elrond [council], for big operations: off, model opus (built-in), members one at a time, stopping at the first block')
+    expect(w.logs.join('\n')).toContain('Gimli, for big operations: on, 0 commands configured')
   })
 })
 

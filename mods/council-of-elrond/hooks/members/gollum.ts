@@ -1,4 +1,4 @@
-import { isRandomLooking, redact, SECRET_PATTERNS } from '../redact.js'
+import { isPlaceholder, isRandomLooking, LONG_TOKEN, redact, SECRET_PATTERNS } from '../redact.js'
 import type { SecretLevel, SecretPattern } from '../redact.js'
 import { FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
 import type { Call } from '../rules/classify.js'
@@ -14,6 +14,8 @@ export type GollumFinding = {
   patternId: string
   level: SecretLevel
   label: string
+  /** `password` when the secret can be short and guessable from its fingerprint. */
+  kind: 'password' | 'token'
   /** The line holding it, redacted and cut: safe to show anywhere. */
   snippet: string
   /** `sha256:` and 16 hex digits of the secret: what an allowlist entry holds. */
@@ -21,6 +23,9 @@ export type GollumFinding = {
 }
 
 export type GollumScan = { high: GollumFinding[]; low: GollumFinding[] }
+
+/** Whether the allowlist confirm warns that this finding's fingerprint can be guessed offline. */
+export const warnsPasswordFingerprint = (finding: Pick<GollumFinding, 'kind'>): boolean => finding.kind === 'password'
 
 /** The text a call would write or run, by tool. */
 export function scannedText(call: Call): string {
@@ -42,19 +47,6 @@ export function scannedText(call: Call): string {
 const MAX_SCAN_CHARS = 500_000
 const MAX_FINDINGS = 10
 const SNIPPET_CHARS = 160
-
-/**
- * A low-confidence value that is plainly not a secret: a variable or
- * expression (`$TOKEN`, `process.env.X`, `getToken()`), a type (`string`),
- * a keyword, or an identifier without a digit.
- */
-const isPlaceholder = (value: string): boolean =>
-  /^[$%<{(*[]/.test(value) ||
-  value.includes('(') ||
-  (/^[A-Za-z_][A-Za-z0-9_.]*$/.test(value) && !/[0-9]/.test(value)) ||
-  /^(.)\1+$/.test(value)
-
-const LONG_TOKEN = /[A-Za-z0-9+/_-]{40,}={0,2}/g
 
 /** Subresource-integrity and checksum prefixes: a hash, not a secret. */
 const HASH_PREFIX = /(sha(1|224|256|384|512)[-:=]|integrity["':\s=]+|sum["':\s=]+|[0-9a-f]{7,}\s+)$/i
@@ -90,13 +82,13 @@ export async function scanText(
   const covered: [number, number][] = []
   const seen = new Set<string>()
 
-  const add = async (pattern: { id: string; level: SecretLevel; label: string }, secret: string, index: number, length: number) => {
+  const add = async (pattern: { id: string; level: SecretLevel; label: string; kind?: 'password' | 'token' }, secret: string, index: number, length: number) => {
     const fingerprint = await fingerprintOfSecret(secret)
     if (seen.has(fingerprint) || isAllowed(allowlist, secret, fingerprint)) return
     seen.add(fingerprint)
     const list = pattern.level === 'high' ? scan.high : scan.low
     if (list.length >= MAX_FINDINGS) return
-    list.push({ patternId: pattern.id, level: pattern.level, label: pattern.label, snippet: lineAround(body, index, length, patterns), fingerprint })
+    list.push({ patternId: pattern.id, level: pattern.level, label: pattern.label, kind: pattern.kind ?? 'token', snippet: lineAround(body, index, length, patterns), fingerprint })
   }
 
   for (const pattern of patterns) {
@@ -127,7 +119,7 @@ export const scanCall = (call: Call, patterns?: readonly SecretPattern[], allowl
   scanText(scannedText(call), patterns, allowlist)
 
 /** Configured patterns (rules.json `gollum.patterns`) as scanner patterns, after the shipped ones. */
-export const patternsWith = (configured: readonly { id: string; level: SecretLevel; regex: string; label: string }[]): SecretPattern[] => [
+export const patternsWith = (configured: readonly { id: string; level: SecretLevel; regex: string; label: string; kind?: 'password' | 'token' }[]): SecretPattern[] => [
   ...SECRET_PATTERNS,
-  ...configured.map(pattern => ({ id: pattern.id, level: pattern.level, label: pattern.label, re: new RegExp(pattern.regex, 'g') })),
+  ...configured.map(pattern => ({ id: pattern.id, level: pattern.level, label: pattern.label, kind: pattern.kind, re: new RegExp(pattern.regex, 'g') })),
 ]

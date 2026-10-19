@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { gandalfPrompt, gandalfSystem } from '../hooks/members/gandalf.js'
 import { parseVerdict, untrusted } from '../hooks/members/shared.js'
 import { redact } from '../hooks/redact.js'
+import { FAKE_AWS_KEY, FAKE_GITHUB_TOKEN } from './fixtures.js'
 
 describe('verdict parsing', () => {
   test('approve, revise and block parse', () => {
@@ -73,16 +74,16 @@ describe('Gandalf prompt', () => {
 describe('redaction', () => {
   test('secrets are replaced, ordinary hashes are not', () => {
     const text = [
-      'AKIAABCDEFGHIJKLMNOP',
-      'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+      FAKE_AWS_KEY,
+      FAKE_GITHUB_TOKEN,
       'postgres://admin:hunter22@db.example.com/app',
       'password=correcthorse',
       'commit 3f9a1c2b4d5e6f708192a3b4c5d6e7f8091a2b3c',
       '-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----',
     ].join('\n')
     const out = redact(text)
-    expect(out).not.toContain('AKIAABCDEFGHIJKLMNOP')
-    expect(out).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789')
+    expect(out).not.toContain(FAKE_AWS_KEY)
+    expect(out).not.toContain(FAKE_GITHUB_TOKEN)
     expect(out).not.toContain('hunter22')
     expect(out).toContain('postgres://admin:[REDACTED password]@db.example.com/app')
     expect(out).not.toContain('correcthorse')

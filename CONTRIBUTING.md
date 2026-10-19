@@ -16,7 +16,7 @@ developer guide is [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Setup
 
-You need Claude Code 2.1.287 or later (the mod was built on 2.1.289 and checked on 2.1.291) and a
+You need Claude Code 2.1.287 or later (the mod was built on 2.1.289 and checked on 2.1.294) and a
 TypeScript compiler (`npm install -g typescript`, or use `npx tsc`). There are no runtime
 dependencies and no `node_modules`.
 
@@ -86,7 +86,9 @@ The full conventions, with the reasons behind them, are in
    title and description; put it in a test with a neutral name.
 
 Commit messages: an imperative summary line under 72 characters, then why the change was made.
-No model names, session links or personal paths in code, comments or docs.
+No model names, session links or personal paths in code, comments or docs. Family names and
+aliases (Sonnet and `sonnet`, Opus, Haiku, Fable) are fine, and so is a full model id used as test
+data or a config example. Saying which model wrote something is not.
 
 ## Writing style for docs
 

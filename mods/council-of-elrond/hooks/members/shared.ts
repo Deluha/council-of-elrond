@@ -80,6 +80,16 @@ export function truncate(text: string, maxLines: number, maxChars: number): stri
 }
 
 /**
+ * A call-derived label (a file path, a SQL piece's name) shown in a prompt
+ * frame outside a data block. Control characters are stripped and the length
+ * capped, so a path full of newlines cannot forge prompt lines of its own.
+ */
+export function label(value: string, maxChars = 200): string {
+  const oneLine = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim()
+  return oneLine.length > maxChars ? `${oneLine.slice(0, maxChars)}…` : oneLine
+}
+
+/**
  * Wraps session content as untrusted data. The nonce makes the closing tag
  * unguessable, so content cannot close the block early.
  */

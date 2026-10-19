@@ -84,10 +84,15 @@ function shellPattern(call: Call, classification: Classification): Pattern | NoS
   const cores = [...new Set(parts.map(part => part.core))]
   const anchored = cores.map(escapeRegex)
   const words = command.split(/ +/)
+  const commandPin = `"command":" *${words.map(jsonWord).join(' +')} *"`
+  // The sandbox flag is a separate input field the command pin does not see,
+  // so an allow rule for `rm -r build` would also allow it with the sandbox
+  // off. Forbid that: the rule matches only when the flag is absent.
+  const input = call.tool === 'Bash' ? String.raw`^(?!.*"dangerouslyDisableSandbox":true).*${commandPin}` : commandPin
   return {
     tools: [call.tool],
     command: anchored.length === 1 ? `^${anchored[0]}$` : `^(?:${anchored.join('|')})$`,
-    input: `"command":" *${words.map(jsonWord).join(' +')} *"`,
+    input,
   }
 }
 
@@ -148,10 +153,16 @@ export function suggestRule(
     id: idFor(first ?? (FILE_PATH_FIELDS[call.tool] !== undefined ? `${call.tool}-${classification.findings[0]?.subject ?? ''}` : call.tool), taken),
     tier: 'allow',
     ...pattern,
-    reason: text('suggest.reason'),
+    reason: text('suggest.reason', {}, 'plain'),
   }
   if (validateOverrides({ schemaVersion: 1, rules: [rule] }).overrides === undefined) return none('not-allowed')
-  if (classify(call, withRule(compiled, rule), where).tier !== 'allow') return none('not-allowed')
+  const applied = withRule(compiled, rule)
+  if (classify(call, applied, where).tier !== 'allow') return none('not-allowed')
+  // The rule must not also allow the same command with the sandbox disabled.
+  if (SHELL_TOOLS.has(call.tool)) {
+    const sandboxed = { ...call, input: { ...call.input, dangerouslyDisableSandbox: true } }
+    if (classify(sandboxed, applied, where).tier === 'allow') return none('not-allowed')
+  }
   return { kind: 'rule', suggestion: { rule, key } }
 }
 

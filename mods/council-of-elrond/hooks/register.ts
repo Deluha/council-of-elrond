@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PluginOptions, ProcessSpawnResult, Register, RenderElement, ToolCallResult } from 'claude-code'
+import type { EngineInterface, PluginOptions, ProcessRunResult, ProcessSpawnResult, Register, RenderElement, ToolCallResult } from 'claude-code'
 
 import type { CouncilPanel } from '../types'
-import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, ROTATED_FILES } from './audit.js'
+import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, isRotation, ROTATED_FILES } from './audit.js'
 import type { AuditRecord, Decision } from './audit.js'
 import { OVERRIDES_PATH } from './config/defaults.js'
 import { loadConfig, MODEL_ID } from './config/schema.js'
@@ -11,13 +11,13 @@ import { MODEL_SLOTS } from './config/types.js'
 import type { GimliCommand, MemberName, ModelSlot } from './config/types.js'
 import { withAllowlistEntry, withRule } from './config/write.js'
 import type { FileEdit } from './config/write.js'
-import { isSlot, logOutput, modelsOutput, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
+import { isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
 import { combine, hasRealBlock } from './elrond/combine.js'
 import type { Voice } from './elrond/combine.js'
 import { bigOperationOf, councilSeats, needsCurrentBranch, rangeOf } from './elrond/council.js'
 import type { Big, CouncilSeat } from './elrond/council.js'
-import type { CouncilCommand, Output } from './elrond/commands.js'
-import { interpretAnswer, interpretRejection, optionsOf, questionText } from './elrond/escalation.js'
+import type { CouncilCommand, Output, StatusInput } from './elrond/commands.js'
+import { interpretAnswer, optionsOf, questionText } from './elrond/escalation.js'
 import type { Answer, MemberOpinion, Unanswered } from './elrond/escalation.js'
 import { deadlineFor, profileOf, resolveModel } from './elrond/models.js'
 import type { ModelChoice } from './elrond/models.js'
@@ -36,7 +36,10 @@ import {
 } from './elrond/operations.js'
 import type { WipePolicy } from './elrond/operations.js'
 import { refusalText } from './elrond/refusal.js'
+import { isRelayed, noticeText, nobodyToAsk, relayContext } from './elrond/relay.js'
 import { reportOutput } from './elrond/report.js'
+import { bandRows, debateRows, voiceNote } from './elrond/view.js'
+import type { Row } from './elrond/view.js'
 import { ruleJson, suggestRule } from './elrond/suggest.js'
 import type { Refusal } from './elrond/refusal.js'
 import { route } from './elrond/routing.js'
@@ -50,7 +53,7 @@ import type { Inspection, InspectionResult } from './members/galadriel.js'
 import { GANDALF_LIMITS } from './members/gandalf.js'
 import { isGimliBlock, keepTail, statusOf, tailOf } from './members/gimli.js'
 import type { GimliRun } from './members/gimli.js'
-import { patternsWith, scanCall } from './members/gollum.js'
+import { patternsWith, scanCall, warnsPasswordFingerprint } from './members/gollum.js'
 import { callDiff, LEGOLAS_LIMITS } from './members/legolas.js'
 import type { CallDiff, Current } from './members/legolas.js'
 import type { GollumFinding } from './members/gollum.js'
@@ -65,20 +68,30 @@ import {
   addReviewTime,
   addTokens,
   clearCache,
+  clearEpic,
+  closeDebate,
   count,
   declineRule,
   INITIAL_SESSION,
+  isSession,
   isShadow,
+  markDebateOpened,
+  noteCheck,
+  noteVoice,
   noteWritten,
+  openDebate,
   resetForPrompt,
   sessionOf,
+  tidyCall,
+  tidyReason,
   withBypass,
+  withEpic,
   withSessionModel,
   withShadow,
 } from './state.js'
-import type { CouncilSession } from '../types'
-import { text } from './strings.js'
-import type { StringKey } from './strings.js'
+import type { CouncilDebate, CouncilSession } from '../types'
+import { currentMode, setMode, text, withMode } from './strings.js'
+import type { Mode, StringKey } from './strings.js'
 
 /**
  * Elrond, the chair: the one `tool.call` hook every call passes through.
@@ -98,13 +111,26 @@ const panel = atom({ plugin: 'council-of-elrond', key: 'panel' } as const, { tit
 /** Margin kept on the hook's own 10 s budget before any pass-through. */
 const BUDGET_GUARD_MS = 1_000
 
-/** Prompt origins that are the user's own and reset the per-prompt state. */
+/**
+ * Prompt origins that are a person's own: they reset the per-prompt state, and
+ * only they may run the `/council` subcommands that loosen the gate. `sdk` counts
+ * until the web client's kind is known (ROADMAP C3).
+ */
 const HUMAN_ORIGINS: ReadonlySet<string> = new Set(['composer', 'bridge', 'sdk'])
 
 const MAX_SCRIPTS = 3
 
 const COMMAND = 'council'
 const PANE_ID = 'council'
+
+/** The debate pane: its own id, so it sits beside the `/council` output as a tab. */
+const DEBATE_PANE_ID = 'council-debate'
+
+/** Rows the debate pane asks for where it is placed inline. */
+const DEBATE_PANE_ROWS = 12
+
+/** How long the epic drop row and toast last. */
+const EPIC_MS = 8_000
 
 /** The `/config` row a `--save` writes, per slot that has one. */
 const CONFIG_ROWS: Readonly<Partial<Record<ModelSlot, string>>> = {
@@ -143,6 +169,7 @@ type Settings = {
   previewLines: number
   gollumEnabled: boolean
   galadrielEnabled: boolean
+  plainMode: boolean
 }
 
 const modelSetting = (value: unknown): string => (typeof value === 'string' ? value : 'default')
@@ -171,6 +198,7 @@ const settingsOf = (options: PluginOptions): Settings => ({
   previewLines: typeof options.previewLines === 'number' ? options.previewLines : 80,
   gollumEnabled: options.gollumEnabled !== false,
   galadrielEnabled: options.galadrielEnabled !== false,
+  plainMode: options.plainMode === true,
 })
 
 type Context = {
@@ -309,6 +337,37 @@ async function scriptsOf(
 }
 
 /**
+ * Runs one git inspection from the table: its argv, then, only if that exits
+ * non-zero or throws and the table gives one, its fixed `orElse` argv, once.
+ * The fallback's result (and label) stands only if it succeeds; otherwise the
+ * first attempt's outcome is kept, as if there were no fallback.
+ */
+async function runGitInspection(
+  $: EngineInterface,
+  step: { label: string; argv: readonly string[]; orElse?: { label: string; argv: readonly string[] } },
+  ctx: Context,
+): Promise<{ label: string; run: ProcessRunResult }> {
+  const attempt = (argv: readonly string[]): Promise<ProcessRunResult> => $.process.run(argv, { cwd: ctx.root, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
+  let first: ProcessRunResult | undefined
+  let failure: unknown
+  try {
+    first = await attempt(step.argv)
+    if (first.exitCode === 0 || step.orElse === undefined) return { label: step.label, run: first }
+  } catch (error) {
+    if (step.orElse === undefined) throw error
+    failure = error
+  }
+  try {
+    const second = await attempt(step.orElse.argv)
+    if (second.exitCode === 0) return { label: step.orElse.label, run: second }
+  } catch {
+    // The fallback failing leaves the first attempt's outcome.
+  }
+  if (first === undefined) throw failure
+  return { label: step.label, run: first }
+}
+
+/**
  * Runs Galadriel's inspections: only what the table planned, read-only, each
  * on its own timeout. A failure is no preview, never a decision.
  */
@@ -328,8 +387,8 @@ async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: C
           results.push({ kind: 'path', label: step.label, state: 'file', size: stat.size })
         }
       } else {
-        const run = await $.process.run(step.argv, { cwd: ctx.root, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
-        results.push({ kind: 'git', label: step.label, exitCode: run.exitCode, stdout: run.stdout.slice(0, 50_000) })
+        const { label, run } = await runGitInspection($, step, ctx)
+        results.push({ kind: 'git', label, exitCode: run.exitCode, stdout: run.stdout.slice(0, 50_000) })
       }
     } catch {
       results.push({ kind: 'failed', label: step.label })
@@ -483,14 +542,15 @@ async function currentBranchOf($: EngineInterface, root: string): Promise<string
 /**
  * What a push would send or a merge bring in, for the diff reviewer: one
  * read-only `git diff` from Galadriel's table, cut to the diff limit and
- * redacted. Undefined when git can't say.
+ * redacted, with the range that was read (the table's fallback range when the
+ * first can't be read). Undefined when git can't say.
  */
-async function rangeDiffOf($: EngineInterface, argv: readonly string[], ctx: Context): Promise<string | undefined> {
+async function rangeDiffOf($: EngineInterface, step: Extract<Inspection, { kind: 'git' }>, ctx: Context): Promise<{ label: string; diff: string } | undefined> {
   try {
-    const run = await $.process.run(argv, { cwd: ctx.root, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
+    const { label, run } = await runGitInspection($, step, ctx)
     if (run.exitCode !== 0) return undefined
     const diff = run.stdout.slice(0, LEGOLAS_LIMITS.diffChars * 4).trimEnd()
-    return redact(truncate(diff === '' ? '(no changes)' : diff, settings.diffLines, LEGOLAS_LIMITS.diffChars), ctx.patterns)
+    return { label, diff: redact(truncate(diff === '' ? '(no changes)' : diff, settings.diffLines, LEGOLAS_LIMITS.diffChars), ctx.patterns) }
   } catch {
     return undefined
   }
@@ -551,6 +611,9 @@ type Sitting = { seat: CouncilSeat; who: StringKey; brief?: Brief; skip?: string
 
 type Held = { voices: Voice[]; tokens: number[]; runs: GimliRun[] }
 
+/** What `convene` reports as it goes, for the debate record: a voice resolved, or a check ended. */
+type Progress = { kind: 'voice'; index: number; voice: Voice } | { kind: 'check'; run: GimliRun }
+
 /**
  * The full council. The project's checks start first and run on their own
  * timeouts (decision 3); the model members run in parallel, or one at a time
@@ -566,49 +629,70 @@ async function convene(
   checks: readonly GimliCommand[],
   root: string,
   signal: AbortSignal,
+  progress: (event: Progress) => Promise<void>,
 ): Promise<Held> {
   const started = await $.clock.now()
   const stop = new AbortController()
-  let isCheckFailed = false
-  const checking = Promise.all(
-    checks.map(command =>
-      runCheck($, command, root, stop.signal).then(run => {
-        if (isGimliBlock(run)) {
-          isCheckFailed = true
-          stop.abort()
-        }
-        return run
-      }),
-    ),
-  )
-  const tokens: number[] = sittings.map(() => 0)
-  const baseOf = (sitting: Sitting) => ({ who: sitting.who, member: sitting.seat.member, ...(sitting.seat.member === 'aragorn' && { profile: sitting.seat.profile }) })
-  const ask = async (sitting: Sitting, index: number): Promise<Voice> => {
-    const base = baseOf(sitting)
-    if (sitting.brief === undefined) return { kind: 'skipped', ...base, why: sitting.skip ?? '' }
-    const remaining = Math.floor(deadlineMs - ((await $.clock.now()) - started))
-    if (remaining < 1) return { kind: 'failed', ...base, problem: text('council.deadline') }
-    const result = await review($, sitting.brief, model, remaining, signal)
-    tokens[index] = result.tokens
-    return result.ok ? { kind: 'verdict', ...base, verdict: result.verdict } : { kind: 'failed', ...base, problem: result.problem }
-  }
-  let voices: Voice[]
-  if (isSequential) {
-    voices = []
-    for (const [index, sitting] of sittings.entries()) {
-      const isBlocked = isCheckFailed || voices.some(voice => voice.kind === 'failed' || (voice.kind === 'verdict' && voice.verdict.verdict === 'block'))
-      voices.push(
-        isBlocked
-          ? { kind: 'skipped', ...baseOf(sitting), why: text('council.stopped') }
-          : await ask(sitting, index),
-      )
+  // Esc ends the checks through the engine killing their children; chaining the signal makes that ours too.
+  const onAbort = (): void => stop.abort()
+  signal.addEventListener('abort', onAbort)
+  if (signal.aborted) onAbort()
+  try {
+    let isCheckFailed = false
+    // The debate record is only watching: a note that fails or lags changes nothing here.
+    const noted: Promise<void>[] = []
+    const note = (event: Progress): void => {
+      noted.push(Promise.resolve().then(() => progress(event)).catch(() => undefined))
     }
-  } else {
-    voices = await Promise.all(sittings.map(ask))
+    const checking = Promise.all(
+      checks.map(command =>
+        runCheck($, command, root, stop.signal).then(run => {
+          if (isGimliBlock(run)) {
+            isCheckFailed = true
+            stop.abort()
+          }
+          note({ kind: 'check', run })
+          return run
+        }),
+      ),
+    )
+    const tokens: number[] = sittings.map(() => 0)
+    const baseOf = (sitting: Sitting) => ({ who: sitting.who, member: sitting.seat.member, ...(sitting.seat.member === 'aragorn' && { profile: sitting.seat.profile }) })
+    const ask = async (sitting: Sitting, index: number): Promise<Voice> => {
+      const base = baseOf(sitting)
+      if (sitting.brief === undefined) return { kind: 'skipped', ...base, why: sitting.skip ?? '' }
+      const remaining = Math.floor(deadlineMs - ((await $.clock.now()) - started))
+      if (remaining < 1) return { kind: 'failed', ...base, problem: text('council.deadline') }
+      const result = await review($, sitting.brief, model, remaining, signal)
+      tokens[index] = result.tokens
+      return result.ok ? { kind: 'verdict', ...base, verdict: result.verdict } : { kind: 'failed', ...base, problem: result.problem }
+    }
+    const resolved = (index: number, voice: Voice): Voice => {
+      note({ kind: 'voice', index, voice })
+      return voice
+    }
+    let voices: Voice[]
+    if (isSequential) {
+      voices = []
+      for (const [index, sitting] of sittings.entries()) {
+        const isBlocked = isCheckFailed || voices.some(voice => voice.kind === 'failed' || (voice.kind === 'verdict' && voice.verdict.verdict === 'block'))
+        voices.push(
+          resolved(index, isBlocked ? { kind: 'skipped', ...baseOf(sitting), why: text('council.stopped') } : await ask(sitting, index)),
+        )
+      }
+    } else {
+      voices = await Promise.all(sittings.map(async (sitting, index) => resolved(index, await ask(sitting, index))))
+    }
+    // A check can only add a block: once a member has blocked, one still running cannot matter.
+    if (hasRealBlock(voices)) stop.abort()
+    const runs = await checking
+    await Promise.all(noted)
+    return { voices, tokens, runs }
+  } finally {
+    // A throw above would otherwise leave a check running to its own timeout (up to 600 s).
+    stop.abort()
+    signal.removeEventListener('abort', onAbort)
   }
-  // A check can only add a block: once a member has blocked, one still running cannot matter.
-  if (hasRealBlock(voices)) stop.abort()
-  return { voices, tokens, runs: await checking }
 }
 
 /** Puts the call to the user; where nobody can be asked, says so. */
@@ -616,16 +700,20 @@ async function escalate($: EngineInterface, question: string, withAllowlist: boo
   const surfaces = await $.session.surfaces().catch(() => [])
   if (surfaces.length === 0) return 'unavailable'
   try {
-    const answer = await $.ui.ask(question, { options: optionsOf('plain', withAllowlist), header: text('ask.header') })
-    return interpretAnswer(answer, 'plain', withAllowlist)
-  } catch (error) {
-    return interpretRejection(error)
+    // One mode for the labels offered and the labels compared: they must match exactly.
+    const mode = currentMode()
+    const answer = await $.ui.ask(question, { options: optionsOf(mode, withAllowlist), header: text('ask.rollHeader', {}, mode) })
+    return interpretAnswer(answer, mode, withAllowlist)
+  } catch {
+    // The engine's "Chat about this" rejects exactly like a dismissal and cannot be told apart (DESIGN §12.4).
+    return 'dismissed'
   }
 }
 
 /** The second confirm before an allowlist entry is written: only "Add it" adds. */
 async function confirmAllowlist($: EngineInterface, finding: GollumFinding): Promise<boolean> {
-  const question = text('ask.confirmAllowlist', { label: finding.label, entry: finding.fingerprint, path: OVERRIDES_PATH, field: 'gollum.allowlist' })
+  const base = text('ask.confirmAllowlist', { label: finding.label, entry: finding.fingerprint, path: OVERRIDES_PATH, field: 'gollum.allowlist' })
+  const question = warnsPasswordFingerprint(finding) ? `${base}\n${text('ask.confirmAllowlistPassword')}` : base
   try {
     const answer = await $.ui.ask(question, { options: [text('ask.confirmAdd'), text('ask.confirmCancel')], header: text('ask.header') })
     return answer === text('ask.confirmAdd')
@@ -692,7 +780,7 @@ async function appendAudit($: EngineInterface, record: AuditRecord, root: string
   const current = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
   const maxBytes = settings.auditMaxKb * 1024
   const older: (string | undefined)[] = []
-  if (current !== '' && current.length + line.length > maxBytes) {
+  if (isRotation(current, line, maxBytes)) {
     for (let n = 1; n < ROTATED_FILES - 1; n++) {
       const rotated = `${path}.${n}`
       older.push((await $.fs.exists(rotated)) ? await $.fs.read(rotated) : undefined)
@@ -701,13 +789,17 @@ async function appendAudit($: EngineInterface, record: AuditRecord, root: string
   for (const write of appendPlan(path, current, line, maxBytes, older)) await $.fs.write(write.path, write.text)
 }
 
-/** Appends one audit line; writes are serialized, and a failed write never changes a decision. */
-async function audit($: EngineInterface, record: AuditRecord, root: string): Promise<void> {
-  const queued = auditQueue.then(() => appendAudit($, record, root))
-  auditQueue = queued.catch((error: unknown) => {
-    $.ui.log(`Council: audit write failed: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
-  })
-  await auditQueue
+/**
+ * Queues one audit line. Writes run in order, but nobody waits for them: a
+ * failed write is logged and a hanging one holds back only the lines queued
+ * after it, never a decision or the call that follows.
+ */
+function audit($: EngineInterface, record: AuditRecord, root: string): void {
+  auditQueue = auditQueue
+    .then(() => appendAudit($, record, root))
+    .catch((error: unknown) => {
+      $.ui.log(text('notice.auditFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
+    })
 }
 
 /** Notes a file Claude wrote, once the write has run. */
@@ -718,15 +810,47 @@ async function noteWrite($: EngineInterface, call: Call, cwd: string, home: stri
   if (isWritten) await update($, session, value => noteWritten(sessionOf(value), resolve(given, cwd, home)))
 }
 
-/** The label by the prompt where SessionMode is not drawn (other surfaces): the status line. */
+/**
+ * The label by the prompt where SessionMode is not drawn (other surfaces): the
+ * status line. Cleared when no such surface is left, so a line set for a phone
+ * does not outlive it.
+ */
 async function syncIndicator($: EngineInterface): Promise<void> {
   const state = sessionOf(await read($, session))
   const label = state.bypass ? text('mode.bypass') : isShadow(state, settings.shadowMode) ? text('mode.shadow') : undefined
   const surfaces = await $.session.surfaces().catch(() => [])
-  if (surfaces.some(surface => surface !== 'terminal' && surface !== 'desktop')) $.ui.status(label)
+  $.ui.status(surfaces.some(surface => surface !== 'terminal' && surface !== 'desktop') ? label : undefined)
 }
 
-/** Shows `/council` output to the user: in its pane where one draws, else as transcript lines. Never to Claude. */
+/**
+ * Where nothing draws, the start notice goes in as a row the model reads (the
+ * only channel to the person). A refusal or a failure is logged, never raised:
+ * session start goes on.
+ */
+async function announce($: EngineInterface): Promise<void> {
+  try {
+    if ((await $.session.surfaces()).length > 0) return
+    const result = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: noticeText() }] } })
+    if (result.deny !== undefined) $.ui.log(text('notice.appendFailed', { problem: result.deny }), { to: 'debug' })
+  } catch (error) {
+    $.ui.log(text('notice.appendFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
+  }
+}
+
+/**
+ * `/council` output as the command's `context`, for a person's command where
+ * nothing draws; else undefined. It is built again, in plain (nothing Claude
+ * reads is themed) and, for rules, without the allowlist's characters; every
+ * line is then redacted (relay.ts).
+ */
+async function relayOf($: EngineInterface, command: CouncilCommand, origin: string): Promise<readonly string[] | undefined> {
+  if (!isRelayed(command) || !HUMAN_ORIGINS.has(origin)) return undefined
+  if ((await $.session.surfaces()).length > 0) return undefined
+  const ctx = await contextOf($)
+  return [relayContext(command, await councilOutput($, command, 'plain'), ctx.patterns, newNonce())]
+}
+
+/** Shows `/council` output to the user: in its pane where one draws, else as transcript lines. */
 async function show($: EngineInterface, output: Output): Promise<void> {
   const surfaces = await $.session.surfaces().catch(() => [])
   if (surfaces.length > 0) {
@@ -738,8 +862,61 @@ async function show($: EngineInterface, output: Output): Promise<void> {
   for (const line of output.lines) $.ui.log(line)
 }
 
+/** Rows as a column of Text: a theme key for colour, never a raw colour, so a theme change reaches them. */
+function drawRows(Box: Parameters<typeof h>[0], Text: Parameters<typeof h>[0], rows: readonly Row[], wrap: 'wrap' | 'truncate'): RenderElement {
+  const lines = rows.map(row =>
+    h(Text, { wrap, ...(row.color !== undefined && { color: row.color }), ...(row.bold === true && { bold: true }), ...(row.dim === true && { dimColor: true }) }, row.text),
+  )
+  return h(Box, { flexDirection: 'column' }, ...lines) as RenderElement
+}
+
+/**
+ * Opens the debate pane unasked, once per session: the engine itself keeps an
+ * unasked open undrawn below 144 columns, so the mod never measures the terminal.
+ * A refused open is ignored; it is never retried.
+ */
+async function openDebatePane($: EngineInterface): Promise<void> {
+  if (sessionOf(await read($, session)).debateOpened) return
+  // Claimed before the open, so a parallel call does not open it too.
+  await update($, session, value => markDebateOpened(sessionOf(value)))
+  if ((await $.session.surfaces().catch(() => [])).length === 0) return
+  await $.ui.open({ id: DEBATE_PANE_ID, title: text('debate.title'), rows: DEBATE_PANE_ROWS }).catch(() => undefined)
+}
+
+/** `/council debate`: the pane at any width (it answers the person's command), else the same rows as transcript lines. */
+async function showDebate($: EngineInterface): Promise<void> {
+  const surfaces = await $.session.surfaces().catch(() => [])
+  if (surfaces.length > 0) {
+    const opened = await $.ui.open({ id: DEBATE_PANE_ID, title: text('debate.title'), rows: DEBATE_PANE_ROWS }).catch(() => undefined)
+    if (opened?.isPlaced === true) return
+  }
+  $.ui.log(text('debate.title'))
+  for (const row of debateRows(sessionOf(await read($, session)), undefined, currentMode())) $.ui.log(row.text)
+}
+
+/**
+ * The epic drop (themed mode, a pushed or merged call the full council
+ * approved): the row hides itself once `epicUntil` passes, whatever happens to
+ * the timer, which is only a redraw trigger (a hot reload cancels it).
+ */
+async function epicDrop($: EngineInterface): Promise<void> {
+  const until = (await $.clock.now()) + EPIC_MS
+  await update($, session, value => withEpic(sessionOf(value), until))
+  $.ui.toast(text('epic.toast'), { timeoutMs: EPIC_MS })
+  $.clock.after(EPIC_MS + 100, () => {
+    void (async () => {
+      try {
+        const now = await $.clock.now()
+        await update($, session, value => clearEpic(sessionOf(value), now))
+      } catch {
+        // The row hides itself at its time anyway.
+      }
+    })()
+  })
+}
+
 /** `/council report`: the rotated files (oldest first), then the current one; an unreadable file is named and left out. */
-async function reportFrom($: EngineInterface, path: string): Promise<Output> {
+async function reportFrom($: EngineInterface, path: string, mode?: Mode): Promise<Output> {
   const files: string[] = []
   const unreadable: string[] = []
   for (const file of [...Array.from({ length: ROTATED_FILES - 1 }, (_, i) => `${path}.${ROTATED_FILES - 1 - i}`), path]) {
@@ -749,7 +926,7 @@ async function reportFrom($: EngineInterface, path: string): Promise<Output> {
       unreadable.push(`${file}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  return reportOutput(files, unreadable)
+  return mode === undefined ? reportOutput(files, unreadable) : withMode(mode, () => reportOutput(files, unreadable))
 }
 
 /** A one-request check that a model answers: an API error is a no, a timeout unsure. */
@@ -814,16 +991,23 @@ async function councilModel($: EngineInterface, command: Extract<CouncilCommand,
   return { title, lines }
 }
 
-async function councilOutput($: EngineInterface, command: CouncilCommand): Promise<Output> {
+/**
+ * The output of one subcommand. The `$` reads come first; the pure builders then
+ * run in `mode` when one is given (the copy Claude reads is built in plain). A
+ * mode is given only for that copy, so it also hides the allowlist entries.
+ */
+async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand, { kind: 'debate' }>, mode?: Mode): Promise<Output> {
   const title = text('cmd.title')
+  // Synchronous builders only: nothing that reads `$` goes inside.
+  const inMode = (build: () => Output): Output => (mode === undefined ? build() : withMode(mode, build))
   switch (command.kind) {
     case 'status': {
       const ctx = await contextOf($)
       const state = sessionOf(await read($, session))
-      const mode = state.bypass ? 'bypass' : isShadow(state, settings.shadowMode) ? 'shadow' : 'enforcing'
-      return statusOutput({
+      const runMode = state.bypass ? 'bypass' : isShadow(state, settings.shadowMode) ? 'shadow' : 'enforcing'
+      const input: StatusInput = {
         session: state,
-        mode,
+        mode: runMode,
         members: {
           gandalf: { enabled: settings.gandalfEnabled, choice: modelChoice('gandalf', ctx, state.models) },
           legolas: { enabled: settings.legolasEnabled, choice: modelChoice('legolas', ctx, state.models) },
@@ -834,29 +1018,31 @@ async function councilOutput($: EngineInterface, command: CouncilCommand): Promi
         gollumEnabled: settings.gollumEnabled,
         galadrielEnabled: settings.galadrielEnabled,
         tokenBudget: settings.tokenBudget,
-      })
+      }
+      return inMode(() => statusOutput(input))
     }
     case 'bypass':
       await update($, session, value => withBypass(sessionOf(value), command.on))
       await syncIndicator($)
-      return { title, lines: [text(command.on ? 'cmd.bypassOn' : 'cmd.bypassOff')] }
+      return inMode(() => ({ title, lines: [text(command.on ? 'cmd.bypassOn' : 'cmd.bypassOff')] }))
     case 'shadow':
       await update($, session, value => withShadow(sessionOf(value), command.on))
       await syncIndicator($)
-      return { title, lines: [text(command.on ? 'cmd.shadowOn' : 'cmd.shadowOff')] }
+      return inMode(() => ({ title, lines: [text(command.on ? 'cmd.shadowOn' : 'cmd.shadowOff')] }))
     case 'log': {
       const ctx = await contextOf($)
       const path = resolve(settings.auditLogPath, ctx.root)
       try {
         const logText = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
-        return logOutput(logText, command.count)
+        return inMode(() => logOutput(logText, command.count))
       } catch (error) {
-        return { title, lines: [text('cmd.logUnreadable', { problem: error instanceof Error ? error.message : String(error) })] }
+        const problem = error instanceof Error ? error.message : String(error)
+        return inMode(() => ({ title, lines: [text('cmd.logUnreadable', { problem })] }))
       }
     }
     case 'rules': {
       const ctx = await contextOf($)
-      return rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors)
+      return inMode(() => rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors, mode !== undefined))
     }
     case 'test': {
       // Classification only: nothing the command names is run, read or stat'ed.
@@ -885,28 +1071,31 @@ async function councilOutput($: EngineInterface, command: CouncilCommand): Promi
               checks: settings.gimliEnabled ? ctx.loaded.compiled.config.gimli.commands.map(check => check.name) : [],
               isBranchAssumed: big.entry === 'merge-to-protected' && needsCurrentBranch(classification, ctx.loaded.compiled),
             }
-      return testOutput(redact(command.command, ctx.patterns), classification, operation, reviewer, council)
+      const typed = redact(command.command, ctx.patterns)
+      return inMode(() => testOutput(typed, classification, operation, reviewer, council))
     }
     case 'models': {
       const ctx = await contextOf($)
       const state = sessionOf(await read($, session))
       const choices = Object.fromEntries(MODEL_SLOTS.map(slot => [slot, modelChoice(slot, ctx, state.models)])) as Record<ModelSlot, ModelChoice>
-      return modelsOutput(choices)
+      return inMode(() => modelsOutput(choices))
     }
     case 'model':
       return councilModel($, command)
     case 'reload': {
       const ctx = await reloadContext($)
-      const lines = [text('cmd.reloaded', { count: ctx.loaded.compiled.rules.length, origin: ctx.loaded.origin })]
-      if (ctx.loaded.errors.length > 0) lines.push(text('cmd.configErrors', { errors: ctx.loaded.errors.join('; ') }))
-      return { title, lines }
+      return inMode(() => {
+        const lines = [text('cmd.reloaded', { count: ctx.loaded.compiled.rules.length, origin: ctx.loaded.origin })]
+        if (ctx.loaded.errors.length > 0) lines.push(text('cmd.configErrors', { errors: ctx.loaded.errors.join('; ') }))
+        return { title, lines }
+      })
     }
     case 'report': {
       const ctx = await contextOf($)
-      return reportFrom($, resolve(settings.auditLogPath, ctx.root))
+      return reportFrom($, resolve(settings.auditLogPath, ctx.root), mode)
     }
     case 'usage':
-      return { title, lines: [text(command.key, command.params ?? {}), ...(command.key === 'cmd.unknown' ? [text('cmd.help')] : [])] }
+      return inMode(() => ({ title, lines: [text(command.key, command.params ?? {}), ...(command.key === 'cmd.unknown' ? [text('cmd.help')] : [])] }))
   }
 }
 
@@ -928,14 +1117,15 @@ function callOf(e: Readonly<Record<string, unknown>>): Call {
 
 export const register: Register = (on, options) => {
   settings = settingsOf(options)
+  setMode(settings.plainMode ? 'plain' : 'themed')
 
   on('session.start', async ($, e, next) => {
     const ctx = await contextOf($).catch(() => undefined)
     await $.command
       .register({
         name: COMMAND,
-        description: 'The council: status, bypass, shadow mode, log, rules, test a command, models, reload, report',
-        argumentHint: '[on|off|shadow on|off|log [n]|rules|test "<cmd>"|model [<member> <model> [--save]]|reload|report]',
+        description: text('cmd.description'),
+        argumentHint: text('cmd.argumentHint'),
       })
       .catch((error: unknown) => {
         $.ui.log(text('notice.commandFailed', { problem: error instanceof Error ? error.message : String(error) }))
@@ -946,21 +1136,53 @@ export const register: Register = (on, options) => {
       if (isEmpty) warnOnce($, 'shadow-suggest', text('notice.shadowSuggest'), text('notice.shadowSuggest'))
     }
     await syncIndicator($).catch(() => undefined)
+    await announce($)
     return next(e)
   })
 
+  // The status line follows the roster: a surface that leaves takes its label with it.
+  on('session.detach', async ($, e, next) => {
+    const result = await next(e)
+    // At the end of the session this runs inside a short bound: skip it.
+    if (e.reason !== 'end') await syncIndicator($).catch(() => undefined)
+    return result
+  })
+
+  on('session.attach', async ($, e, next) => {
+    const result = await next(e)
+    await syncIndicator($).catch(() => undefined)
+    return result
+  })
+
   on('prompt.submit', async ($, e, next) => {
-    if (HUMAN_ORIGINS.has(e.origin.kind)) {
+    // `/council` never asks the model, so it is not a new task; a skill or prompt command is.
+    if (HUMAN_ORIGINS.has(e.origin.kind) && !isCouncilCommand(e.command, COMMAND)) {
       const patterns = (await contextOf($).catch(() => undefined))?.patterns
       await update($, session, value => resetForPrompt(sessionOf(value), redact(e.text, patterns)))
     }
     return next(e)
-  })
+  }).catch(($, e, next) =>
+    // A failing hook must not cost the person's prompt or, left uncaught, the plugin; pass it as typed.
+    next(e),
+  )
 
-  // Output goes to the user only (decision 1): no text for Claude to read.
+  // Output goes to the user (decision 1). The one exception: where nothing draws, a person's
+  // status, report, rules and test also reach Claude as `context`, to relay (ROADMAP C2).
   on('command.run', { command: COMMAND }, async ($, e) => {
-    await show($, await councilOutput($, parseCouncil(e.args)))
-    return {}
+    const command = parseCouncil(e.args)
+    if (needsPerson(command) && !HUMAN_ORIGINS.has(e.origin.kind)) {
+      await show($, { title: text('cmd.title'), lines: [text('cmd.needsPerson')] })
+      return {}
+    }
+    if (command.kind === 'debate') {
+      await showDebate($)
+      return {}
+    }
+    const output = await councilOutput($, command)
+    await show($, output)
+    // Built after the output is shown: a failure here must not cost the person the pane or the lines.
+    const context = await relayOf($, command, e.origin.kind).catch(() => undefined)
+    return context === undefined ? {} : { context }
   }).catch(($, e) => {
     $.ui.log(text('cmd.help'))
     return {}
@@ -973,6 +1195,23 @@ export const register: Register = (on, options) => {
     return h(Box, { flexDirection: 'column' }, ...shown.lines.map(line => h(Text, { wrap: 'wrap' }, line))) as RenderElement
   })
 
+  // The debate pane draws the agent in view (the main conversation: none) and only reads state.
+  on('ui.render', { component: 'Pane', requestId: DEBATE_PANE_ID }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const state = sessionOf(await read($, session))
+    return drawRows(Box, Text, debateRows(state, e.props.view.agentId, currentMode()), 'wrap')
+  })
+
+  // The council check, and the epic drop: a row each, only while there is one (terminal and desktop).
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const state = sessionOf(await read($, session))
+    const rows = bandRows(state, e.props.view.agentId, await $.clock.now(), currentMode())
+    if (rows === undefined) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return drawRows(Box, Text, rows, 'truncate')
+  })
+
   // The mode label by the prompt while bypass or shadow is on (terminal and desktop).
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const state = sessionOf(await read($, session))
@@ -981,7 +1220,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', async ($, e, next) => {
-    const started = Date.now()
+    const started = await $.clock.now()
     const call = callOf(e as unknown as Readonly<Record<string, unknown>>)
 
     /** The one way a call passes: never with the hook's own budget spent. */
@@ -1002,18 +1241,85 @@ export const register: Register = (on, options) => {
     const classification = classify(call, ctx.loaded.compiled, where)
 
     if (classification.tier === 'allow') {
+      // High-confidence secrets refuse an allowed call too (DESIGN §13.2). It has
+      // no operation, so no rounds, no failed attempt and no state write; low
+      // findings are ignored here, as the mod never asks on an allowed call.
+      if (settings.gollumEnabled) {
+        const scan = await scanCall(call, ctx.patterns, ctx.loaded.compiled.config.gollum.allowlist)
+        const first = scan.high[0]
+        if (first !== undefined) {
+          const deny = refusalText({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') })
+          const fingerprint = await fingerprintOf(call.tool, call.input)
+          const now = await $.clock.now()
+          audit(
+            $,
+            {
+              ts: new Date(now).toISOString(),
+              tool: call.tool,
+              fingerprint,
+              opKey: null,
+              tier: 'allow',
+              ruleId: classification.decided?.ruleId ?? null,
+              member: 'gollum',
+              profile: null,
+              model: null,
+              verdict: 'block',
+              reason: scan.high.map(finding => finding.label).join(', '),
+              shadow: false,
+              bypass: false,
+              decision: null,
+              outcome: 'refused',
+              latencyMs: now - started,
+              tokens: 0,
+              ...(e.agentId !== undefined && { agentId: e.agentId }),
+            },
+            ctx.root,
+          )
+          return { deny }
+        }
+      }
       const result = await proceed()
       await noteWrite($, call, cwd, ctx.home, result).catch(() => undefined)
       return result
     }
 
     // A gated call: everything from here is audited.
-    const state = sessionOf(await read($, session))
+    const stored = await read($, session)
+    const state = sessionOf(stored)
+    // Read as a fresh session, so the call is decided normally; said once, here, since updaters stay pure.
+    if (stored !== undefined && !isSession(stored)) $.ui.log(text('notice.sessionMalformed'), { to: 'debug' })
+    // The prompt this call belongs to. A review runs while `next(e)` is in
+    // flight; if the user sends a new prompt meanwhile, resetForPrompt bumps
+    // the epoch, and a round, wipe or cached approve written afterwards must
+    // not land in that new prompt. `thisPrompt` guards those writes.
+    const epoch = state.promptEpoch
+    const thisPrompt = (value: CouncilSession | undefined): boolean => sessionOf(value).promptEpoch === epoch
     const fingerprint = await fingerprintOf(call.tool, call.input)
     const operation = operationOf(call, classification, where)
     const decided = classification.decided
     const shadow = isShadow(state, settings.shadowMode)
-    const shownCall = `${call.tool}: ${callText(call, ctx.patterns)}`
+    // Built on first use: a block, lockout or cached call never shows it, and a write can be megabytes.
+    let callTextMemo: string | undefined
+    const callTextOf = (): string => {
+      if (callTextMemo === undefined) callTextMemo = callText(call, ctx.patterns)
+      return callTextMemo
+    }
+    const shownCall = (): string => `${call.tool}: ${callTextOf()}`
+    // The debate record: keyed by the call's id, tagged with the agent that made it. It only watches.
+    const debateId = e.tool_use_id
+    const debateOf = (kind: CouncilDebate['kind'], voices: CouncilDebate['voices'], checks: CouncilDebate['checks'] = []): CouncilDebate => ({
+      id: debateId,
+      ...(e.agentId !== undefined && { agentId: e.agentId }),
+      tool: call.tool,
+      call: tidyCall(callTextOf()),
+      kind,
+      status: 'sitting',
+      voices,
+      checks,
+    })
+    const redacted = (raw: string | undefined): string | undefined => (raw === undefined ? undefined : redact(raw, ctx.patterns))
+    // Set once the full council approved this very call; the epic drop reads it after the call ran.
+    let isCouncilApproved = false
     // Who reviews a review-tier call: the rule's member, or the fallback (pure).
     const seated = classification.tier === 'review' ? route(call, classification, enabledMembers()) : undefined
     const routedMember: MemberName | null = seated === undefined ? null : seated.kind === 'member' ? seated.member : seated.wanted.member
@@ -1036,8 +1342,9 @@ export const register: Register = (on, options) => {
     /** Audits the call, then counts it: a failed attempt, or a success that clears its operation. */
     const finish = async (result: ToolCallResult, isWipe = false): Promise<ToolCallResult> => {
       const outcome = outcomeOf(result)
+      const now = await $.clock.now()
       const record: AuditRecord = {
-        ts: new Date().toISOString(),
+        ts: new Date(now).toISOString(),
         tool: call.tool,
         fingerprint,
         opKey: operation.key,
@@ -1052,7 +1359,7 @@ export const register: Register = (on, options) => {
         bypass: state.bypass,
         decision,
         outcome,
-        latencyMs: Date.now() - started,
+        latencyMs: now - started,
         ...(reviewMs !== undefined && { reviewMs }),
         ...(ruleAdded !== undefined && { ruleAdded }),
         tokens,
@@ -1060,10 +1367,18 @@ export const register: Register = (on, options) => {
         ...(councilRecord !== undefined && { council: councilRecord }),
         ...(e.agentId !== undefined && { agentId: e.agentId }),
       }
-      await audit($, record, ctx.root)
+      audit($, record, ctx.root)
       const counts = result.deny !== undefined ? isWipe : isWipeOutcome(outcome, wipePolicy())
       if (counts || outcome === 'ran') {
-        await update($, session, value => (counts ? noteWipe(sessionOf(value), operation) : resetOperation(sessionOf(value), operation.key)))
+        await update($, session, value => {
+          const current = sessionOf(value)
+          if (!thisPrompt(current)) return current // a new prompt already reset the counters
+          return counts ? noteWipe(current, operation) : resetOperation(current, operation.key)
+        })
+      }
+      // Cosmetic and themed only: a failure here never changes the result.
+      if (outcome === 'ran' && isCouncilApproved && rangeOf(classification) !== undefined && currentMode() === 'themed') {
+        await epicDrop($).catch(() => undefined)
       }
       if (result.deny === undefined) await noteWrite($, call, cwd, ctx.home, result).catch(() => undefined)
       return result
@@ -1101,27 +1416,42 @@ export const register: Register = (on, options) => {
       opinions: readonly MemberOpinion[],
       secrets: readonly GollumFinding[] = [],
     ): Promise<'allowed' | ToolCallResult> => {
-      const question = questionText({
-        call: shownCall,
-        ruleReason: decided?.reason ?? '',
-        why,
-        opinions,
-        ...(preview !== undefined && { preview }),
-        ...(secrets.length > 0 && { secrets: secrets.map(finding => ({ label: finding.label, snippet: finding.snippet })) }),
-        canAllowlist: secrets.length === 1,
-      })
+      const question = questionText(
+        {
+          call: shownCall(),
+          ruleReason: decided?.reason ?? '',
+          why,
+          opinions,
+          ...(preview !== undefined && { preview }),
+          ...(secrets.length > 0 && { secrets: secrets.map(finding => ({ label: finding.label, snippet: finding.snippet })) }),
+          canAllowlist: secrets.length === 1,
+        },
+        currentMode(),
+      )
       // One entry per confirm: the allowlist is offered for a single finding only.
       const answer = await escalate($, question, secrets.length === 1)
-      if (answer === 'unavailable' || answer === 'dismissed' || answer === 'chat') {
+      if (answer === 'unavailable') {
         decision = answer
-        const reason =
-          answer === 'unavailable'
-            ? text('reason.nobodyToAsk', { why: text(why) })
-            : answer === 'chat'
-              ? text('reason.userWantsChat')
-              : text('reason.userDismissed')
-        // Decision 4: chatting is not a failed attempt; dismissing and nobody to ask are.
-        return refuse({ who: 'who.user', verdict: 'not allowed', reason, alternative: text(answer === 'chat' ? 'alternative.chat' : 'alternative.ask') }, answer !== 'chat')
+        // Only reached where escalate found no surface, so the model is the only way to tell the person (ROADMAP C2).
+        // The operation and the names of who is behind it; never the call, a preview, a finding or a diff.
+        const unasked = nobodyToAsk({
+          why: text(why, {}, 'plain'),
+          operation: redact(operation.key, ctx.patterns),
+          ...(decided !== undefined && { ruleId: decided.ruleId }),
+          opinions,
+        })
+        // A failed attempt, as dismissing is.
+        return refuse({ who: 'who.user', verdict: 'not allowed', reason: unasked.reason, alternative: unasked.alternative }, true)
+      }
+      if (answer === 'dismissed') {
+        decision = answer
+        // Dismissing (or the engine's "Chat about this") is a failed attempt.
+        return refuse({ who: 'who.user', verdict: 'not allowed', reason: text('reason.userDismissed'), alternative: text('alternative.ask') }, true)
+      }
+      if (answer.kind === 'talk-first') {
+        decision = 'chat'
+        // Decision 4: "Talk first" is not a failed attempt.
+        return refuse({ who: 'who.user', verdict: 'not allowed', reason: text('reason.userWantsChat'), alternative: text('alternative.chat') }, false)
       }
       if (answer.kind === 'allow-once') {
         decision = 'allow-once'
@@ -1138,6 +1468,9 @@ export const register: Register = (on, options) => {
             return 'allowed'
           }
           $.ui.log(text('notice.allowlistFailed', { problem: written.problem }))
+          decision = 'keep-blocked'
+          // The write failed, not Claude's attempt: it stays blocked but is not counted against it.
+          return refuse({ who: 'who.user', verdict: 'keep blocked', reason: text('reason.allowlistNotWritten'), alternative: text('alternative.removeSecret') }, false)
         }
         decision = 'keep-blocked'
         return refuse({ who: 'who.user', verdict: 'keep blocked', reason: text('reason.userKeptBlocked'), alternative: text('alternative.removeSecret') }, true)
@@ -1177,7 +1510,8 @@ export const register: Register = (on, options) => {
     }
 
     // 5. Lockout: too many failed attempts on this operation since the user last wrote.
-    const lockout = lockoutOf(state, operation)
+    // Decided on a fresh read: a parallel call's failed attempts may have landed since the first.
+    const lockout = lockoutOf(sessionOf(await read($, session)), operation)
     if (lockout !== undefined) {
       member = null
       verdictText = 'locked out'
@@ -1239,7 +1573,8 @@ export const register: Register = (on, options) => {
       profile = null
       const seats = councilSeats(call, classification, enabledMembers(), { ranges: settings.galadrielEnabled })
       if (seats.length === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', [])
-      if (state.tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
+      // A fresh read, so reviews running in parallel are counted when this one decides.
+      if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
       const choice = modelChoice('council', ctx, state.models)
       model = choice.model
       const range = rangeOf(classification)
@@ -1249,16 +1584,16 @@ export const register: Register = (on, options) => {
         const who = whoOf(seat.member, seat.member === 'aragorn' ? seat.profile : undefined)
         if (seat.member === 'legolas' && seat.range !== undefined) {
           const inspection = range === undefined ? undefined : rangeDiffInspection(range.kind, range.part)
-          const diff = inspection?.kind === 'git' ? await rangeDiffOf($, inspection.argv, ctx) : undefined
+          const read = inspection?.kind === 'git' ? await rangeDiffOf($, inspection, ctx) : undefined
           sittings.push(
-            inspection === undefined || diff === undefined
+            read === undefined
               ? { seat, who, skip: text('council.noRange') }
               : {
                   seat,
                   who,
                   brief: {
                     member: 'legolas',
-                    context: { tool: call.tool, path: inspection.label, range: { kind: seat.range, call: callText(call, ctx.patterns) }, diff: { diff, isNew: false }, ruleReasons, latestPrompt: state.latestPrompt },
+                    context: { tool: call.tool, path: read.label, range: { kind: seat.range, call: callText(call, ctx.patterns) }, diff: { diff: read.diff, isNew: false }, ruleReasons, latestPrompt: state.latestPrompt },
                   },
                 },
           )
@@ -1268,16 +1603,49 @@ export const register: Register = (on, options) => {
         sittings.push({ seat, who, brief: await briefOf($, asked, call, classification, cwd, realPath, state, preview, ctx) })
       }
       const checks = settings.gimliEnabled ? ctx.loaded.compiled.config.gimli.commands : []
-      const reviewStarted = Date.now()
-      const held = await convene($, sittings, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), settings.councilSequential, checks, ctx.root, next.signal)
+      const debate = debateOf(
+        'council',
+        sittings.map(sitting => ({
+          member: sitting.seat.member,
+          ...(sitting.seat.member === 'aragorn' && { profile: sitting.seat.profile }),
+          status: sitting.brief === undefined ? ('skipped' as const) : ('waiting' as const),
+          ...(sitting.brief === undefined && sitting.skip !== undefined && { reason: tidyReason(sitting.skip) }),
+        })),
+        checks.map(check => ({ name: check.name, status: 'running' as const })),
+      )
+      await update($, session, value => openDebate(sessionOf(value), debate)).catch(() => undefined)
+      await openDebatePane($).catch(() => undefined)
+      const progress = async (event: Progress): Promise<void> => {
+        if (event.kind === 'check') {
+          await update($, session, value => noteCheck(sessionOf(value), debateId, event.run.name, event.run.status))
+          return
+        }
+        const outcome = voiceNote(event.voice)
+        const detail = { reason: redacted(outcome.reason), alternative: redacted(outcome.alternative) }
+        await update($, session, value => noteVoice(sessionOf(value), debateId, event.index, outcome.status, detail))
+      }
+      const reviewStarted = await $.clock.now()
+      const held = await convene($, sittings, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), settings.councilSequential, checks, ctx.root, next.signal, progress)
+      // Esc aborts the model calls and kills the checks. That is not a verdict
+      // and not the user keeping the call blocked: refuse plainly, no wipe, no
+      // round, no dialog on an abandoned dispatch.
+      if (next.signal.aborted) {
+        verdictText = 'aborted'
+        isShadowed = shadow
+        await update($, session, value => closeDebate(sessionOf(value), debateId, 'aborted')).catch(() => undefined)
+        return finish({ deny: refusalText({ who: 'who.fullCouncil', verdict: 'interrupted', reason: text('reason.aborted'), alternative: '' }) }, false)
+      }
       const runs = held.runs.map(run => ({ ...run, tail: redact(run.tail, ctx.patterns) }))
       const combined = combine(held.voices, runs)
-      const councilMs = Date.now() - reviewStarted
+      const councilMs = (await $.clock.now()) - reviewStarted
       reviewMs = councilMs
       tokens = held.tokens.reduce((sum, n) => sum + n, 0)
       isShadowed = shadow
       const isVerdict = combined.reviewed > 0 && !combined.isFailureOnly
       verdictText = isVerdict ? combined.verdict : 'failed'
+      isCouncilApproved = isVerdict && combined.verdict === 'approve'
+      const debateVerdict = isVerdict ? combined.verdict : 'failed'
+      await update($, session, value => closeDebate(sessionOf(value), debateId, debateVerdict)).catch(() => undefined)
       // The audit keeps no check output: the summary leaves it out.
       reasonText = combined.summary || null
       councilRecord = {
@@ -1297,7 +1665,7 @@ export const register: Register = (on, options) => {
         }
         if (runs.length > 0) counted = count(counted, 'gimli', runs.some(isGimliBlock) ? 'block' : 'approve')
         counted = count(counted, 'council', isVerdict ? combined.verdict : 'failed')
-        return isVerdict && !shadow ? noteRound(counted, operation.key, combined.verdict === 'approve') : counted
+        return isVerdict && !shadow && thisPrompt(value) ? noteRound(counted, operation.key, combined.verdict === 'approve') : counted
       })
 
       if (combined.reviewed === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', combined.opinions)
@@ -1305,6 +1673,7 @@ export const register: Register = (on, options) => {
       if (combined.verdict === 'approve') {
         await update($, session, value => {
           const current = sessionOf(value)
+          if (!thisPrompt(current)) return current // do not cache into a newer prompt
           return { ...current, cache: cacheApprove(current.cache, fingerprint) }
         })
         return finish(await proceed())
@@ -1325,7 +1694,7 @@ export const register: Register = (on, options) => {
       if (big !== undefined) return holdCouncil(big)
     }
     if (seated === undefined || seated.kind === 'none') return shadow ? passInShadow() : askUser('escalate.memberOff', [])
-    if (state.tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
+    if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
 
     // 10. Review, and act on the verdict.
     const brief = await briefOf($, seated, call, classification, cwd, realPath, state, preview, ctx)
@@ -1334,17 +1703,31 @@ export const register: Register = (on, options) => {
     profile = brief.profile ?? null
     const choice = modelChoice(brief.member, ctx, state.models)
     model = choice.model
-    const reviewStarted = Date.now()
+    const debate = debateOf('review', [{ member: brief.member, ...(brief.profile !== undefined && { profile: brief.profile }), status: 'waiting' }])
+    await update($, session, value => openDebate(sessionOf(value), debate)).catch(() => undefined)
+    await openDebatePane($).catch(() => undefined)
+    const reviewStarted = await $.clock.now()
     const verdict = await review($, brief, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), next.signal)
-    const memberMs = Date.now() - reviewStarted
+    if (next.signal.aborted) {
+      verdictText = 'aborted'
+      isShadowed = shadow
+      await update($, session, value => closeDebate(sessionOf(value), debateId, 'aborted')).catch(() => undefined)
+      return finish({ deny: refusalText({ who, verdict: 'interrupted', reason: text('reason.aborted'), alternative: '' }) }, false)
+    }
+    const memberMs = (await $.clock.now()) - reviewStarted
     reviewMs = memberMs
     tokens = verdict.tokens
     isShadowed = shadow
+    const voiced = verdict.ok ? verdict.verdict.verdict : ('failed' as const)
+    const voicedDetail = verdict.ok
+      ? { reason: redacted(verdict.verdict.reason), alternative: redacted(verdict.verdict.safer_alternative) }
+      : { reason: redacted(verdict.problem) }
+    await update($, session, value => closeDebate(noteVoice(sessionOf(value), debateId, 0, voiced, voicedDetail), debateId, voiced)).catch(() => undefined)
     await update($, session, value => {
       const spent = addReviewTime(addTokens(sessionOf(value), verdict.tokens), memberMs)
       const counted = count(spent, brief.member, verdict.ok ? verdict.verdict.verdict : 'failed')
       // A round is a verdict that enforces: in shadow, verdicts only log.
-      return verdict.ok && !shadow ? noteRound(counted, operation.key, verdict.verdict.verdict === 'approve') : counted
+      return verdict.ok && !shadow && thisPrompt(value) ? noteRound(counted, operation.key, verdict.verdict.verdict === 'approve') : counted
     })
 
     if (!verdict.ok) {
@@ -1358,6 +1741,7 @@ export const register: Register = (on, options) => {
     if (verdict.verdict.verdict === 'approve') {
       await update($, session, value => {
         const current = sessionOf(value)
+        if (!thisPrompt(current)) return current // do not cache into a newer prompt
         return { ...current, cache: cacheApprove(current.cache, fingerprint) }
       })
       return finish(await proceed())

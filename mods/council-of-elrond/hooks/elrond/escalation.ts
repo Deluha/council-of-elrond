@@ -5,8 +5,9 @@ import type { Mode, StringKey } from '../strings.js'
 
 /**
  * The escalation: the question put to the user, and what their answer means.
- * The dialog is the engine's AskUserQuestion: two labelled options and a
- * free-text "Other", which reaches Claude as an instruction.
+ * The dialog is the engine's AskUserQuestion: the mod's labelled options plus a
+ * free-text "Other", which reaches Claude as an instruction. The engine's own
+ * "Chat about this" reads as a dismissal (DESIGN §12.4).
  */
 
 export type MemberOpinion =
@@ -30,9 +31,10 @@ export type Answer =
   | { kind: 'allow-once' }
   | { kind: 'keep-blocked' }
   | { kind: 'allowlist' }
+  | { kind: 'talk-first' }
   | { kind: 'instruction'; text: string }
 
-export type Unanswered = 'dismissed' | 'chat' | 'unavailable'
+export type Unanswered = 'dismissed' | 'unavailable'
 
 const MAX_QUESTION_CHARS = 2_500
 
@@ -43,6 +45,7 @@ export const optionsOf = (mode: Mode = 'plain', withAllowlist = false): string[]
   text('ask.allowOnce', {}, mode),
   ...(withAllowlist ? [text('ask.allowlist', {}, mode)] : []),
   text('ask.keepBlocked', {}, mode),
+  text('ask.talkFirst', {}, mode),
 ]
 
 export function questionText(question: Question, mode: Mode = 'plain'): string {
@@ -72,10 +75,7 @@ export function questionText(question: Question, mode: Mode = 'plain'): string {
 export function interpretAnswer(answer: string, mode: Mode = 'plain', withAllowlist = false): Answer {
   if (answer === text('ask.allowOnce', {}, mode)) return { kind: 'allow-once' }
   if (answer === text('ask.keepBlocked', {}, mode)) return { kind: 'keep-blocked' }
+  if (answer === text('ask.talkFirst', {}, mode)) return { kind: 'talk-first' }
   if (withAllowlist && answer === text('ask.allowlist', {}, mode)) return { kind: 'allowlist' }
   return { kind: 'instruction', text: answer.trim() }
 }
-
-/** Why `$.ui.ask` rejected: the user chose to chat, or dismissed it. */
-export const interpretRejection = (error: unknown): Unanswered =>
-  /chat/i.test(error instanceof Error ? error.message : String(error)) ? 'chat' : 'dismissed'

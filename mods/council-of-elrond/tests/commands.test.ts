@@ -1,12 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { parseCouncil, words } from '../hooks/elrond/commands.js'
-import { APPROVE, auditLines, BLOCK, denyOf, ROOT, USAGE, world } from './fixtures.js'
+import { isCouncilCommand, needsPerson, parseCouncil, words } from '../hooks/elrond/commands.js'
+import { text } from '../hooks/strings.js'
+import { ALLOW_ONCE, APPROVE, auditLines, BLOCK, council, denyOf, KEEP_BLOCKED, ROOT, settled, USAGE, world } from './fixtures.js'
 
 const PLUGIN = 'council-of-elrond'
-
-type Dollar = { command: { run: (e: { command: string; args?: string }) => Promise<unknown> } }
-const council = ($: unknown, args = '') => ($ as Dollar).command.run({ command: 'council', args })
 
 describe('parsing', () => {
   test('subcommands and their arguments', () => {
@@ -20,17 +18,37 @@ describe('parsing', () => {
     expect(parseCouncil('test rm -rf build')).toEqual({ kind: 'test', command: 'rm -rf build' })
     expect(parseCouncil('model gandalf opus --save')).toEqual({ kind: 'model', slot: 'gandalf', model: 'opus', save: true })
     expect(parseCouncil('model')).toEqual({ kind: 'models' })
+    expect(parseCouncil('debate')).toEqual({ kind: 'debate' })
+    expect(parseCouncil('  DEBATE ')).toEqual({ kind: 'debate' })
     expect(parseCouncil('frobnicate')).toMatchObject({ kind: 'usage', key: 'cmd.unknown' })
     expect(words('a "b c" \'d e\'')).toEqual(['a', 'b c', 'd e'])
   })
 })
 
+describe('which subcommands need a person', () => {
+  test('only the ones that loosen the gate: bypass on, shadow on, a model switch or clearing it', () => {
+    const needing = ['off', 'shadow on', 'model gandalf opus', 'model gandalf default', 'model aragorn claude-opus-5-5 --save']
+    for (const args of needing) expect(needsPerson(parseCouncil(args)), args).toBe(true)
+    const open = ['', 'status', 'on', 'shadow off', 'shadow', 'model', 'models', 'log 5', 'rules', 'test "ls"', 'reload', 'report', 'debate', 'frobnicate']
+    for (const args of open) expect(needsPerson(parseCouncil(args)), args).toBe(false)
+  })
+})
+
+describe('which submissions are the council command', () => {
+  test('only one whose command is named so; none, or another command, is not', () => {
+    expect(isCouncilCommand(undefined, 'council')).toBe(false)
+    expect(isCouncilCommand({ name: 'review' }, 'council')).toBe(false)
+    expect(isCouncilCommand({ name: 'council' }, 'council')).toBe(true)
+  })
+})
+
 describe('/council', () => {
-  test('its output never reaches Claude: no text in the result, lines to the transcript where nothing draws', async ($, on) => {
+  test('its output is not the command text: lines to the transcript where nothing draws, and Claude gets it only as relay context (tests/relay.test.ts)', async ($, on) => {
     const w = world(on, { surfaces: [] })
-    const result = (await council($)) as { text?: string; context?: unknown }
+    const result = (await council($)) as { text?: string; context?: string[] }
     expect(result.text).toBeUndefined()
-    expect(result.context).toBeUndefined()
+    expect(result.context).toHaveLength(1)
+    expect(result.context?.[0]).toContain('The user ran /council status.')
     expect(w.logs.join('\n')).toContain('Mode: enforcing')
     expect(w.logs.join('\n')).toContain('Review tokens this session: 0 of 1500000')
   })
@@ -75,15 +93,15 @@ describe('/council', () => {
     expect(w.logs.join('\n')).toMatch(/Reviewer: .+ \[gandalf\], model sonnet \(built-in\)/)
     w.logs.length = 0
     await council($, 'test "git rebase main"')
-    expect(w.logs.join('\n')).toContain('Reviewer: the git reviewer [aragorn/git], model opus (built-in)')
+    expect(w.logs.join('\n')).toContain('Reviewer: Aragorn (git) [aragorn/git], model opus (built-in)')
     w.logs.length = 0
     await council($, 'test "git rebase main && rm -rf build"')
-    expect(w.logs.join('\n')).toContain('Reviewer: the destructive-operations reviewer [gandalf], model sonnet (built-in)')
-    expect(w.logs.join('\n')).toContain('The rule names the git reviewer [aragorn/git], but the parts of the command name different reviewers')
+    expect(w.logs.join('\n')).toContain('Reviewer: Gandalf [gandalf], model sonnet (built-in)')
+    expect(w.logs.join('\n')).toContain('The rule names Aragorn (git) [aragorn/git], but the parts of the command name different reviewers')
     w.logs.length = 0
     await council($, 'test "git push origin feature && rm -rf build"')
-    expect(w.logs.join('\n')).toContain('Reviewer: the full council (a big operation: /^git\\s+push(\\s|$)/), model opus (built-in).')
-    expect(w.logs.join('\n')).toContain('Seats: the destructive-operations reviewer [gandalf]; the diff reviewer [legolas], on what the push would change; the git reviewer [aragorn/git].')
+    expect(w.logs.join('\n')).toContain('Reviewer: the Council of Elrond (a big operation: /^git\\s+push(\\s|$)/), model opus (built-in).')
+    expect(w.logs.join('\n')).toContain('Seats: Gandalf [gandalf]; Legolas [legolas], on what the push would change; Aragorn (git) [aragorn/git].')
     expect(w.logs.join('\n')).toContain('No project checks are configured')
     w.logs.length = 0
     await council($, 'test "ls -la"')
@@ -94,8 +112,8 @@ describe('/council', () => {
     const w = world(on, { surfaces: [] })
     await council($, 'test "psql -c \'DELETE FROM t\'"')
     const shown = w.logs.join('\n')
-    expect(shown).toContain('Reviewer: the destructive-operations reviewer [gandalf]')
-    expect(shown).toContain('The rule names the database reviewer [aragorn/database], but it is switched off')
+    expect(shown).toContain('Reviewer: Gandalf [gandalf]')
+    expect(shown).toContain('The rule names Aragorn (databases) [aragorn/database], but it is switched off')
   })
 
   test('status lists every model member with its state, model and counts', { options: { legolasEnabled: false } }, async ($, on) => {
@@ -121,12 +139,13 @@ describe('/council', () => {
   test('log shows the last verdicts from the audit log', async ($, on) => {
     const w = world(on, { surfaces: [], replies: [BLOCK] })
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+    await settled(w)
     await council($, 'log')
     expect(w.logs.join('\n')).toMatch(/Bash\s+review\s+gandalf: block\s+→ refused/)
   })
 
   test('reload picks up an edited rules file', async ($, on) => {
-    const w = world(on, { surfaces: [], answer: 'Keep blocked' })
+    const w = world(on, { surfaces: [], answer: KEEP_BLOCKED })
     expect(await $.tool.call({ tool: 'Bash', command: 'make deploy' })).toEqual({ result: 'ran' })
     w.files.set(`${ROOT}/.claude/council-of-elrond/rules.json`, JSON.stringify({ schemaVersion: 1, rules: [{ id: 'deploy', tier: 'ask', tools: ['Bash'], command: '^make deploy', reason: 'Deploys.' }] }))
     expect(await $.tool.call({ tool: 'Bash', command: 'make deploy' })).toEqual({ result: 'ran' })
@@ -208,7 +227,7 @@ describe('bypass', () => {
     await council($, 'off')
     expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).toEqual({ result: 'ran' })
     expect(w.modelRequests).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ bypass: true, outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ bypass: true, outcome: 'ran' })
     await council($, 'on')
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('(block)')
   })
@@ -219,7 +238,7 @@ describe('shadow mode', () => {
     const w = world(on, { surfaces: [], replies: [BLOCK] })
     await council($, 'shadow on')
     expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).toEqual({ result: 'ran' })
-    expect(auditLines(w)[0]).toMatchObject({ verdict: 'block', shadow: true, outcome: 'ran' })
+    expect((await auditLines(w))[0]).toMatchObject({ verdict: 'block', shadow: true, outcome: 'ran' })
     // Not a round, not a failed attempt: it keeps being reviewed.
     for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(w.modelRequests).toHaveLength(4)
@@ -229,11 +248,11 @@ describe('shadow mode', () => {
     const w = world(on, { replies: [{ isAnswered: false, reason: 'aborted', usage: USAGE }] })
     expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).toEqual({ result: 'ran' })
     expect(w.asked).toEqual([])
-    expect(auditLines(w)[0]).toMatchObject({ verdict: 'failed', shadow: true })
+    expect((await auditLines(w))[0]).toMatchObject({ verdict: 'failed', shadow: true })
   })
 
   test('block rules, the ask tier and protected paths still enforce', { options: { shadowMode: true } }, async ($, on) => {
-    const w = world(on, { answer: 'Keep blocked' })
+    const w = world(on, { answer: KEEP_BLOCKED })
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf /' }))).toContain('(block)')
     expect(denyOf(await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/.env`, old_string: 'A=1', new_string: 'A=2' }))).toContain('(keep blocked)')
     expect(w.asked).toHaveLength(1)
@@ -268,7 +287,7 @@ describe('the mode label', () => {
     }
     await council($, 'off')
     const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
-    expect(await ui.find({ text: /council: bypass/ })).toBeDefined()
+    expect(await ui.find({ text: /council: Leeroy mode/ })).toBeDefined()
   })
 
   test('on a surface with no mode labels, it goes to the status line', async ($, on) => {
@@ -278,9 +297,111 @@ describe('the mode label', () => {
   })
 })
 
+describe('who may run what', () => {
+  const REFUSED = 'only run when a person types them'
+  const NOT_A_PERSON: { kind: string; name?: string }[] = [
+    { kind: 'plugin', name: 'x' },
+    { kind: 'peer' },
+    { kind: 'scheduled-trigger' },
+    { kind: 'task-notification' },
+  ]
+  const A_PERSON: { kind: string }[] = [{ kind: 'composer' }, { kind: 'bridge' }, { kind: 'sdk' }]
+
+  test('off from a plugin, a peer session or a schedule changes nothing and says so', async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [BLOCK] })
+    for (const origin of NOT_A_PERSON) {
+      await council($, 'off', origin)
+      expect(w.logs.join('\n'), origin.kind).toContain(REFUSED)
+      expect(w.logs.join('\n'), origin.kind).not.toContain('Bypass is on')
+      w.logs.length = 0
+    }
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('(block)')
+    expect(w.ran).toEqual([])
+  })
+
+  test('shadow on from them changes nothing and says so', async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [BLOCK] })
+    for (const origin of NOT_A_PERSON) {
+      await council($, 'shadow on', origin)
+      expect(w.logs.join('\n'), origin.kind).toContain(REFUSED)
+      w.logs.length = 0
+    }
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('(block)')
+    expect(w.ran).toEqual([])
+  })
+
+  test('a model switch, or clearing one, from them changes nothing and says so; no probe is sent', async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [APPROVE] })
+    for (const origin of NOT_A_PERSON) {
+      await council($, 'model gandalf opus', origin)
+      await council($, 'model gandalf default', origin)
+      expect(w.logs.join('\n'), origin.kind).toContain(REFUSED)
+      w.logs.length = 0
+    }
+    expect(w.modelRequests).toEqual([])
+    await council($, 'model')
+    expect(w.logs.join('\n')).toContain('gandalf: sonnet (built-in)')
+  })
+
+  test('the refusal is one line through the same path as any output: the pane where one draws, else the transcript', async ($, on) => {
+    const quiet = world(on, { surfaces: [] })
+    await council($, 'off', { kind: 'plugin', name: 'x' })
+    expect(quiet.logs).toEqual(['Council', text('cmd.needsPerson')])
+  })
+
+  test('where a surface draws, the refusal goes to the pane, not the transcript', async ($, on) => {
+    const w = world(on, { surfaces: ['terminal'] })
+    await council($, 'off', { kind: 'plugin', name: 'x' })
+    expect(w.panes).toEqual(['council'])
+    expect(w.logs).toEqual([])
+  })
+
+  test('a person at the composer, the bridge or the SDK can run all three', async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [BLOCK, APPROVE] })
+    for (const origin of A_PERSON) {
+      await council($, 'off', origin)
+      expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }), origin.kind).toEqual({ result: 'ran' })
+      await council($, 'on', origin)
+      await council($, 'shadow on', origin)
+      expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }), origin.kind).toEqual({ result: 'ran' })
+      await council($, 'shadow off', origin)
+      w.logs.length = 0
+      await council($, 'model gandalf opus', origin)
+      expect(w.logs.join('\n'), origin.kind).toContain('gandalf uses opus for this session.')
+      await council($, 'model gandalf default', origin)
+    }
+    expect(w.logs.join('\n')).not.toContain(REFUSED)
+  })
+
+  test('everything that does not loosen the gate answers any origin', async ($, on) => {
+    const w = world(on, { surfaces: [], replies: [BLOCK] })
+    await council($, 'off')
+    const plugin = { kind: 'plugin', name: 'x' }
+    await council($, 'on', plugin)
+    // Bypass is over: the call is reviewed again.
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('(block)')
+    await council($, 'shadow on')
+    await council($, 'shadow off', plugin)
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('(block)')
+    w.logs.length = 0
+    for (const args of ['', 'status', 'models', 'rules', 'log', 'reload', 'report', 'test "ls"', 'debate']) await council($, args, plugin)
+    const shown = w.logs.join('\n')
+    expect(shown).toContain('Mode: enforcing')
+    expect(shown).toContain('Rules reloaded')
+    expect(shown).not.toContain(REFUSED)
+  })
+
+  test('the command is registered with the table\'s description and argument hint', async ($, on) => {
+    const w = world(on)
+    on('session.start', ($$, e) => ({ cwd: e.cwd }))
+    await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+    expect(w.commandSpecs).toEqual([{ name: 'council', description: text('cmd.description'), argumentHint: text('cmd.argumentHint') }])
+  })
+})
+
 describe('allow once', () => {
   test('labels Claude Code\'s own permission dialog', async ($, on) => {
-    const w = world(on, { answer: 'Allow once' })
+    const w = world(on, { answer: ALLOW_ONCE })
     await $.tool.call({ tool: 'Bash', command: 'sudo ls', tool_use_id: 'tu-1' } as never)
     expect(w.notices).toEqual([{ id: 'tu-1', text: 'Council: you allowed this once' }])
   })

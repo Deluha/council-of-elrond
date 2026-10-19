@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, truncate, untrusted, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, label, truncate, untrusted, untrustedRules } from './shared.js'
 import type { CallDiff } from './legolas.js'
 import { seatOf } from '../elrond/routing.js'
 import type { Classification } from '../rules/classify.js'
@@ -175,7 +175,7 @@ export function aragornDatabasePrompt(context: AragornDatabaseContext, nonce: st
     context.diff !== undefined
       ? untrusted('diff', context.diff.diff, nonce)
       : untrusted('call', truncate(context.call, limits.callLines, limits.callChars), nonce),
-    ...context.sql.map(piece => `SQL (${piece.label}):\n${untrusted('sql', truncate(piece.text, limits.sqlLines, limits.sqlChars), nonce)}`),
+    ...context.sql.map(piece => `SQL (${label(piece.label)}):\n${untrusted('sql', truncate(piece.text, limits.sqlLines, limits.sqlChars), nonce)}`),
     "The user's latest message:",
     untrusted('user-request', truncate(context.latestPrompt || '(none recorded)', 60, limits.promptChars), nonce),
     'Your verdict, as JSON only:',

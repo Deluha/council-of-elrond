@@ -13,6 +13,32 @@ import type { ClassifyContext } from '../hooks/rules/classify.js'
  * `tool.call` chain (what runs is recorded, nothing executes).
  */
 
+/** The theme's own words: none may reach plain mode or anything Claude reads. */
+export const THEME =
+  /gandalf|legolas|aragorn|gimli|gollum|galadriel|elrond|boromir|mordor|middle-earth|shall not pass|leeroy|wipe|loot|raid|\bneed:|\bpass:|greed|legendary|epic|threat|ready check|precious|isengard|rivendell|\belf\b/i
+
+/** The plugin's own name (it is in the rules path and the start notice) is an identifier, not theme text. */
+export const withoutPluginName = (shown: string): string => shown.replaceAll('council-of-elrond', '')
+
+/** Member ids (`[gandalf]`, `[aragorn/git]`) are config keys the user types, not theme text. */
+export const withoutIds = (shown: string): string => shown.replace(/\[[a-z/]+\]/g, '')
+
+/**
+ * Fake secrets in the shapes the redaction patterns match. Each is joined from
+ * two halves at run time so that no committed line holds a well-formed token
+ * (secret scanners flag those), while the tests still exercise the real patterns.
+ */
+export const FAKE_AWS_KEY = ['AKIA', 'ABCDEFGHIJKLMNOP'].join('')
+export const FAKE_GITHUB_TOKEN = ['ghp_', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('')
+
+export const FAKE_GITLAB_TOKEN = ['glpat-', 'abcdefghij0123456789xyz'].join('')
+export const FAKE_NPM_TOKEN = ['npm_', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('')
+export const FAKE_GOOGLE_OAUTH_SECRET = ['GOCSPX-', 'abcdefghijklmnopqrstuvwxyz01'].join('')
+export const FAKE_SLACK_WEBHOOK = ['https://hooks.slack.com/services/', 'T0ABCDEFGH/B0ABCDEFGH/', 'abcdefghijklmnopqrstuvwx'].join('')
+export const FAKE_PGP_KEY = ['-----BEGIN PGP PRIVATE KEY', ' BLOCK-----\nlQdGBF\n-----END PGP PRIVATE KEY', ' BLOCK-----'].join('')
+export const FAKE_JWT = ['eyJhbGciOiJIUzI1NiJ9', '.eyJzdWIiOiIxMjM0NTY3ODkwIn0', '.abcdefghij1234567890'].join('')
+export const FAKE_RANDOM_TOKEN = ['q8Zr2LkP0vT7mN4bW9sX1c', 'Y6hJ3dF5gA0eR8tU2iO'].join('')
+
 export const ROOT = '/work'
 export const HOME = '/home/me'
 
@@ -50,6 +76,12 @@ export const APPROVE = verdict('approve', 'Proportionate and requested.')
 export const BLOCK = verdict('block', 'Deletes the whole build cache.', 'Delete only build/tmp with rm -r build/tmp.')
 export const REVISE = verdict('revise', 'Too wide.', 'Run rm -r build/out instead.')
 
+/** The loot roll's labels, as the default (themed) mode offers them. */
+export const ALLOW_ONCE = 'Need: allow once'
+export const KEEP_BLOCKED = 'Pass: keep blocked'
+export const ALLOWLIST = 'Greed: add to allowlist'
+export const TALK_FIRST = 'Parley: talk first'
+
 export type Asked = { question: string; options: readonly string[]; header: string | undefined }
 
 export type ProcessReply = { exitCode: number; stdout: string } | 'timeout'
@@ -68,11 +100,13 @@ export type World = {
   /** Symbolic links: path -> where it really lands. */
   links: Map<string, string>
   surfaces: string[]
-  /** What the user answers: a label, free text, or `dismiss`. Queued `answers` go first. */
+  /** What the user answers: a label, free text, `dismiss` or `chat` (the engine's "Chat about this": the call rejects like a dismissal). Queued `answers` go first. */
   answer: string
   answers: string[]
   /** Model replies, in order; the last one repeats. */
   replies: ModelReply[]
+  /** A reply chosen by the request itself (its prompt), asked before `replies`; undefined falls through. */
+  replyFor: ((request: Record<string, unknown>) => ModelReply | undefined) | undefined
   /** What reached the tool (the bottom of the chain), envelope stripped. */
   ran: Record<string, unknown>[]
   asked: Asked[]
@@ -92,11 +126,31 @@ export type World = {
   spawned: string[][]
   spawnReply: (argv: readonly string[]) => SpawnReply
   ended: number
+  /** Whether a write to this path is refused (the call rejects). */
+  writeFails: (path: string) => boolean
+  /** Whether a write to this path never returns. */
+  writeHangs: (path: string) => boolean
+  /** How many file calls the engine has answered: `settled` waits until it stops moving. */
+  fsCalls: number
+  /** Whether a `clock.now` read is refused (the call rejects), when the clock is mocked. */
+  clockFails: () => boolean
   notices: { id: string; text: string | undefined }[]
   panes: string[]
+  /** Every pane the mod opened, as it asked. */
+  opens: { id: string; title?: string; rows?: number; focus?: true }[]
+  /** Whether a surface draws the pane an open asks for (`isPlaced`). */
+  isPlaced: boolean
+  /** Whether an open is refused outright (the call rejects). */
+  isOpenRefused: boolean
   statuses: (string | undefined)[]
   configSets: { key: string; value: unknown }[]
   commands: string[]
+  /** What each command was registered with. */
+  commandSpecs: { name: string; description: string; argumentHint?: string }[]
+  /** Every row the mod appended to the conversation (`$.session.append`), as it sent it. */
+  appended: { type: string; content: { type: string; text?: string }[] }[]
+  /** Whether an append is refused (it resolves `{ deny }`; the kit skips a hook that throws, so a rejection cannot be made). */
+  appendFails: boolean
 }
 
 const strip = (e: Record<string, unknown>): Record<string, unknown> => {
@@ -108,8 +162,12 @@ export function world(
   on: On,
   setup: Partial<Pick<World, 'answer' | 'answers' | 'replies' | 'surfaces' | 'cwd'>> & {
     cwdFails?: boolean
+    /** Makes `$.session.append` resolve `{ deny }`. */
+    appendFails?: boolean
     /** A mocked clock (`w.clock`) answers `$.clock`; else `$.clock.now` reads real time. */
     isClockMocked?: boolean
+    /** The engine's own band above the prompt, beneath the plugin: it draws "engine band". */
+    isBandDrawn?: boolean
   } = {},
 ): World {
   const w: World = {
@@ -121,9 +179,10 @@ export function world(
     dirs: new Set([ROOT, `${ROOT}/src`, `${ROOT}/build`, HOME, '/', '/etc', `${ROOT}/.claude`]),
     links: new Map(),
     surfaces: setup.surfaces ?? ['terminal'],
-    answer: setup.answer ?? 'Keep blocked',
+    answer: setup.answer ?? KEEP_BLOCKED,
     answers: setup.answers ?? [],
     replies: setup.replies ?? [APPROVE],
+    replyFor: undefined,
     ran: [],
     asked: [],
     modelRequests: [],
@@ -137,11 +196,21 @@ export function world(
     spawned: [],
     spawnReply: () => ({ code: 0 }),
     ended: 0,
+    writeFails: () => false,
+    writeHangs: () => false,
+    fsCalls: 0,
+    clockFails: () => false,
     notices: [],
     panes: [],
+    opens: [],
+    isPlaced: true,
+    isOpenRefused: false,
     statuses: [],
     configSets: [],
     commands: [],
+    commandSpecs: [],
+    appended: [],
+    appendFails: setup.appendFails === true,
   }
 
   on('session.root', () => ({ value: ROOT }))
@@ -151,12 +220,19 @@ export function world(
   })
   on('session.surfaces', () => ({ value: w.surfaces as never }))
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }))
-  on('fs.exists', ($, e) => ({ value: w.files.has(e.path) || w.dirs.has(e.path) }))
+  on('fs.exists', ($, e) => {
+    w.fsCalls++
+    return { value: w.files.has(e.path) || w.dirs.has(e.path) }
+  })
   on('fs.read', ($, e) => {
+    w.fsCalls++
     const content = w.files.get(e.path)
     return content === undefined ? { deny: `ENOENT: ${e.path}` } : { value: content }
   })
   on('fs.write', ($, e) => {
+    w.fsCalls++
+    if (w.writeHangs(e.path)) return new Promise<never>(() => undefined)
+    if (w.writeFails(e.path)) return { deny: `EIO: ${e.path}` }
     w.files.set(e.path, e.text)
     return { value: undefined }
   })
@@ -196,7 +272,16 @@ export function world(
     if (reply === 'timeout') return { deny: 'timed out' }
     return { value: { exitCode: reply.exitCode, stdout: reply.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  if (setup.isClockMocked === true) w.clock = mock.clock(on)
+  if (setup.isClockMocked === true) {
+    // The mocked clock's own `clock.now` hook, behind a switch that makes the read fail.
+    const gated = ((name: string, ...rest: unknown[]) => {
+      const register = on as unknown as (...args: unknown[]) => unknown
+      if (name !== 'clock.now') return register(name, ...rest)
+      const hook = rest[rest.length - 1] as (...args: unknown[]) => unknown
+      return register(name, ...rest.slice(0, -1), (...args: unknown[]) => (w.clockFails() ? { deny: 'clock is down' } : hook(...args)))
+    }) as unknown as On
+    w.clock = mock.clock(gated)
+  }
   else on('clock.now', () => ({ value: Date.now() }))
   on('process.spawn', async function* ($, e, next) {
     w.spawned.push([...e.argv])
@@ -218,13 +303,21 @@ export function world(
       if (!isDone) w.ended++
     }
   })
+  if (setup.isBandDrawn === true) {
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return h(Text, null, 'engine band') as never
+    })
+  }
   on('ui.notice', ($, e) => {
     w.notices.push({ id: e.tool_use_id, text: e.text })
     return { value: undefined }
   })
   on('ui.open', ($, e) => {
     w.panes.push(e.id)
-    return { value: { isPlaced: true } }
+    w.opens.push({ id: e.id, ...(e.title !== undefined && { title: e.title }), ...(e.rows !== undefined && { rows: e.rows }), ...(e.focus !== undefined && { focus: e.focus }) })
+    if (w.isOpenRefused) return { deny: 'no room' }
+    return { value: w.isPlaced ? { isPlaced: true } : ({ isPlaced: false, reason: 'narrow' } as never) }
   })
   on('ui.status', ($, e) => {
     w.statuses.push(e.text)
@@ -236,8 +329,17 @@ export function world(
   })
   on('command.register', ($, e) => {
     w.commands.push(e.name)
+    w.commandSpecs.push({ name: e.name, description: e.description, ...(e.argumentHint !== undefined && { argumentHint: e.argumentHint }) })
     return { value: { command: e.name } }
   })
+  on('session.append', ($, e, next) => {
+    if (w.appendFails) return { deny: 'a plugin above refused it' }
+    w.appended.push(e.message as unknown as World['appended'][number])
+    return next(e)
+  })
+  // The roster events: the engine's own bottom just echoes the client.
+  on('session.attach', ($, e) => ({ clientId: e.clientId }))
+  on('session.detach', ($, e) => ({ clientId: e.clientId }))
   on('ui.log', ($, e) => {
     w.logs.push(e.text)
     return { value: undefined }
@@ -246,15 +348,20 @@ export function world(
     w.toasts.push(e.text)
     return { value: undefined }
   })
-  on('model.complete', async ($, e) => {
+  on('model.complete', async ($, e, next) => {
     w.modelRequests.push(e as unknown as Record<string, unknown>)
     const delay = w.modelDelays.shift()
     if (delay !== undefined && w.clock !== undefined) {
-      await w.clock.sleep(delay)
+      // A request the caller aborted (Esc) answers "aborted" at once, as the engine's does.
+      const interrupted = new Promise<'aborted'>(resolve => next.signal.addEventListener('abort', () => resolve('aborted'), { once: true }))
+      if ((await Promise.race([w.clock.sleep(delay).then(() => 'done' as const), interrupted])) === 'aborted') {
+        return { value: { isAnswered: false, reason: 'aborted', usage: USAGE } as never }
+      }
       // Past its own timeout, the request is abandoned.
       if (typeof e.timeoutMs === 'number' && delay >= e.timeoutMs) return { value: { isAnswered: false, reason: 'aborted', usage: USAGE } as never }
     }
-    const reply = w.replies.length > 1 ? w.replies.shift() : w.replies[0]
+    const chosen = w.replyFor?.(e as unknown as Record<string, unknown>)
+    const reply = chosen ?? (w.replies.length > 1 ? w.replies.shift() : w.replies[0])
     if (reply === undefined || reply === 'refuse-request') return { deny: 'model is blocked by policy' }
     return { value: reply as never }
   })
@@ -266,6 +373,7 @@ export function world(
       w.asked.push({ question: question.question, options: question.options.map(o => o.label), header: question.header })
       const answer = w.answers.shift() ?? w.answer
       if (answer === 'dismiss') return { deny: 'dismissed' }
+      if (answer === 'chat') return { deny: "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\nThe user wants to clarify these questions." }
       return { result: { answers: { [question.question]: answer } } as never }
     }
     w.ran.push(strip(e as unknown as Record<string, unknown>))
@@ -274,12 +382,75 @@ export function world(
   return w
 }
 
-/** The audit log's lines, parsed. */
-export const auditLines = (w: World, path = `${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`): Record<string, unknown>[] =>
-  (w.files.get(path) ?? '')
+/** Who ran a command: the person's own Enter by default, as the engine stamps it. */
+export type Origin = { kind: string; name?: string }
+
+type CommandRunner = { command: { run: (e: unknown) => Promise<unknown> } }
+
+/**
+ * `/council <args>` as the engine delivers it: the whole `command.run` input,
+ * origin and presentation included. Without an origin the hook sees none.
+ */
+export const council = ($: unknown, args = '', origin: Origin = { kind: 'composer' }): Promise<unknown> =>
+  ($ as CommandRunner).command.run({ command: 'council', args, origin, presentation: { isFullscreen: false, columns: 80 } })
+
+/**
+ * Watches the session record beneath the mod: how often it was read, every value
+ * written, and two switches. `readAs(n)` makes the n-th read (1-based) answer a
+ * value of the test's choosing (undefined: the real one); `refuseWrite()` makes a
+ * write fail. Opt in per test: a test that registers its own `state.set` must not.
+ */
+export type StateWatch = {
+  reads: number
+  written: unknown[]
+  readAs: (n: number) => unknown
+  refuseWrite: () => boolean
+}
+
+export function watchState(on: On): StateWatch {
+  const watch: StateWatch = { reads: 0, written: [], readAs: () => undefined, refuseWrite: () => false }
+  on('state.get', async ($, e, next) => {
+    const real = await next(e)
+    if (e.plugin !== 'council-of-elrond' || e.key !== 'session') return real
+    if (real.deny !== undefined) return real
+    watch.reads++
+    const seeded = watch.readAs(watch.reads)
+    // The hook's result wraps the read itself: `{ value: { value, version } }`.
+    return seeded === undefined ? real : { ...real, value: { ...real.value, value: seeded as never } }
+  })
+  on('state.set', ($, e, next) => {
+    if (e.plugin !== 'council-of-elrond' || e.key !== 'session') return next(e)
+    if (watch.refuseWrite()) return { deny: 'disk full' }
+    watch.written.push(e.value)
+    return next(e)
+  })
+  return watch
+}
+
+type Turns = { setTimeout: (run: () => void, ms: number) => unknown }
+
+/**
+ * Lets the audit lines the mod queued land. The mod does not wait for them, so
+ * they follow the call by a few turns of the event loop: this takes turns (the
+ * mocked clock's settle, or a zero-delay timer) until the file calls stop
+ * coming. A write that never returns ends it too: nothing more is moving.
+ */
+export async function settled(w: World): Promise<void> {
+  for (let turns = 0; turns < 200; turns++) {
+    const before = w.fsCalls
+    await (w.clock !== undefined ? w.clock.settle() : new Promise<void>(resolve => (globalThis as unknown as Turns).setTimeout(resolve, 0)))
+    if (w.fsCalls === before) return
+  }
+}
+
+/** The audit log's lines, parsed, once the queued ones have landed. */
+export const auditLines = async (w: World, path = `${ROOT}/.claude/council-of-elrond/audit/audit.jsonl`): Promise<Record<string, unknown>[]> => {
+  await settled(w)
+  return (w.files.get(path) ?? '')
     .split('\n')
     .filter(line => line !== '')
     .map(line => JSON.parse(line) as Record<string, unknown>)
+}
 
 export const denyOf = (result: unknown): string => {
   const deny = (result as { deny?: unknown }).deny
