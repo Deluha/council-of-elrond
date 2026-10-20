@@ -13,7 +13,22 @@
       "source": "./mods/council-of-elrond",
       "description": "Gates risky tool calls: rules decide the tier, model reviewers give a second opinion, anything uncertain comes to you.",
       "category": "safety",
-      "keywords": ["safety", "review", "gate", "tool-call", "mod"]
+      "keywords": [
+        "safety",
+        "review",
+        "gate",
+        "tool-call",
+        "mod"
+      ]
+    },
+    {
+      "name": "decider-probe",
+      "source": "./probes/decider-probe",
+      "description": "Throwaway probe for ROADMAP C4 (tool.check decider). Never merge, never release.",
+      "category": "safety",
+      "keywords": [
+        "probe"
+      ]
     }
   ]
 }

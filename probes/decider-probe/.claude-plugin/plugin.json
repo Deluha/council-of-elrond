@@ -1,0 +1,6 @@
+{
+  "name": "decider-probe",
+  "version": "0.0.0",
+  "description": "Throwaway probe for ROADMAP C4: does a tool.check ask with decider 'person' reach the person in a cloud session? Never merge, never release.",
+  "license": "MIT"
+}

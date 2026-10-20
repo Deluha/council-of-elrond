@@ -1,0 +1,1 @@
+{ "description": "C4 decider probe: asks a person for echo PROBE_PERSON, a plain ask for echo PROBE_ASK; logs redacted lines", "modules": ["./register.ts"] }
