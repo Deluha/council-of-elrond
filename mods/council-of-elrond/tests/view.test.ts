@@ -49,8 +49,8 @@ const withDebates = (...debates: CouncilDebate[]): CouncilSession => debates.red
 const texts = (rows: readonly Row[]): string[] => rows.map(row => row.text)
 
 describe('the debate record', () => {
-  test('a session of another shape version reads as fresh; this one is version 4', () => {
-    expect(INITIAL_SESSION.v).toBe(4)
+  test('a session of another shape version reads as fresh; this one is version 5', () => {
+    expect(INITIAL_SESSION.v).toBe(5)
     const old = { ...INITIAL_SESSION, v: 3, latestPrompt: 'kept?' } as unknown as CouncilSession
     expect(sessionOf(old)).toBe(INITIAL_SESSION)
     expect(sessionOf(undefined)).toBe(INITIAL_SESSION)

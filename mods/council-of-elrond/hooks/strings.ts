@@ -5,7 +5,7 @@
  *
  * The mode is set once, at registration (`setMode`), and `text()` follows it.
  * Text Claude reads (refusals, the full council's reason and alternative, the
- * rule reason written to rules.json, the `relay.*` and `notice.noSurface`
+ * rule reason written to rules.json, the `relay.*`, `chat.*` and `notice.noSurface`
  * strings) is always asked for in 'plain' and has no themed variant, so no
  * setting can put theme text in front of the model.
  */
@@ -59,6 +59,7 @@ const TABLE = {
   'reason.allowlistNotWritten': {
     plain: 'You chose to add this finding to the allowlist, but the entry could not be written, so the call stays blocked.',
   },
+  'reason.chatDenied': { plain: 'The user refused this call in chat (council deny).' },
   'reason.userWantsChat': { plain: 'The user wants to discuss this call before anything runs.' },
   'reason.nobodyToAsk': {
     plain: 'The call needs the user, and nobody can be asked in this session. {why} Operation: {operation}. Behind it: {behind}.',
@@ -68,6 +69,9 @@ const TABLE = {
   'reason.aborted': { plain: 'The review was interrupted before it finished. Nothing was decided; run the command again if you still want it.' },
   'alternative.ask': { plain: 'Stop and ask the user how they want to proceed.' },
   'alternative.noSurface': { plain: 'Tell the user that this call was refused and why. {route}' },
+  'alternative.noSurfaceChat': {
+    plain: 'Tell the user that this call was refused and why, and give them its code, council:{code}. To let this exact call run once, they type council allow {code} on its own line in their next message{session}; council deny {code} refuses it. Do not retry it before they answer; if they allow it, make the same call again with the same arguments, the one exception to not retrying it unchanged. {route}',
+  },
   'alternative.narrower': { plain: 'Ask the user first, or use a narrower command that does not match this rule.' },
   'reason.secretHigh': { plain: 'The call contains a {label} (high confidence): {snippet}' },
   'reason.lockoutKey': { plain: 'The same operation was refused or failed {count} times since the user last wrote.' },
@@ -141,7 +145,7 @@ const TABLE = {
   'notice.commandFailed': { plain: 'Council: /council could not be registered ({problem})' },
   'notice.auditFailed': { plain: 'Council: audit write failed: {problem}' },
   'notice.noSurface': {
-    plain: "The council-of-elrond plugin is active in this session: it reviews risky tool calls before they run, and some calls need the user's approval. This client cannot show the council's questions, so a call that needs the user is refused here instead, with the reason. When that happens, tell the user which call was refused and why. {route} Here /council status, report, rules and test answer through you.",
+    plain: "The council-of-elrond plugin is active in this session: it reviews risky tool calls before they run, and some calls need the user's approval. This client cannot show the council's questions, so a call that needs the user is refused here instead, with the reason. When that happens, tell the user which call was refused and why. {chatRoute} {route} Here /council status, report, rules and test answer through you.",
   },
   'notice.appendFailed': { plain: 'Council: the start notice could not be added to the conversation ({problem})' },
   'notice.sessionMalformed': { plain: 'Council: the stored session record has an unexpected shape; it is read as a fresh one' },
@@ -154,9 +158,33 @@ const TABLE = {
   'relay.route': {
     plain: 'The user can let such a call run by adding an allow rule for it to {path} themselves (do not edit that file yourself: it is a protected path), or by continuing the session in a terminal, where the council can ask them.',
   },
+  'relay.chatSession': { plain: ' (or council allow {code} session to allow it for the rest of this session)' },
+  'relay.chatRoute': {
+    plain: 'When a refusal gives a code such as council:1a2b3c, give the user that code exactly as written: they can let that exact call run once by typing council allow 1a2b3c on its own line in their next message, or refuse it with council deny 1a2b3c.',
+  },
   'relay.join': { plain: ', ' },
   'relay.behindRule': { plain: 'rule {id}' },
   'relay.behindReviewers': { plain: 'reviewed by {names}' },
+
+  // What Claude is told about a person's council allow / council deny line (ROADMAP C4): text Claude reads, plain only.
+  'chat.allowed': {
+    plain: 'The user typed council allow {code} (removed from their message). The council will let that exact call run once, if you make it before the user writes again: make it again with the same arguments if it is still wanted.',
+  },
+  'chat.allowedSession': {
+    plain: 'The user typed council allow {code} session (removed from their message). The council will let that exact call run whenever you make it, for the rest of this session.',
+  },
+  'chat.denied': {
+    plain: 'The user typed council deny {code} (removed from their message): they refuse that call. Do not make it again; ask them how they want to proceed.',
+  },
+  'chat.unknown': {
+    plain: 'The user typed council {verb} {code} (removed from their message), but no call refused since their previous message has that code, so nothing was recorded. Tell them, and that the code comes from the latest refusal.',
+  },
+  'chat.malformed': {
+    plain: "The user's message had a council allow or council deny line without a valid six-character code (removed from their message), so nothing was recorded. Tell them the line is council allow <code> or council deny <code>, with the code from the refusal.",
+  },
+  'chat.noSession': {
+    plain: 'The user typed council allow {code} session (removed from their message), but this call can only be allowed once (for example a script, a long or multi-line command, or a possible secret in it), so nothing was recorded. Tell them to type council allow {code} to allow it once.',
+  },
 
   // Mode labels by the prompt
   'mode.bypass': { plain: 'council: bypass', themed: 'council: Leeroy mode' },

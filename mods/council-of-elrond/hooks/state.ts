@@ -1,4 +1,6 @@
-import type { CouncilCounts, CouncilDebate, CouncilDebateCheck, CouncilDebateVoice, CouncilSession } from '../types'
+import type { CouncilChatAllowance, CouncilCounts, CouncilDebate, CouncilDebateCheck, CouncilDebateVoice, CouncilSession } from '../types'
+import type { ChatCommand } from './elrond/chat.js'
+import { text } from './strings.js'
 
 /**
  * The session record's shape and every change to it, as pure functions over
@@ -7,7 +9,7 @@ import type { CouncilCounts, CouncilDebate, CouncilDebateCheck, CouncilDebateVoi
  */
 
 export const INITIAL_SESSION: CouncilSession = {
-  v: 4,
+  v: 5,
   latestPrompt: '',
   promptEpoch: 0,
   tokensSpent: 0,
@@ -24,6 +26,9 @@ export const INITIAL_SESSION: CouncilSession = {
   debates: [],
   epicUntil: 0,
   debateOpened: false,
+  chatOffers: [],
+  chatAllowances: [],
+  chatDenials: [],
 }
 
 const MAX_WRITTEN = 100
@@ -48,6 +53,7 @@ const DEBATE_STATUSES = ['sitting', 'done'] as const satisfies readonly CouncilD
 const DEBATE_VERDICTS = ['approve', 'revise', 'block', 'failed', 'aborted'] as const satisfies readonly NonNullable<CouncilDebate['verdict']>[]
 const VOICE_STATUSES = ['waiting', 'approve', 'revise', 'block', 'failed', 'skipped'] as const satisfies readonly CouncilDebateVoice['status'][]
 const CHECK_STATUSES = ['running', 'passed', 'failed', 'timed-out', 'error', 'stopped'] as const satisfies readonly CouncilDebateCheck['status'][]
+const CHAT_SCOPES = ['once', 'session'] as const satisfies readonly CouncilChatAllowance['scope'][]
 
 /** Resolves to the members of a union that a list leaves out; only `never` compiles (see `Complete`). */
 type Missing<Union, List extends readonly unknown[]> = Exclude<Union, List[number]>
@@ -58,6 +64,7 @@ type _ListsAreComplete = [
   Complete<Missing<NonNullable<CouncilDebate['verdict']>, typeof DEBATE_VERDICTS>>,
   Complete<Missing<CouncilDebateVoice['status'], typeof VOICE_STATUSES>>,
   Complete<Missing<CouncilDebateCheck['status'], typeof CHECK_STATUSES>>,
+  Complete<Missing<CouncilChatAllowance['scope'], typeof CHAT_SCOPES>>,
 ]
 
 const isOneOf = (list: readonly unknown[], value: unknown): boolean => list.includes(value)
@@ -81,6 +88,13 @@ const isDebate = (value: unknown): boolean =>
   Array.isArray(value.checks) &&
   value.checks.every(isCheck)
 
+const isOffer = (value: unknown): boolean =>
+  isRecord(value) && typeof value.code === 'string' && typeof value.callKey === 'string' && typeof value.canSession === 'boolean' && isNumber(value.epoch)
+
+const isAllowance = (value: unknown): boolean => isRecord(value) && typeof value.callKey === 'string' && isOneOf(CHAT_SCOPES, value.scope)
+
+const isDenial = (value: unknown): boolean => isRecord(value) && typeof value.callKey === 'string'
+
 const isOp = (value: unknown): boolean => isRecord(value) && isNumber(value.rounds) && isNumber(value.wipes)
 
 const isCounts = (value: unknown): boolean =>
@@ -94,7 +108,7 @@ const isCounts = (value: unknown): boolean =>
 export function isSession(value: unknown): value is CouncilSession {
   return (
     isRecord(value) &&
-    value.v === 4 &&
+    value.v === 5 &&
     typeof value.latestPrompt === 'string' &&
     isNumber(value.promptEpoch) &&
     isNumber(value.tokensSpent) &&
@@ -116,16 +130,37 @@ export function isSession(value: unknown): value is CouncilSession {
     Array.isArray(value.debates) &&
     value.debates.every(isDebate) &&
     isNumber(value.epicUntil) &&
-    typeof value.debateOpened === 'boolean'
+    typeof value.debateOpened === 'boolean' &&
+    Array.isArray(value.chatOffers) &&
+    value.chatOffers.every(isOffer) &&
+    Array.isArray(value.chatAllowances) &&
+    value.chatAllowances.every(isAllowance) &&
+    Array.isArray(value.chatDenials) &&
+    value.chatDenials.every(isDenial)
   )
 }
 
-/** A value of another shape version, or of no valid shape, reads as a fresh session. */
-export const sessionOf = (value: unknown): CouncilSession => (isSession(value) ? value : INITIAL_SESSION)
+/** A valid version 4 value as version 5, with no chat records; undefined for anything else. */
+function migrated(value: unknown): CouncilSession | undefined {
+  if (!isRecord(value) || value.v !== 4) return undefined
+  const upgraded = { ...value, v: 5, chatOffers: [], chatAllowances: [], chatDenials: [] }
+  return isSession(upgraded) ? upgraded : undefined
+}
+
+/**
+ * A value of another shape version, or of no valid shape, reads as a fresh
+ * session. The one exception is a valid v4 value, which reads as v5 with no chat
+ * records: an upgrade mid-session must not clear its rounds and lockouts.
+ */
+export const sessionOf = (value: unknown): CouncilSession => (isSession(value) ? value : (migrated(value) ?? INITIAL_SESSION))
+
+/** Whether `sessionOf` keeps what is stored, rather than starting a fresh session. */
+export const isReadable = (value: unknown): boolean => isSession(value) || migrated(value) !== undefined
 
 /**
  * A new prompt from the user: what resets per prompt resets here. Rounds,
- * failed attempts, lockouts and the approve cache start over.
+ * failed attempts, lockouts and the approve cache start over, and so do the chat
+ * offers, the once-allowances and the denials; session allowances stay.
  */
 export function resetForPrompt(session: CouncilSession, prompt: string): CouncilSession {
   return {
@@ -137,8 +172,22 @@ export function resetForPrompt(session: CouncilSession, prompt: string): Council
     ops: {},
     verbWipes: {},
     cache: [],
+    chatOffers: [],
+    chatAllowances: session.chatAllowances.filter(allowance => allowance.scope === 'session'),
+    chatDenials: [],
   }
 }
+
+/**
+ * A prompt that is not a person's: no new task, so rounds, lockouts, offers,
+ * denials and session allowances stay. An approval must not outlive a prompt,
+ * though: the cache and every once-allowance end here (DESIGN §14.3, §14.4).
+ */
+export const forOtherPrompt = (session: CouncilSession): CouncilSession => ({
+  ...session,
+  cache: [],
+  chatAllowances: session.chatAllowances.filter(allowance => allowance.scope === 'session'),
+})
 
 export const addTokens = (session: CouncilSession, tokens: number): CouncilSession => ({
   ...session,
@@ -188,6 +237,99 @@ export const declineRule = (session: CouncilSession, key: string): CouncilSessio
   ...session,
   declinedRules: [...session.declinedRules.filter(known => known !== key), key].slice(-MAX_DECLINED),
 })
+
+// ── Chat approval (ROADMAP C4, DESIGN §14.4) ────────────────────────────────
+
+const MAX_OFFERS = 20
+
+const MAX_GRANTS = 50
+
+/**
+ * A refusal that carried a code is recorded, newest last. A newer offer for the
+ * same call replaces the older one. It is kept only if the session is still in
+ * the prompt the call began in: an offer made after a new prompt is stale.
+ */
+export const noteOffer = (session: CouncilSession, offer: { code: string; callKey: string; canSession: boolean }, epoch: number): CouncilSession =>
+  session.promptEpoch !== epoch
+    ? session
+    : { ...session, chatOffers: [...session.chatOffers.filter(known => known.callKey !== offer.callKey), { ...offer, epoch }].slice(-MAX_OFFERS) }
+
+/** Whether the person has answered for this call, so that spending it is worth a write. */
+export const holdsChat = (session: CouncilSession, callKey: string): boolean =>
+  session.chatDenials.some(denial => denial.callKey === callKey) || session.chatAllowances.some(allowance => allowance.callKey === callKey)
+
+/** What a call found among the person's chat answers; a denial is checked first. */
+export type ChatUse = 'deny' | 'once' | 'session' | undefined
+
+/**
+ * Looks for the call's denial, then its allowance, and spends what it finds: a
+ * denial and a once-allowance are removed, a session allowance stays. `use` says
+ * what this very change removed or found, so of two identical calls running
+ * together only the one whose write took a once-allowance may use it.
+ */
+export function useChat(session: CouncilSession, callKey: string): { session: CouncilSession; use: ChatUse } {
+  if (session.chatDenials.some(denial => denial.callKey === callKey)) {
+    return { session: { ...session, chatDenials: session.chatDenials.filter(denial => denial.callKey !== callKey) }, use: 'deny' }
+  }
+  const allowance = session.chatAllowances.find(known => known.callKey === callKey)
+  if (allowance === undefined) return { session, use: undefined }
+  if (allowance.scope === 'session') return { session, use: 'session' }
+  return { session: { ...session, chatAllowances: session.chatAllowances.filter(known => known !== allowance) }, use: 'once' }
+}
+
+/** What a person's chat line asks to record. */
+export type ChatGrant = { kind: 'allow'; callKey: string; scope: 'once' | 'session' } | { kind: 'deny'; callKey: string }
+
+/**
+ * Answers a person's chat lines against the offers of the prompt now ending:
+ * a grant per line that names one of them, and one acknowledgement per line for
+ * Claude. A code no offer has (or that two offers share) records nothing; neither
+ * does a malformed line, or `session` for a call that can only be allowed once.
+ * An acknowledgement holds only the validated code, never the person's line.
+ */
+export function answerChat(session: CouncilSession, commands: readonly ChatCommand[]): { grants: ChatGrant[]; acks: string[] } {
+  const grants: ChatGrant[] = []
+  const acks: string[] = []
+  for (const command of commands) {
+    if (command.kind === 'malformed') {
+      acks.push(text('chat.malformed', {}, 'plain'))
+      continue
+    }
+    const { code } = command
+    const matches = session.chatOffers.filter(offer => offer.epoch === session.promptEpoch && offer.code === code)
+    const offer = matches.length === 1 ? matches[0] : undefined
+    if (offer === undefined) {
+      acks.push(text('chat.unknown', { verb: command.kind, code }, 'plain'))
+    } else if (command.kind === 'deny') {
+      grants.push({ kind: 'deny', callKey: offer.callKey })
+      acks.push(text('chat.denied', { code }, 'plain'))
+    } else if (command.scope === 'session' && !offer.canSession) {
+      acks.push(text('chat.noSession', { code }, 'plain'))
+    } else {
+      grants.push({ kind: 'allow', callKey: offer.callKey, scope: command.scope })
+      acks.push(text(command.scope === 'session' ? 'chat.allowedSession' : 'chat.allowed', { code }, 'plain'))
+    }
+  }
+  return { grants, acks }
+}
+
+/** Records the grants in order; a later one for the same call replaces an earlier one, an allowance and a denial included. */
+export const grantChat = (session: CouncilSession, grants: readonly ChatGrant[]): CouncilSession =>
+  grants.reduce<CouncilSession>(
+    (current, grant) =>
+      grant.kind === 'deny'
+        ? {
+            ...current,
+            chatAllowances: current.chatAllowances.filter(known => known.callKey !== grant.callKey),
+            chatDenials: [...current.chatDenials.filter(known => known.callKey !== grant.callKey), { callKey: grant.callKey }].slice(-MAX_GRANTS),
+          }
+        : {
+            ...current,
+            chatAllowances: [...current.chatAllowances.filter(known => known.callKey !== grant.callKey), { callKey: grant.callKey, scope: grant.scope }].slice(-MAX_GRANTS),
+            chatDenials: current.chatDenials.filter(known => known.callKey !== grant.callKey),
+          },
+    session,
+  )
 
 // ── The debate: what the pane and the band show ─────────────────────────────
 

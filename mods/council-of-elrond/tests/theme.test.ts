@@ -8,7 +8,7 @@ import { allStrings, currentMode, flavourOf, setMode, text, themedKeys } from '.
 import { ALLOW_ONCE, auditLines, BLOCK, council, denyOf, KEEP_BLOCKED, THEME, withoutIds, withoutPluginName, world } from './fixtures.js'
 
 /** What Claude reads: these families, and these single keys, never get a themed variant. */
-const CLAUDE_FACING_FAMILIES = ['refusal.', 'reason.', 'alternative.', 'council.', 'gimli.', 'escalate.', 'route.', 'suggest.', 'notice.', 'report.', 'relay.']
+const CLAUDE_FACING_FAMILIES = ['refusal.', 'reason.', 'alternative.', 'council.', 'gimli.', 'escalate.', 'route.', 'suggest.', 'notice.', 'report.', 'relay.', 'chat.']
 const CLAUDE_FACING_KEYS = [
   'cmd.allowlistHidden',
   'ask.header',

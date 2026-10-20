@@ -34,6 +34,8 @@ export type Entry = {
 
 const TOP = 5
 
+const OVERRIDES: ReadonlySet<string> = new Set(['allow-once', 'allowlist', 'chat-allow', 'chat-session'])
+
 const VERDICTS_THAT_REFUSE: ReadonlySet<string> = new Set(['block', 'revise'])
 
 const str = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null)
@@ -168,8 +170,8 @@ export function reportOutput(files: readonly string[], unreadable: readonly stri
   if (ops.length > 0) lines.push(text('report.refusedOpsTitle'))
   for (const group of ops) lines.push(text('report.refusedOp', { op: group.key, count: group.count }))
 
-  // Overridden: the user allowed once (or allowlisted) what the council stopped.
-  const overridden = entries.filter(entry => entry.decision === 'allow-once' || entry.decision === 'allowlist')
+  // Overridden: the user allowed once (or allowlisted, or allowed in chat) what the council stopped.
+  const overridden = entries.filter(entry => OVERRIDES.has(entry.decision ?? ''))
   lines.push('', text('report.overriddenTitle', { count: overridden.length }))
   if (overridden.length === 0) lines.push(text('report.none'))
   for (const group of tally(overridden, entry => entry.ruleId ?? entry.member ?? '(no rule)')) {

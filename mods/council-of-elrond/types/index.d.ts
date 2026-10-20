@@ -3,8 +3,8 @@
  * in one place, reset by `resetForPrompt` (hooks/state.ts) on a new prompt.
  */
 export type CouncilSession = {
-  /** Shape version; a value of another version reads as a fresh session. */
-  v: 4
+  /** Shape version; a value of another version reads as a fresh session (a valid v4 is migrated). */
+  v: 5
   /** The user's latest prompt, redacted and cut, for reviewer context. */
   latestPrompt: string
   /** Bumped on every prompt the user sends. */
@@ -37,7 +37,27 @@ export type CouncilSession = {
   epicUntil: number
   /** Whether the debate pane was opened unasked this session: it is not opened that way twice. */
   debateOpened: boolean
+  /** Refused calls a person may approve in chat (newest last, capped at 20): cleared by the person's next prompt. */
+  chatOffers: readonly CouncilChatOffer[]
+  /** Calls a person approved in chat: `once` ones end at the next prompt of any origin, `session` ones at `/clear`. */
+  chatAllowances: readonly CouncilChatAllowance[]
+  /** Calls a person refused in chat: cleared by the person's next prompt. */
+  chatDenials: readonly CouncilChatDenial[]
 }
+
+/** A refusal that carried a code. `callKey` is the full 16-hex key; `code` is its first six characters. */
+export type CouncilChatOffer = {
+  code: string
+  callKey: string
+  /** Whether `council allow <code> session` is accepted for it (the allow-rule offer's limits). */
+  canSession: boolean
+  /** The `promptEpoch` the refusal was made in: only that prompt's offers are answered. */
+  epoch: number
+}
+
+export type CouncilChatAllowance = { callKey: string; scope: 'once' | 'session' }
+
+export type CouncilChatDenial = { callKey: string }
 
 /** One gated call's review, as the debate pane and the band show it. */
 export type CouncilDebate = {

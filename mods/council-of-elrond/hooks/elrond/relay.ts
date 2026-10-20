@@ -35,7 +35,7 @@ export function relayContext(command: RelayedCommand, output: Output, patterns: 
 export const routeText = (): string => text('relay.route', { path: OVERRIDES_PATH }, 'plain')
 
 /** The session-start notice appended as a row the model reads. */
-export const noticeText = (): string => text('notice.noSurface', { route: routeText() }, 'plain')
+export const noticeText = (): string => text('notice.noSurface', { chatRoute: text('relay.chatRoute', {}, 'plain'), route: routeText() }, 'plain')
 
 /** The nobody-to-ask refusal: what was refused, what is behind it (names only) and the way forward. */
 export type NobodyToAsk = {
@@ -45,11 +45,16 @@ export type NobodyToAsk = {
   operation: string
   ruleId?: string
   opinions: readonly MemberOpinion[]
+  /** The call's chat code (six hex characters), when it may be approved in chat (ROADMAP C4). */
+  code?: string
+  /** Whether `council allow <code> session` is accepted for it. */
+  canSession?: boolean
 }
 
 /**
  * The reviewers' names only, never their reasons or problems, and the rule id;
- * never the call, its preview, a secrets finding or a diff.
+ * never the call, its preview, a secrets finding or a diff. With a code, the
+ * way forward is the chat route: the code and the lines the person types.
  */
 export function nobodyToAsk(input: NobodyToAsk): { reason: string; alternative: string } {
   const names = [...new Set(input.opinions.map(opinion => text(opinion.who, {}, 'plain')))]
@@ -60,6 +65,13 @@ export function nobodyToAsk(input: NobodyToAsk): { reason: string; alternative: 
   const behind = pieces.length > 0 ? pieces.join(text('relay.join', {}, 'plain')) : text('who.council', {}, 'plain')
   return {
     reason: text('reason.nobodyToAsk', { why: input.why, operation: input.operation, behind }, 'plain'),
-    alternative: text('alternative.noSurface', { route: routeText() }, 'plain'),
+    alternative:
+      input.code === undefined
+        ? text('alternative.noSurface', { route: routeText() }, 'plain')
+        : text(
+            'alternative.noSurfaceChat',
+            { code: input.code, session: input.canSession === true ? text('relay.chatSession', { code: input.code }, 'plain') : '', route: routeText() },
+            'plain',
+          ),
   }
 }

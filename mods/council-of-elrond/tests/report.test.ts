@@ -166,3 +166,24 @@ describe('/council report', () => {
     expect(logged).toContain('6 gated calls')
   })
 })
+
+describe('chat decisions', () => {
+  const chat = [
+    line({ tier: 'ask', ruleId: 'privileged', opKey: 'shell:ls', decision: 'chat-allow', outcome: 'ran' }),
+    line({ tier: 'ask', ruleId: 'privileged', opKey: 'shell:ls', decision: 'chat-session', outcome: 'ran' }),
+    line({ tier: 'ask', ruleId: 'privileged', opKey: 'shell:ls', decision: 'chat-deny', outcome: 'refused' }),
+    line({ tier: 'ask', ruleId: 'privileged', opKey: 'shell:ls', decision: 'unavailable', outcome: 'refused' }),
+  ].join('')
+
+  test('chat-allow and chat-session count as calls the user allowed after the council stopped them', () => {
+    const joined = reportOutput([chat]).lines.join('\n')
+    expect(joined).toContain('Stopped, then allowed by you (false-positive candidates; 2 in all):')
+    expect(joined).toContain('  privileged: 2; e.g. shell:ls')
+  })
+
+  test('chat-deny is a refusal by the user, as keep-blocked is; no one to ask stays its own', () => {
+    const joined = reportOutput([chat]).lines.join('\n')
+    expect(joined).toContain('Most refused, by rule (2 refusals in all):')
+    expect(joined).toContain('  privileged: 2 (nobody to ask 1, by you 1)')
+  })
+})

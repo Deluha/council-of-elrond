@@ -58,6 +58,17 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **A start notice where nothing draws.** The session starts with a row Claude reads, saying the
   council is active, that a call needing your approval is refused here with the reason, and how you
   can let it run (an allow rule in `rules.json` that you add yourself, or a terminal session).
+- **Approve in chat where nothing draws.** When a call is refused because nobody can be asked, the
+  refusal carries a code (`council:1a2b3c`) that Claude gives you; the start notice tells Claude to.
+  Type `council allow 1a2b3c` on a line of your own to let that exact call run once,
+  `council allow 1a2b3c session` to let it run for the rest of the session, or `council deny 1a2b3c`
+  to refuse it (not a failed attempt). The line is removed from your message and Claude is told what
+  it did. Only a person's own message counts (not `claude -p`, the SDK, a plugin or another
+  session), a code is answered only in your next message, a once-allowance ends at your next prompt,
+  and a protected path, a block rule or a high-confidence secret is never offered. The audit log
+  records `chat-allow`, `chat-session` and `chat-deny`, and `/council report` counts the first two
+  with the calls you allowed. The session record is now version 5; a version 4 record is read as 5,
+  so an upgrade keeps its rounds and lockouts. See "Where nothing draws" in the README.
 
 ### Changed
 - **The nobody-to-ask refusal says what was refused.** Where nothing draws and a call needs you, the
