@@ -8,7 +8,7 @@ taken, and [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for how it works and
 
 ```sh
 cd council-of-elrond
-claude plugin test mods/council-of-elrond       # 579 tests, about 40 s
+claude plugin test mods/council-of-elrond       # 635 tests, about 40 s
 tsc -p mods                                    # strict, against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
 ```
@@ -34,7 +34,7 @@ mods/
     hooks/state.ts               the session record and its pure updates
     hooks/audit.ts               audit line shape, rotation
     hooks/redact.ts              secret redaction shared by prompts, dialogs and the log
-    hooks/rules/                 shell parser, classifier, checks, globs, paths
+    hooks/rules/                 shell parser, classifier, checks, globs, paths, scopes (rules per repository)
     hooks/config/                shipped defaults, rules.json schema, types, the writer
     hooks/members/               one file per member, plus brief.ts and shared.ts
     hooks/elrond/                routing, council seats, verdict combination, operations,

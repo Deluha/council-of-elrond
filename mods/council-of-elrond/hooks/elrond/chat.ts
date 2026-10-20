@@ -54,11 +54,12 @@ export function parseChatLines(message: string): { commands: ChatCommand[]; rest
  * The key of a call: its fingerprint without a shell tool's `description`,
  * which only labels the call, so a retry with new wording keeps its key. Every
  * other field stays (`dangerouslyDisableSandbox`, `timeout`, `run_in_background`).
+ * A `scope` tag (C5) keeps a repository's allowance out of another one.
  */
-export function callKeyOf(call: Call): Promise<string> {
-  if (!SHELL_TOOLS.has(call.tool)) return fingerprintOf(call.tool, call.input)
+export function callKeyOf(call: Call, scope = ''): Promise<string> {
+  if (!SHELL_TOOLS.has(call.tool)) return fingerprintOf(call.tool, call.input, scope)
   const { description: _label, ...input } = call.input
-  return fingerprintOf(call.tool, input)
+  return fingerprintOf(call.tool, input, scope)
 }
 
 /** What the person types: the first characters of the key. */

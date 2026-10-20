@@ -73,9 +73,9 @@ hooks: session.start, session.detach, session.attach, prompt.submit, command.run
        ui.render{component=AbovePrompt}, ui.render{component=SessionMode}, tool.call
 calls: $.clock.after (via epicDrop, runCheck), $.clock.now, $.command.register,
        $.config.set (via councilModel), $.env.get (via loadContext), $.fs.exists,
-       $.fs.list (via previewOf), $.fs.read (via appendAudit, councilOutput, fileDiffOf, loadContext,
-       reportFrom, scriptsOf, sqlFilesOf, writeOverrides), $.fs.stat (via loadContext, previewOf,
-       realPathOf, sqlFilesOf), $.fs.write (via appendAudit, writeOverrides),
+       $.fs.list (via previewOf), $.fs.read (via appendAudit, councilOutput, fileDiffOf, loadRules,
+       reportFrom, scriptsOf, sqlFilesOf, writeOverrides), $.fs.stat (via loadChild, loadContext,
+       previewOf, realPathOf, sqlFilesOf), $.fs.write (via appendAudit, writeOverrides),
        $.model.complete (via probeModel, review), $.process.run (via currentBranchOf,
        runGitInspection), $.process.spawn (via runCheck), $.session.append (via announce), $.session.cwd,
        $.session.root (via loadContext),
@@ -92,7 +92,8 @@ Re-run after C2 (§13.5): `session.detach` and `session.attach` hooks, and `$.se
 (via `announce`); `relayOf` joins the `$.session.surfaces` callers. Re-run for the final
 deliverables on 2.1.294: the lines were unchanged. Re-run on 2.1.296: unchanged
 but for `$.process.run`, now reached through `runGitInspection` (the push-range change after the
-final deliverables). Re-run on 2.1.299: unchanged.
+final deliverables). Re-run on 2.1.299: unchanged. Re-run for C5 (§14.5): `loadContext`'s file read
+goes through `loadRules`, and `loadChild` joins the `$.fs.stat` callers.
 
 There is no `tool.check` hook: the mod never takes part in the permission decision. The processes it
 starts are read-only `git` commands from Galadriel's table (§6, §8), and, for a big operation, the
@@ -101,7 +102,8 @@ project checks the user listed in `rules.json` (`gimli.commands`, §8).
 ## 3. Data flow
 
 ```
-tool.call ─► classify (pure, rules only)
+tool.call ─► classify (pure, rules only; against each repository the call touches under a
+             │             multi-repository root, the strictest wins: §14.5)
              │ allow ─► high secret? refuse (audited) · else next(e)     (no state read or written)
              │ gated: fingerprint, operation key ───────────────────────── audit, count
              │ bypass ─► next(e)
@@ -151,7 +153,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 
 - **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`: one file per member, `brief.ts` pairing each member and profile with its prompts, `gimli.ts` the checks' outcomes), routing, the full council's seats (`elrond/council.ts`) and its verdict (`elrond/combine.ts`), escalation, refusal, model choice, the allow rule offered after "allow once" (`elrond/suggest.ts`), the report (`elrond/report.ts`) and the rows the debate pane and the band draw (`elrond/view.ts`) (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
 - **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 4), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt a person sends (composer or bridge origin) except a `/council` command: it clears rounds, failed attempts, lockouts and the cache. Any other prompt, `sdk` included, clears only the cache (§14.3).
-- **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load, after the mod's own writes (an allowlist entry, an allow rule), and on `/council reload` (never by watching the file). Both writes go through `editOverrides` (`config/write.ts`).
+- **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load, after the mod's own writes (an allowlist entry, an allow rule), and on `/council reload` (never by watching the file). Both writes go through `editOverrides` (`config/write.ts`). Where the session root is the parent of several repositories, each repository's own file is read the same way, once per repository, and a call is classified against the repositories it touches (§14.5).
 
 ## 4. Failure modes
 
@@ -172,7 +174,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | The start notice can't be appended (`$.session.append` rejects, or resolves `{ deny }`) | A debug line (`notice.appendFailed`); `session.start` goes on and returns `next(e)`. Nothing is retried; the refusal still tells Claude why (§13.5 d). |
 | The status sync after a roster change fails (`session.attach`, `session.detach`) | Caught where it is made; the hook returns what `next(e)` gave. The status line keeps its last value until the next sync (§13.5 f). |
 | `$.ui.ask` dismissed / "Chat about this" | Refuse, a failed attempt (recorded as `dismissed`; the two cannot be told apart, §12.4). "Talk first" refuses without counting (recorded as `chat`). |
-| Overrides file broken, unknown version, invalid field | Ignored whole; shipped rules enforce; a transcript line lists errors by field, plus a toast. |
+| Overrides file broken, unknown version, invalid field | Ignored whole; shipped rules enforce; a transcript line lists errors by field, plus a toast. Each repository's file under a multi-repository root is checked on its own and warns once (§14.5). |
 | Audit write fails | Logged to the debug log (`notice.auditFailed`); never changes a decision, and the queue goes on to the next line. Nothing waits for the queue: a write that never returns holds back only the lines queued after it, never a decision or a later call (§13.4 d). `/council log` and `/council report` read the files, so they may not show a line still queued. |
 | Two Claude Code sessions in one project share the audit log | `$.fs` has no lock and no append, so each write reads the whole file and writes it back: lines of the two sessions can interleave, and a line can be lost when two writes cross. Each session's own writes are queued in order. `/council report` skips any line it cannot parse (§13.4 e). |
 | A preview inspection fails or times out (5 s) | That inspection is left out; no preview is never a reason to allow or block. |
@@ -196,6 +198,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | A check outlives a council that throws | Not any more: `convene` ends its checks in a `finally`, so a throw (a `$` call rejecting between members) ends them at once instead of at their own timeouts. The call is then refused, as any throw before the call runs (§13.4 b). |
 | The stored session record has the wrong shape | Read as a fresh session (`sessionOf` checks the shape, not only the version), so the call is decided as usual; one debug line (`notice.sessionMalformed`) is logged per gated call that reads such a value, and the first write that follows replaces it (§13.4 g). |
 | A `$.state` write fails in a path that is not wrapped (a count, a round, a wipe) | Before the call ran: the hook throws and the call is refused ("fails closed"). After it ran: the `.catch` replays the real result and the call is not run again. The debate, panel and epic writes are wrapped and only drop. No code path writes state while a `ui.render` hook draws (those hooks only read it), so there is no refused write-while-drawing to deny a call. |
+| Looking at a directory below the root fails (`$.fs.exists` rejects) | The lookup of that repository is not cached and the call throws, so it is refused ("fails closed"). A `$.fs.stat` that fails is read as "not a repository" (cached). Both only under a multi-repository root (§14.5). |
 | `$.session.root()`, `$.session.cwd()` or `$.env.get('HOME')` fails | Every call is refused, the allow tier included, with "fails closed": the project folder cannot be classified against, so nothing is passed. Kept as fail-closed. The context is not cached on failure, so the next call tries again. `fs.stat(root)` failing is the exception: it is tolerated (the real path is taken to be the root itself). |
 | `/council model` probe gets an API error | The switch is refused. A timeout switches with a warning; a failing model then fails closed per review. |
 | `$.ui.notice` refused (no dialog open) | Ignored; the call still runs as allowed. |
@@ -902,3 +905,71 @@ ROADMAP C4, approved 2026-10-20 as the typed route (§14.1 decision 2, §14.2 co
 - (iii) a `once` allowance not consumed: "lets the same call run once; … refused again", the parallel test, and the `useChat` state test;
 - (iv) `once` allowances not cleared by `resetForPrompt`: "the allowance is gone after the next person's prompt" and the `resetForPrompt` state test.
 - (v) the slash-command guard removed: "a slash command is never parsed: …";
+
+### 14.5 C5: rules per repository
+
+ROADMAP C5, approved 2026-10-20. When the session root is the parent of several repositories (a cloud environment with two attached, a workspace folder), each repository directly below it may have its own `.claude/council-of-elrond/rules.json`, and a call is decided by the repositories it touches. The deciding logic is pure: `rules/classify.ts` (`cwdAfter`, `targetsOf`), `rules/scopes.ts` (everything else below), `audit.ts` and `elrond/chat.ts` (the optional scope tag on a key). `register.ts` finds which candidate directories are repositories (`$.fs.stat`, `$.fs.exists`), loads and caches their files, and wires the results.
+
+**The probe.** A headless run on 2.1.304 with a throwaway mod and a session root holding two `git init` folders:
+- `$.session.cwd()` follows a shell `cd` between Bash calls: after `cd repoA`, the next call's cwd was `<root>/repoA`.
+- `$.session.root()` stayed the parent.
+- `$.session.repo()` followed the cwd: the repository's root inside it, null at the parent.
+- A `cd` inside one command does not move `$.session.cwd()` for that call, so the classifier's own `cd` tracking is what places the later parts.
+
+**How it works.**
+- *Terms.* The **session root** is `$.session.root()`. A **repository** is a direct child `<root>/<name>` that is a real directory (`$.fs.stat` without following: `isLink` false, kind `dir`) holding `.git` (a directory or a file, `$.fs.exists`). A **scope** is a repository, or the **root scope**: the session root with the root's own config, which is today's context.
+- *Mode.* The per-call lookup is on only when the root holds no `.claude/council-of-elrond/rules.json` and no `.git`. Otherwise every call uses the root scope, exactly as before. It is decided in `loadContext` (`Context.isMulti`).
+- *The cache.* One entry per child directory, repository or not (a negative result is cached too), in module state beside the root context: a `Map<string, Promise<Scope | undefined>>`. A failed load is not cached, as for the root. `/council reload` clears the map and the root context; the mod's own write to a repository's file reloads that entry alone (and clears the verdict cache, as `reloadContext` does). A repository's file is loaded like the root's (`loadRules`, the same `loadConfig`), keyed per repository so a broken file warns once (`notice.configBroken` with the repository-relative path).
+- *A call's targets* (`targetsOf`, pure). Shell tools: the **working directory** each part runs in (the session's, moved by an earlier non-nested `cd` or `pushd`; an unknowable target lands at `/`) and every path word of every part, resolved against that part's directory (the **path targets**). File tools: the file's absolute path, and its real path when known, both as working directories. Any other tool: the session cwd. `cwdAfter` is the one copy of the `cd` logic, used by `classify` and `targetsOf`.
+- *The scopes a call touches* (`scopesTouched`, pure). A target below a repository, or equal to it, brings in that repository. A working directory in no repository (the root, a plain child, outside the root, `/`) brings in the root scope; a path target in none brings in nothing. The first target's scope comes first, then first-seen order, each once; if nothing was brought in, the root scope. `register.ts` asks for the candidate children (`candidateChildren`), looks each up through the cache (in parallel), and passes the set that are repositories. With the lookup off the list is the root scope alone.
+- *Classification.* `classify` runs once per touched scope, with that scope's config and `root` set to the scope's directory. `combineClassifications` (pure) takes the strictest tier (a tie goes to the earliest scope); `isProtected` is any scope's, `scriptPaths` the union; the winning scope is the **deciding scope**. With one scope the classification is returned unchanged. The operation key, the preview, Legolas's paths, `sqlFilesOf` and `realPathOf` keep the session root, so two repositories' keys never meet.
+- *What the rest of the call uses* (`CallContext`: the root context with the deciding scope's `loaded`, and `scopes`, `gitDir`, `allowlist`, `writeDir`). Models, big operations, protected branches and routing: the deciding scope's. Secret patterns, for the scan and every redaction in the call: the union of the root's and every touched scope's, each id once. The secrets allowlist: the intersection of the touched scopes' lists. Git (previews, a range diff, the current branch): the deciding scope's directory. Project checks: those of every touched scope in scope order, each run in its own directory, capped at `MAX_GIMLI_COMMANDS` (8) in all (`checksOf`); the debate record and `/council test` list the same checks. Audit: the one line goes to the log of every touched repository, or to the root's when none was touched (`auditDirsOf`; one file named by an absolute path is written once), and the self-written `.gitignore` is checked once per log folder (a set replaces the boolean).
+- *Offers.* The allow-rule offer, the dialog's allowlist option and its write are available only when `writeDirOf` names a directory: the root when the lookup is off, the one repository when the call touched exactly one. Otherwise there is no offer and the dialog does not carry the option. A mod write can therefore never create a root rules file, which would switch the lookup off.
+- *Keys.* When the touched scopes are anything other than exactly the root scope, `scopeTagOf` (their directories, sorted, joined with a newline) is mixed into the verdict cache key (`fingerprintOf(tool, input, scope)`) and the chat call key (`callKeyOf(call, scope)`), so an approval in one repository never applies in another. With the root scope alone both keys are byte-identical to before, so existing state and tests are unaffected. The audit line's `fingerprint` stays the plain one.
+- *`/council`.* `log`, `report`, `rules` and `models` use the scope of the session cwd (its repository, else the root scope); so does the start-up shadow suggestion. `test` classifies like a real Bash call (all touched scopes, combined) and lists the combined checks. `prompt.submit` and the start-notice relay keep the root context.
+
+**Decisions.** Those marked *approved 2026-10-20* were put to the maintainer and decided; the rest are mine, each with the safer side taken or the question left open.
+1. **Where a rules file may sit** (ROADMAP's C5 row): only at the top of a repository directly below the root. A file in a plain child, or at depth two (`app/sub/`, even with its own `.git`), is never read (the plain-folder and depth-two test, and mutation (i), pin it).
+2. **A root rules file wins, and a root that is a repository turns the lookup off** *(approved 2026-10-20)*. Either keeps today's single scope. The lookup is on for any root with neither, even one holding no repository.
+3. **The shell target** *(approved 2026-10-20)*: working directories and path words as in "A call's targets". A part runs in the directory before its own `cd`, and its words resolve there too (`cd app` names `<dir>/app`); `classify` itself keeps resolving a `cd` part's words against the directory after it, as before.
+4. **The strictest repository decides, and the checks run per repository, eight in all** *(approved 2026-10-20)*. `rm -rf ../lib` and `rm -rf /work/lib` run in `app` are blocked by `rm-recursive-outside-repo`, which measures against the scope's directory (mutation (v)): deleting a repository is like `rm -rf .`.
+5. **Outside every repository** *(approved 2026-10-20)*: a working directory in none brings in the root scope, a path merely named in none brings in nothing (`cmd > /dev/null` in `app` stays `app`'s call alone; mutation (iv)). Nothing at all: the root scope.
+6. **Audit and commands** *(approved 2026-10-20)*: the line goes to every touched repository's log, else the root's; `/council log`, `report`, `rules` and `models` read the cwd's scope.
+7. **Git runs in the repository** *(approved 2026-10-20; two loosening side effects)*. Under a parent root, git in the root fails (it is no repository), so the preview showed nothing and a merge's current branch was unknown, which counts as a merge into a protected branch. Now the preview, a push's range diff and the current branch are read in the deciding scope, so a merge into a branch that is not protected is no longer treated as one, and a reviewer now gets a diff it did not get. The fixtures' default world makes `/work` a repository, so every existing test still runs the lookup off.
+8. **Offers only for one scope** (as in the brief). Where it applies, `offerRule` is given the scope's own `where` (its root is the repository), because `suggestRule` classifies again with the rule in place.
+9. **An unknowable `cd`** (`cd $X && make` from `app`) lands the later parts at `/`, outside every repository, so the root scope's defaults are brought in beside `app`'s (a working directory in no repository).
+
+*Interpretations to confirm.*
+- **Audit with the root scope and a repository.** "Every touched repository" is read literally: `cd app && make` from the root touches the root scope and `app`, and writes only `app`'s log. The root's log gets the line only when no repository was touched.
+- **`status` and `reload`** still use the root context (the brief lists `log`, `report`, `rules`, `models`, `test` and the suggestion). `status` therefore shows the root scope's models and check count, `models` the cwd scope's.
+- **The chat `canSession` flag** is computed against the deciding scope, as `suggestRule` does for the one-scope case, even for a call that gets no allow-rule offer: the session allowance writes nothing, and its key carries the scope tag.
+- **A command too long or too complex to parse** has no parts to follow, so only the session cwd is a target (it is still reviewed at least).
+- **Two repositories' checks with the same name** keep their names (the debate record finds a check by name, so both show the status of the last result).
+- **A plain root** (no repository below it, no file, no `.git`) has the lookup on, so a call outside any repository is offered no allow rule and no allowlist entry; `{"schemaVersion": 1}` at the root turns the lookup off and brings them back. The existing offer tests needed the fixture root to be a repository for this reason (12 failed without it, all offers and allowlist writes).
+- **Looking up costs file calls.** Each distinct child named by a call is statted once per load (a `$.fs.stat` and an `$.fs.exists`), in parallel. `targetsOf` parses the command a second time.
+
+**Not done.**
+- The prompt's redaction (`prompt.submit`) still uses the root's patterns, as does the relay.
+- A repository created after the session started is seen only after `/council reload`; there is no watching.
+- No `$.session.repo()` use: it follows the cwd and cannot name the repositories a command names.
+- Checked live headless on 2.1.304 (`claude -p --plugin-dir`, a throwaway root holding `app`, whose rules file has an ask rule for `echo deploy-marker` and the protected path `config/secret/**`, and `lib`, with none). `/council test "cd app && echo deploy-marker"` gave ask by the project rule; the same in `lib` gave allow. A Write to `app/config/secret/key.txt` was refused as a protected path and logged in `app`'s audit log. The same Write in `lib` was not protected (the shipped `file-write` review, one Sonnet review, which asked to revise) and was logged in `lib`'s. `cd app && echo deploy-marker` run from the root was refused by `app`'s rule and logged in `app`'s log only. A Write to the root's `.claude/settings.json` was refused as a protected path and logged in the root's log. Each repository got its `.gitignore`. Not checked live: a cloud session with two repositories.
+
+**Tests** (`tests/scopes.test.ts`; `multiRepo: true` in `tests/fixtures.ts` makes `/work` a parent of `app` (a repository with a rules file: an allow rule for `npm publish`, the protected path `config/secret/**`, one check) and `lib` (a repository, no file); the fixtures record the working folder of every process and spawned check):
+- pure: `targetsOf` (the `cd` before a part, an unknowable `cd`, a nested `cd`, quotes and `~`, a file tool's real path), `scopesTouched`, `candidateChildren`, `combineClassifications` (strictest, tie, protection, scripts, one scope unchanged, none an error), `scopeTagOf` and the keys with an empty tag, `unionById`, `intersection`, `checksOf`, `auditDirsOf`, `writeDirOf`;
+- the roadmap's case: an edit in `app` resolves its protected path, an edit in `lib` the defaults, a command run in `lib` the defaults (and `npm publish` is allowed in `app` only);
+- a file in a plain child and one at depth two are ignored; a root file, or a root `.git`, turns the lookup off; a link is not a repository and a `.git` file is;
+- shell targets: `cd app && …` from the root, `cd $X && …`, a path in another repository, `> /dev/null`;
+- the strictest wins; `rm -rf ../lib` and `rm -rf /work/lib` are blocked; a protected path anchors at its repository; a file edit through a link into `lib` touches both;
+- checks run in the repository, eight across two, listed by `/council test`; git runs in the repository (push, merge, the root and `lib` as controls);
+- audit: the line in `app`'s log with its `.gitignore`, one line in each of two logs, the root's log as before, one absolute file once, `/council log` reading the cwd's;
+- offers: none for two repositories or the root alone, the rule written to `app`'s file and honoured on the next call (and not in `lib`), the allowlist option and write likewise, the allowlist as an intersection;
+- keys: an approval in `app` is not used in `lib`, the root-scope keys equal the plain ones, the chat code differs per repository;
+- reload: a changed file is read only after `/council reload`, and so is a folder that became a repository; a broken file warns once with the relative path; `/council rules` and `test` read the cwd's repository.
+
+**Mutation checks** (each broken on purpose, the failing tests named, then restored):
+- (i) a rules file accepted in any child without `.git` (the `.git` check in `loadChild` removed): "a rules file in a plain folder, or deeper than a repository's top, is ignored", "a call outside every repository is logged at the root, as before", "the allowlist option only where one repository's file can take the entry" and "the root scope alone keeps today's keys; a repository's are tagged with its directory";
+- (ii) the first scope taken instead of the strictest: "the strictest tier wins, and its scope decides", the two shell-target tests, "two repositories: the strictest decides", the two-log audit test, the absolute-log test and "/council in a repository";
+- (iii) the scope tag dropped from the cache key: "an approval in app does not carry over to the same command in lib", "the root scope alone keeps today's keys; …" and the plain-folder test (its second call reused the first's approval);
+- (iv) a path target outside every repository bringing in the root scope: "a working directory in no repository brings in the root scope; a named path in none brings in nothing" and "shell targets: a path in another repository brings it in; a path in none does not bring in the root";
+- (v) `rm-outside-repo` measured against the session root instead of the scope's directory: "rm -rf of another repository is blocked: …", "a file edit in app resolves app's rules; …", "a project protected path is anchored at its repository" and the `/dev/null` test;
+- (vi) the link check removed from `loadChild`: "a link to a repository is not one; a folder whose .git is a file (a worktree) is".
