@@ -42,6 +42,7 @@ const TABLE = {
   'gimli.error': { plain: '"{name}" could not be started.' },
   'gimli.stopped': { plain: '"{name}" was stopped: the council had already blocked.' },
   'gimli.tail': { plain: 'Its last lines:\n{tail}' },
+  'gimli.problem': { plain: 'The error: {problem}' },
 
   // Refusals Claude reads
   'refusal.head': { plain: 'This call was refused before it ran.' },

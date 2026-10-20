@@ -124,6 +124,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **`/council` no longer resets the review rounds.** A `/council` command you type keeps the
   current prompt's rounds, failed attempts and cached approvals, and the prompt the reviewers see,
   as they were. Other slash commands still start afresh.
+- **A project check that can't start says why.** The refusal Claude reads now carries the engine's
+  error, such as a program missing from the PATH, redacted and cut to one line. The audit log still
+  keeps no check output.
 
 
 ### Security

@@ -52,7 +52,7 @@ import type { Brief } from './members/brief.js'
 import { formatPreview, INSPECTION_TIMEOUT_MS, MAX_LISTED, planPreview, rangeDiffInspection } from './members/galadriel.js'
 import type { Inspection, InspectionResult } from './members/galadriel.js'
 import { GANDALF_LIMITS } from './members/gandalf.js'
-import { isGimliBlock, keepTail, statusOf, tailOf } from './members/gimli.js'
+import { isGimliBlock, keepTail, problemOf, statusOf, tailOf } from './members/gimli.js'
 import type { GimliRun } from './members/gimli.js'
 import { patternsWith, scanCall, warnsPasswordFingerprint } from './members/gollum.js'
 import { callDiff, LEGOLAS_LIMITS } from './members/legolas.js'
@@ -705,6 +705,7 @@ async function runCheck($: EngineInterface, command: GimliCommand, dir: string, 
   let ended: 'timeout' | 'stopped' | undefined
   let exit: ProcessSpawnResult | undefined
   let output = ''
+  let rejection: string | undefined
   let isEnded: () => void = () => undefined
   const endedEarly = new Promise<void>(resolve => {
     isEnded = resolve
@@ -724,8 +725,9 @@ async function runCheck($: EngineInterface, command: GimliCommand, dir: string, 
   const reading = (async () => {
     for await (const chunk of stream) output = keepTail(output, chunk.text)
     if (ended === undefined) exit = await stream.result
-  })().catch(() => {
-    // It could not start, or its stream broke: no exit code, so it does not pass.
+  })().catch((error: unknown) => {
+    // It could not start, or its stream broke: no exit code, so it does not pass. Keep the engine's message to tell Claude why.
+    rejection = error instanceof Error ? error.message : String(error)
   })
   try {
     // Ended early, the run is over even if the stream is slow to close.
@@ -735,11 +737,14 @@ async function runCheck($: EngineInterface, command: GimliCommand, dir: string, 
     stop.removeEventListener('abort', onStop)
   }
   const ms = (await $.clock.now()) - started
+  const status = statusOf(ended, exit)
   return {
     name: command.name,
-    status: statusOf(ended, exit),
+    status,
     ...(ended === undefined && exit !== undefined && { code: exit.code, signal: exit.signal }),
     tail: tailOf(output),
+    // Only when it broke by itself: a run the council or the clock ended says nothing of the sort.
+    ...(status === 'error' && rejection !== undefined && { problem: rejection }),
     ms,
   }
 }
@@ -1857,7 +1862,12 @@ export const register: Register = (on, options) => {
         await update($, session, value => closeDebate(sessionOf(value), debateId, 'aborted')).catch(() => undefined)
         return finish({ deny: refusalText({ who: 'who.fullCouncil', verdict: 'interrupted', reason: text('reason.aborted'), alternative: '' }) }, false)
       }
-      const runs = held.runs.map(run => ({ ...run, tail: redact(run.tail, ctx.patterns) }))
+      // Redact before capping: a cut could split a secret the patterns would catch whole.
+      const runs = held.runs.map(run => ({
+        ...run,
+        tail: redact(run.tail, ctx.patterns),
+        ...(run.problem !== undefined && { problem: problemOf(redact(run.problem, ctx.patterns)) }),
+      }))
       const combined = combine(held.voices, runs)
       const councilMs = (await $.clock.now()) - reviewStarted
       reviewMs = councilMs

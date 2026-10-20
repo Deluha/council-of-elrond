@@ -136,7 +136,7 @@ why.
 ```
 
 - **Only these commands run.** They run by argument vector with no shell, in the project root (with several repositories under one root, in each repository's own directory), and nothing comes from Claude or the call. `rules.json` is a protected path, so Claude can't add a command without asking you.
-- **Pass or fail by exit code.** A failure, a timeout or a command that can't start is a block. Claude gets the check's last 20 lines (redacted) so it can fix the cause; the audit log keeps none of them.
+- **Pass or fail by exit code.** A failure, a timeout or a command that can't start is a block. Claude gets the check's last 20 lines (redacted) so it can fix the cause, and for a command that can't start, the error (a missing program, say; redacted); the audit log keeps none of them.
 - **Each command has its own timeout:** 120 s unless `timeoutMs` says otherwise, at most 600 s. It runs outside the reviewers' deadline, so a council can take as long as the longer of the two.
 - **Stopping early:** Esc ends them. Once a reviewer has blocked, or another check has failed, timed out or could not start, a check still running is stopped, since it can only add a block.
 - **Make them non-interactive.** No watch mode or prompts; standard input is closed. For example, `["env", "CI=1", "npm", "test"]`.
