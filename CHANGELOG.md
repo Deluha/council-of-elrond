@@ -76,7 +76,13 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **`/council off`, `shadow on` and `model` only run when a person types them.** They loosen the
   gate, so a command from a plugin, another Claude session or a scheduled prompt is now refused
   with one line and changes nothing; `on`, `shadow off`, the `model` listing, `reload` and the
-  rest answer from any origin. The SDK counts as a person for now.
+  rest answer from any origin.
+- **`claude -p` and SDK prompts are no longer a person's.** The `sdk` prompt origin is the host's
+  own turn, not typed at a terminal (the cloud web client arrives as `composer`). So in `claude -p`
+  and the SDK `/council off`, `shadow on` and `model` are refused, a `/council` command gets no
+  relay to Claude, and a prompt no longer resets the per-prompt counters (rounds, failed attempts,
+  lockouts), which last until `/clear`. Any prompt not typed by a person, `sdk` included, clears
+  the cached approvals.
 - The default is now themed: `/council`, the dialog and the report name the characters, and the
   dialog's options read "Need: allow once" and "Pass: keep blocked". Turn on "Plain mode" in
   `/config` to keep the old text ("Allow once", "Keep blocked", role names).

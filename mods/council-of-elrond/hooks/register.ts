@@ -113,10 +113,11 @@ const BUDGET_GUARD_MS = 1_000
 
 /**
  * Prompt origins that are a person's own: they reset the per-prompt state, and
- * only they may run the `/council` subcommands that loosen the gate. `sdk` counts
- * until the web client's kind is known (ROADMAP C3).
+ * only they may run the `/council` subcommands that loosen the gate. `sdk` is the
+ * host's own turn (`claude -p`, the Agent SDK), not typed at a terminal; the cloud
+ * web client arrives as `composer` (DESIGN §14.3).
  */
-const HUMAN_ORIGINS: ReadonlySet<string> = new Set(['composer', 'bridge', 'sdk'])
+const HUMAN_ORIGINS: ReadonlySet<string> = new Set(['composer', 'bridge'])
 
 const MAX_SCRIPTS = 3
 
@@ -1159,6 +1160,10 @@ export const register: Register = (on, options) => {
     if (HUMAN_ORIGINS.has(e.origin.kind) && !isCouncilCommand(e.command, COMMAND)) {
       const patterns = (await contextOf($).catch(() => undefined))?.patterns
       await update($, session, value => resetForPrompt(sessionOf(value), redact(e.text, patterns)))
+    } else if (!HUMAN_ORIGINS.has(e.origin.kind)) {
+      // Not a person's prompt, so no new task: rounds, lockouts and the latest prompt stay. The cache
+      // only lasts until the next prompt, though, so an approval must not carry across one (DESIGN §14.3).
+      await update($, session, value => clearCache(sessionOf(value)))
     }
     return next(e)
   }).catch(($, e, next) =>

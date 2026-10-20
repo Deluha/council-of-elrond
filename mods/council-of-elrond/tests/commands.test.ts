@@ -304,10 +304,11 @@ describe('who may run what', () => {
     { kind: 'peer' },
     { kind: 'scheduled-trigger' },
     { kind: 'task-notification' },
+    { kind: 'sdk' },
   ]
-  const A_PERSON: { kind: string }[] = [{ kind: 'composer' }, { kind: 'bridge' }, { kind: 'sdk' }]
+  const A_PERSON: { kind: string }[] = [{ kind: 'composer' }, { kind: 'bridge' }]
 
-  test('off from a plugin, a peer session or a schedule changes nothing and says so', async ($, on) => {
+  test('off from a plugin, a peer session, a schedule or the SDK changes nothing and says so', async ($, on) => {
     const w = world(on, { surfaces: [], replies: [BLOCK] })
     for (const origin of NOT_A_PERSON) {
       await council($, 'off', origin)
@@ -356,7 +357,7 @@ describe('who may run what', () => {
     expect(w.logs).toEqual([])
   })
 
-  test('a person at the composer, the bridge or the SDK can run all three', async ($, on) => {
+  test('a person at the composer or the bridge can run all three', async ($, on) => {
     const w = world(on, { surfaces: [], replies: [BLOCK, APPROVE] })
     for (const origin of A_PERSON) {
       await council($, 'off', origin)

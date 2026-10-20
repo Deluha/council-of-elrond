@@ -137,14 +137,14 @@ describe('/council output reaches Claude where nothing draws', () => {
     expect(w.panes).toContain('council')
   })
 
-  test('a person at the composer, the bridge or the SDK gets it', async ($, on) => {
+  test('a person at the composer or the bridge gets it', async ($, on) => {
     world(on, { surfaces: [] })
-    for (const kind of ['composer', 'bridge', 'sdk']) expect(((await council($, 'status', { kind })) as Result).context, kind).toHaveLength(1)
+    for (const kind of ['composer', 'bridge']) expect(((await council($, 'status', { kind })) as Result).context, kind).toHaveLength(1)
   })
 
-  test('a command from a plugin, a peer, a schedule or a task gets no context: Claude cannot use it as an oracle', async ($, on) => {
+  test('a command from a plugin, a peer, a schedule, a task or the SDK gets no context: Claude cannot use it as an oracle', async ($, on) => {
     const w = world(on, { surfaces: [] })
-    for (const origin of [{ kind: 'plugin', name: 'x' }, { kind: 'peer' }, { kind: 'scheduled-trigger' }, { kind: 'task-notification' }, { kind: 'unclassified' }]) {
+    for (const origin of [{ kind: 'plugin', name: 'x' }, { kind: 'peer' }, { kind: 'scheduled-trigger' }, { kind: 'task-notification' }, { kind: 'sdk' }, { kind: 'unclassified' }]) {
       for (const [args] of FOUR) expect(((await council($, args, origin)) as Result).context, `${origin.kind} ${args}`).toBeUndefined()
     }
     // The output itself is still shown to the person.

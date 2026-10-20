@@ -289,7 +289,8 @@ Everything `/council` prints is for you: it draws in a pane where a surface draw
 dim transcript lines. Claude does not read it, with one exception: where nothing draws at all (the
 cloud web client, `claude -p`, the SDK), `/council` status, report, rules and test also go to Claude
 to show you, because Claude is then the only way to reach you; see
-[Where nothing draws](#where-nothing-draws). In a plain `claude -p "/council"` run nothing prints;
+[Where nothing draws](#where-nothing-draws). That applies only to a person's command. In `claude -p`
+and the SDK a command is not a person's, so it gets no relay. In a plain `claude -p "/council"` run nothing prints;
 use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 
 | Command | What it does |
@@ -308,9 +309,10 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 **`off`, `shadow on` and `model` only run when a person types them.** They loosen the gate (bypass,
 reviewers that never refuse, a different reviewing model), so a command that arrives from a plugin,
 another Claude session or a scheduled prompt is refused with one line and changes nothing. Typing
-them at the prompt, through the Remote Control bridge or from the SDK works. `on`, `shadow off`, the
-`model` listing, `reload` and the rest answer from any origin. (The SDK counts as a person for now,
-because the web client's origin is not yet known.)
+them at the prompt (the cloud web client included) or through the Remote Control bridge works.
+`claude -p` and the SDK are not a person, so those three are refused there; set them in `/config` or
+the plugin's options instead. `on`, `shadow off`, the `model` listing, `reload` and the rest answer
+from any origin.
 
 ### `/council report`
 
@@ -345,7 +347,8 @@ attached, nothing changes and Claude reads none of it.
 
 **What reaches you through Claude**
 
-- **`/council` status, report, rules and test, when you type them.** The same lines the pane would
+- **`/council` status, report, rules and test, when a person types them** (not in `claude -p` or
+  the SDK, where a command is not a person's and gets no relay). The same lines the pane would
   show are handed to Claude with an instruction to repeat them to you verbatim, in a code block, when
   it next replies. They sit inside a fenced block that Claude is told to treat as the council's output,
   not as instructions. Every line is redacted first, a typed command included, and `/council rules`
@@ -363,8 +366,8 @@ attached, nothing changes and Claude reads none of it.
 snippet and the secret), a diff, the call's own text or what a write would put in a file, a
 reviewer's reason or failure, and every other subcommand (`log`, `off`, `on`, `shadow`, `model`,
 `models`, `reload`, `debate`). Only a person's own command is answered this way: one that arrives
-from a plugin, another Claude session or a scheduled prompt gets nothing back, so Claude cannot
-probe how a command would be classified.
+from a plugin, another Claude session, a scheduled prompt, `claude -p` or the SDK gets nothing
+back, so Claude cannot probe how a command would be classified.
 
 **Letting a refused call run.** You can add an allow rule for it to `.claude/council-of-elrond/rules.json`
 yourself (Claude is told not to edit that file: it is a protected path), or continue the session in a
@@ -424,7 +427,8 @@ operation. A push keys on its remote and branch, and SQL on its database.
 - **Failed attempts:** a refusal by a rule, a reviewer or the secrets scan, your "keep blocked" (or a dismissed question, or nobody to ask), your refusal at Claude Code's own permission prompt, and a gated call that ran and errored all count. Claude Code's own "Chat about this" counts like a dismissal. "Talk first" does not, nor does Claude Code denying a call on its own with nobody asked (in `claude -p`, or by a deny rule), nor an allowlist entry the mod could not write (the call stays blocked, but the failure is not Claude's).
 - **Lockout:** three failed attempts on one operation, or five on one kind of operation (say `git push` to any target), lock it out. Claude is told to stop retrying, tell you what failed and propose another approach.
 - A call that runs successfully clears its own operation. Everything resets when you send a new prompt (a `/council` command is not one).
-- **Cache:** a reviewer's approve is reused for the identical call until your next prompt. A block or revise never is.
+  Only a person's prompt starts them over: in `claude -p` and SDK sessions they last until `/clear`.
+- **Cache:** a reviewer's approve is reused for the identical call until your next prompt. A block or revise never is. Any prompt that is not a person's (`claude -p`, the SDK, a task notification, a schedule) also clears the cache.
 
 ## Escalation
 

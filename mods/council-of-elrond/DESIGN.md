@@ -657,7 +657,7 @@ The `/upgrade-types` run for 2.1.304 read the binary with `grep -a` and made one
    - **(j) Approved 2026-10-13:** decisions 1 to 7 above and the narrower redaction test were approved by the user after the H1 checkpoint.
 
 4. **H2: pipeline robustness** (`hooks/register.ts`, `hooks/state.ts`, `hooks/audit.ts`, `hooks/elrond/commands.ts`, `hooks/strings.ts`). The findings are REVIEW-2026-10 §2.5 to §2.11; the rows are ROADMAP's "H2" table.
-   - **(a) `command.run` needs a person for what loosens the gate** (§2.9). `needsPerson(command)` in `elrond/commands.ts` is true for `off` (bypass on), `shadow on` and `model` (a switch or clearing one, a bad member or usage included: the kind decides, so `model` with a bad slot is also refused). `on`, `shadow off`, the `model` listing (`models`), `reload` and every other subcommand answer any origin. The hook checks `needsPerson` and then `HUMAN_ORIGINS` (`composer`, `bridge`, `sdk`: the set `prompt.submit` already uses, not a second list); a refusal changes nothing and shows one line (`cmd.needsPerson`) through `show()`. `sdk` counts as a person until C3 shows which kind the web client's commands arrive with (ROADMAP C3); a `plugin`, `peer`, `scheduled-trigger` and `task-notification` origin do not. Test kit: `$.command.run` in a test takes the whole `command.run` input, and a call without `origin` reaches the hook with none, so the tests' `council()` helper (`tests/fixtures.ts`) sends `{ kind: 'composer' }` and the presentation by default, and a test passes another origin to try it.
+   - **(a) `command.run` needs a person for what loosens the gate** (§2.9). `needsPerson(command)` in `elrond/commands.ts` is true for `off` (bypass on), `shadow on` and `model` (a switch or clearing one, a bad member or usage included: the kind decides, so `model` with a bad slot is also refused). `on`, `shadow off`, the `model` listing (`models`), `reload` and every other subcommand answer any origin. The hook checks `needsPerson` and then `HUMAN_ORIGINS` (`composer`, `bridge`, `sdk`: the set `prompt.submit` already uses, not a second list); a refusal changes nothing and shows one line (`cmd.needsPerson`) through `show()`. `sdk` counts as a person until C3 shows which kind the web client's commands arrive with (ROADMAP C3) (dropped 2026-10-20, §14.3); a `plugin`, `peer`, `scheduled-trigger` and `task-notification` origin do not. Test kit: `$.command.run` in a test takes the whole `command.run` input, and a call without `origin` reaches the hook with none, so the tests' `council()` helper (`tests/fixtures.ts`) sends `{ kind: 'composer' }` and the presentation by default, and a test passes another origin to try it.
    - **(b) The checks end with the council** (§2.6). The body of `convene` after `stop` is created runs in a `try`/`finally`: `stop.abort()` and removing the listener run on every exit, so a throw no longer leaves a check to its own timeout (up to 600 s). The dispatch's `signal` is chained into `stop` (abort at once if it is already aborted), so an Esc ends the checks through the mod's own path as well as the engine's. A `$.model.complete` rejection does not reach it (`review` catches that and returns a failed voice); the test makes a `$.clock.now()` read between two members fail, which does.
    - **(c) The log rotates by bytes** (§2.7). `isRotation(current, line, maxBytes)` in `audit.ts` compares UTF-8 sizes (`byteLength`) and both `appendAudit` (whether to read `.1`) and `appendPlan` (whether to rotate) use it, so the two can no longer disagree. Before, `appendAudit` compared characters, so with multibyte text it skipped reading `.1` and the log rotated with `.2` never written.
    - **(d) Nothing waits for the audit queue** (§2.7). `audit()` queues the line and returns; `finish()` and the allowed-call refusal no longer await it. The queue keeps its order and its `.catch` (a failed write is logged to debug with `notice.auditFailed` and the queue goes on). The kit showed that a `$.fs.write` started by the hook still lands after the hook has returned, in order, a few event-loop turns later, so every line is still written. A write that never returns holds back only the lines queued after it; a decision, the call, and the next gated call are not delayed. Two consequences: a `/council log` or `/council report` run straight after a call may not see its line yet, and the tests read the log through `auditLines(w)`, which is now asynchronous and first calls `settled(w)` (it takes zero-delay event-loop turns, or settles the mocked clock, until the fixture's file calls stop; no fixed wait). A direct read of the log file from `w.files` does the same first. A test with an audit-file write that never resolves (`w.writeHangs`) checks the next gated call still returns its result.
@@ -774,6 +774,7 @@ Decisions:
      - run `/council off`, `shadow on` or `model`;
      - get the C2 relay.
    - It changes code, so it goes with C4 and is not made here.
+   - *Decided 2026-10-20 (the maintainer): dropped, with the cache rule in §14.3.*
 4. **The probe build was installable** by anyone who named its branch while the branch existed. The branch is to be deleted once these results are recorded.
 5. **The types are 2.1.299; the run was on 2.1.303.** Regenerate them (`/upgrade-types`) before C4.
 
@@ -818,3 +819,34 @@ Conclusions:
    - In Auto mode, the reason may not reach the host.
    - The `-p` denial wording is not one that `isAutomaticDenial` matches.
 5. **Pending:** a cloud run of a probe build, and the maintainer's decision on what this changes in C4 (ROADMAP C4).
+
+### 14.3 `sdk` is not a person's
+
+Decided by the maintainer on 2026-10-20, as §14.1 decision 3 left open.
+
+**What changed, and why.**
+- `HUMAN_ORIGINS` in `hooks/register.ts` is now `composer` and `bridge`. `sdk` is out.
+- The types describe `sdk` as the SDK host's own turn (`claude -p`, the Agent SDK), not typed at a terminal.
+- §14.1 found that the cloud web client arrives as `composer`, so `sdk` no longer stood in for it.
+- §14.2's origins row confirmed that `-p` and stream-json prompts, and a slash command in `-p`, all arrive as `sdk`.
+- `needsPerson` and the C2 relay (§13 items 4(a) and 5(a)) keep using `HUMAN_ORIGINS`, so they now refuse `sdk`: `off`, `shadow on` and `model` change nothing, and `/council` output is not relayed to Claude.
+
+**The cache rule (a tightening for every non-person origin).**
+- `resetForPrompt` is what keeps the approve cache to "until the next prompt". A prompt that is not a person's no longer runs it, so without a rule an approval would carry across `sdk` turns. That would be a loosening.
+- So `prompt.submit` now clears the cache for any origin outside `HUMAN_ORIGINS`: `sdk`, `peer`, `plugin`, `task-notification`, `scheduled-trigger`, `unclassified` and any kind not known yet. It uses `clearCache` through the same updater as `/council reload`; no new state function.
+- A person's prompt is unchanged: it resets, except for a `/council` command, which neither resets nor clears (§13 item 6(b)).
+- The hook's `.catch` is unchanged: no `$` call, no state write.
+
+**What deliberately stays.**
+- A non-person prompt does not reset rounds, failed attempts, lockouts, wipes, `latestPrompt` or `promptEpoch`.
+- So reviewers in `-p` and SDK sessions see no prompt, and a lockout lasts until `/clear`. That is more refusals, never fewer.
+
+**The cost.**
+- A headless live check (`claude -p`) can no longer reach the person-only paths: the C2 relay, `off`, `shadow on`, `model`, and C4's typed approvals once built.
+- Unit tests cover those paths instead, with an explicit origin.
+
+**Tests and mutation checks.**
+- `tests/commands.test.ts` and `tests/relay.test.ts` move `sdk` to the not-a-person lists.
+- `tests/rounds.test.ts` has three new tests: an `sdk` prompt and a `task-notification` prompt each clear a cached approval (the reviewer is asked again), and an `sdk` prompt leaves rounds, a lockout, `latestPrompt` and `promptEpoch` as they were while a `composer` prompt resets them.
+- Mutation (i): with `sdk` back in `HUMAN_ORIGINS`, the three `commands.test.ts` refusal tests, the relay test for non-person origins and the `sdk` lockout test fail.
+- Mutation (ii): with the cache-clearing branch removed, the `sdk` and `task-notification` cache tests fail.
