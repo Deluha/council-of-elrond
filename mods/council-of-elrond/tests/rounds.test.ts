@@ -7,6 +7,9 @@ import { APPROVE, auditLines, BLOCK, denyOf, KEEP_BLOCKED, REVISE, watchState, w
 const submit = ($: { prompt: { submit: (e: never) => Promise<unknown> } }, text: string) =>
   $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } } as never)
 
+const submitFrom = ($: { prompt: { submit: (e: never) => Promise<unknown> } }, text: string, origin: { kind: string; name?: string }) =>
+  $.prompt.submit({ text, wait: false, origin } as never)
+
 const submitCommand = ($: { prompt: { submit: (e: never) => Promise<unknown> } }, text: string, command: { name: string; args: string }) =>
   $.prompt.submit({ text, command, wait: false, origin: { kind: 'composer' } } as never)
 
@@ -141,6 +144,52 @@ describe('cache', () => {
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).toEqual({ result: 'ran' })
     expect(w.modelRequests).toHaveLength(2)
+  })
+})
+
+describe('a prompt that is not a person\'s', () => {
+  const RM = { tool: 'Bash', command: 'rm -rf build' } as const
+  const lastOf = (written: readonly unknown[]): CouncilSession => written.at(-1) as CouncilSession
+
+  test('does not carry a cached approval across: an SDK prompt clears it', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    on('prompt.submit', ($$, e) => ({ text: e.text }))
+    await $.tool.call(RM)
+    await $.tool.call(RM)
+    expect(w.modelRequests).toHaveLength(1)
+    await submitFrom($ as never, 'carry on', { kind: 'sdk' })
+    await $.tool.call(RM)
+    expect(w.modelRequests).toHaveLength(2)
+    expect(w.ran).toHaveLength(3)
+  })
+
+  test('the same for a task notification', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    on('prompt.submit', ($$, e) => ({ text: e.text }))
+    await $.tool.call(RM)
+    await submitFrom($ as never, 'a task finished', { kind: 'task-notification' })
+    await $.tool.call(RM)
+    expect(w.modelRequests).toHaveLength(2)
+  })
+
+  test('an SDK prompt does not reset rounds, a lockout or the latest prompt; a composer prompt does', async ($, on) => {
+    const w = world(on, { replies: [BLOCK, BLOCK, APPROVE], answer: KEEP_BLOCKED })
+    const state = watchState(on)
+    on('prompt.submit', ($$, e) => ({ text: e.text }))
+    await submit($ as never, 'delete the build output')
+    for (const command of ['rm -rf build', 'rm -r build', 'rm -rf build/']) await $.tool.call({ tool: 'Bash', command })
+    expect(denyOf(await $.tool.call(RM))).toContain('locked out')
+    const before = lastOf(state.written)
+    await submitFrom($ as never, 'try again', { kind: 'sdk' })
+    const after = lastOf(state.written)
+    expect(after.latestPrompt).toBe('delete the build output')
+    expect(after.promptEpoch).toBe(before.promptEpoch)
+    expect(after.ops).toEqual(before.ops)
+    expect(denyOf(await $.tool.call(RM))).toContain('locked out')
+    expect(w.modelRequests).toHaveLength(2)
+    await submit($ as never, 'ok, delete only the build output')
+    expect(await $.tool.call(RM)).not.toHaveProperty('deny')
+    expect(w.ran).toHaveLength(1)
   })
 })
 

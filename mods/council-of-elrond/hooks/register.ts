@@ -12,6 +12,7 @@ import type { GimliCommand, MemberName, ModelSlot } from './config/types.js'
 import { withAllowlistEntry, withRule } from './config/write.js'
 import type { FileEdit } from './config/write.js'
 import { isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
+import { callKeyOf, codeOf, isOfferable, parseChatLines } from './elrond/chat.js'
 import { combine, hasRealBlock } from './elrond/combine.js'
 import type { Voice } from './elrond/combine.js'
 import { bigOperationOf, councilSeats, needsCurrentBranch, rangeOf } from './elrond/council.js'
@@ -67,16 +68,21 @@ import { isInside, relativeTo, resolve } from './rules/paths.js'
 import {
   addReviewTime,
   addTokens,
+  answerChat,
   clearCache,
   clearEpic,
   closeDebate,
   count,
   declineRule,
+  forOtherPrompt,
+  grantChat,
+  holdsChat,
   INITIAL_SESSION,
-  isSession,
+  isReadable,
   isShadow,
   markDebateOpened,
   noteCheck,
+  noteOffer,
   noteVoice,
   noteWritten,
   openDebate,
@@ -84,11 +90,13 @@ import {
   sessionOf,
   tidyCall,
   tidyReason,
+  useChat,
   withBypass,
   withEpic,
   withSessionModel,
   withShadow,
 } from './state.js'
+import type { ChatUse } from './state.js'
 import type { CouncilDebate, CouncilSession } from '../types'
 import { currentMode, setMode, text, withMode } from './strings.js'
 import type { Mode, StringKey } from './strings.js'
@@ -113,10 +121,11 @@ const BUDGET_GUARD_MS = 1_000
 
 /**
  * Prompt origins that are a person's own: they reset the per-prompt state, and
- * only they may run the `/council` subcommands that loosen the gate. `sdk` counts
- * until the web client's kind is known (ROADMAP C3).
+ * only they may run the `/council` subcommands that loosen the gate. `sdk` is the
+ * host's own turn (`claude -p`, the Agent SDK), not typed at a terminal; the cloud
+ * web client arrives as `composer` (DESIGN §14.3).
  */
-const HUMAN_ORIGINS: ReadonlySet<string> = new Set(['composer', 'bridge', 'sdk'])
+const HUMAN_ORIGINS: ReadonlySet<string> = new Set(['composer', 'bridge'])
 
 const MAX_SCRIPTS = 3
 
@@ -1158,7 +1167,28 @@ export const register: Register = (on, options) => {
     // `/council` never asks the model, so it is not a new task; a skill or prompt command is.
     if (HUMAN_ORIGINS.has(e.origin.kind) && !isCouncilCommand(e.command, COMMAND)) {
       const patterns = (await contextOf($).catch(() => undefined))?.patterns
-      await update($, session, value => resetForPrompt(sessionOf(value), redact(e.text, patterns)))
+      // A person's `council allow` / `council deny` lines (ROADMAP C4): answered against the offers of the
+      // prompt now ending, then stripped. Any other origin never gets here, so its lines stay ordinary text.
+      // Not for a slash command: its text cannot be rewritten, so a line would stay visible to Claude (DESIGN §14.4).
+      const { commands, rest } = e.command === undefined ? parseChatLines(e.text) : { commands: [], rest: e.text }
+      if (commands.length === 0) {
+        await update($, session, value => resetForPrompt(sessionOf(value), redact(e.text, patterns)))
+        return next(e)
+      }
+      // The updater may run again after a lost write; the last run's answers are the ones that landed.
+      let acks: string[] = []
+      await update($, session, value => {
+        const current = sessionOf(value)
+        const answered = answerChat(current, commands)
+        acks = answered.acks
+        return grantChat(resetForPrompt(current, redact(rest, patterns)), answered.grants)
+      })
+      return next({ ...e, text: rest, context: [...(e.context ?? []), ...acks] })
+    } else if (!HUMAN_ORIGINS.has(e.origin.kind)) {
+      // Not a person's prompt, so no new task: rounds, lockouts and the latest prompt stay. The cache
+      // and a once-allowance only last until the next prompt, though, so neither may carry across
+      // one (DESIGN §14.3, §14.4).
+      await update($, session, value => forOtherPrompt(sessionOf(value)))
     }
     return next(e)
   }).catch(($, e, next) =>
@@ -1287,7 +1317,8 @@ export const register: Register = (on, options) => {
     const stored = await read($, session)
     const state = sessionOf(stored)
     // Read as a fresh session, so the call is decided normally; said once, here, since updaters stay pure.
-    if (stored !== undefined && !isSession(stored)) $.ui.log(text('notice.sessionMalformed'), { to: 'debug' })
+    // (A version 4 record is migrated, not reset, so it is not this case.)
+    if (stored !== undefined && !isReadable(stored)) $.ui.log(text('notice.sessionMalformed'), { to: 'debug' })
     // The prompt this call belongs to. A review runs while `next(e)` is in
     // flight; if the user sends a new prompt meanwhile, resetForPrompt bumps
     // the epoch, and a round, wipe or cached approve written afterwards must
@@ -1432,6 +1463,38 @@ export const register: Register = (on, options) => {
       const answer = await escalate($, question, secrets.length === 1)
       if (answer === 'unavailable') {
         decision = answer
+        // Chat approval (ROADMAP C4): only where nothing draws, and never for a protected path or a block rule.
+        const callKey = isOfferable(classification) ? await callKeyOf(call) : undefined
+        if (callKey !== undefined) {
+          // Consumed in one write, and used only if that write took it: two identical calls must not both spend one.
+          const spent: { use: ChatUse } = { use: undefined }
+          if (holdsChat(sessionOf(await read($, session)), callKey)) {
+            await update($, session, value => {
+              const taken = useChat(sessionOf(value), callKey)
+              spent.use = taken.use
+              return taken.session
+            })
+          }
+          if (spent.use === 'deny') {
+            decision = 'chat-deny'
+            // The person's refusal, not Claude's failed attempt.
+            return refuse({ who: 'who.user', verdict: 'not allowed', reason: text('reason.chatDenied'), alternative: text('alternative.ask') }, false)
+          }
+          if (spent.use === 'once' || spent.use === 'session') {
+            decision = spent.use === 'session' ? 'chat-session' : 'chat-allow'
+            return 'allowed'
+          }
+        }
+        const chat =
+          callKey === undefined
+            ? undefined
+            : {
+                code: codeOf(callKey),
+                canSession: suggestRule(call, classification, ctx.loaded.compiled, where, { hadSecret, declined: [] }).kind === 'rule',
+              }
+        if (callKey !== undefined && chat !== undefined) {
+          await update($, session, value => noteOffer(sessionOf(value), { ...chat, callKey }, epoch))
+        }
         // Only reached where escalate found no surface, so the model is the only way to tell the person (ROADMAP C2).
         // The operation and the names of who is behind it; never the call, a preview, a finding or a diff.
         const unasked = nobodyToAsk({
@@ -1439,6 +1502,7 @@ export const register: Register = (on, options) => {
           operation: redact(operation.key, ctx.patterns),
           ...(decided !== undefined && { ruleId: decided.ruleId }),
           opinions,
+          ...(chat !== undefined && chat),
         })
         // A failed attempt, as dismissing is.
         return refuse({ who: 'who.user', verdict: 'not allowed', reason: unasked.reason, alternative: unasked.alternative }, true)

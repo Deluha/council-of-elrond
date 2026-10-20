@@ -137,14 +137,14 @@ describe('/council output reaches Claude where nothing draws', () => {
     expect(w.panes).toContain('council')
   })
 
-  test('a person at the composer, the bridge or the SDK gets it', async ($, on) => {
+  test('a person at the composer or the bridge gets it', async ($, on) => {
     world(on, { surfaces: [] })
-    for (const kind of ['composer', 'bridge', 'sdk']) expect(((await council($, 'status', { kind })) as Result).context, kind).toHaveLength(1)
+    for (const kind of ['composer', 'bridge']) expect(((await council($, 'status', { kind })) as Result).context, kind).toHaveLength(1)
   })
 
-  test('a command from a plugin, a peer, a schedule or a task gets no context: Claude cannot use it as an oracle', async ($, on) => {
+  test('a command from a plugin, a peer, a schedule, a task or the SDK gets no context: Claude cannot use it as an oracle', async ($, on) => {
     const w = world(on, { surfaces: [] })
-    for (const origin of [{ kind: 'plugin', name: 'x' }, { kind: 'peer' }, { kind: 'scheduled-trigger' }, { kind: 'task-notification' }, { kind: 'unclassified' }]) {
+    for (const origin of [{ kind: 'plugin', name: 'x' }, { kind: 'peer' }, { kind: 'scheduled-trigger' }, { kind: 'task-notification' }, { kind: 'sdk' }, { kind: 'unclassified' }]) {
       for (const [args] of FOUR) expect(((await council($, args, origin)) as Result).context, `${origin.kind} ${args}`).toBeUndefined()
     }
     // The output itself is still shown to the person.
@@ -209,8 +209,9 @@ describe('the start notice', () => {
     expect(notice).toContain('adding an allow rule for it to .claude/council-of-elrond/rules.json themselves')
     expect(notice).toContain('(do not edit that file yourself: it is a protected path)')
     expect(notice).toContain('Here /council status, report, rules and test answer through you.')
-    // No route that does not exist or that loosens the gate.
-    expect(notice).not.toContain('council allow')
+    // The chat route (ROADMAP C4), told as a code Claude relays; no route that loosens the gate.
+    expect(notice).toContain('When a refusal gives a code such as council:1a2b3c, give the user that code exactly as written')
+    expect(notice).toContain('typing council allow 1a2b3c on its own line in their next message, or refuse it with council deny 1a2b3c.')
     expect(notice).not.toContain('/council off')
     expect(notice).not.toMatch(/shadow/i)
     // Plain text: the plugin's own name is the one place "elrond" appears.
@@ -242,7 +243,9 @@ describe('the nobody-to-ask refusal', () => {
     expect(deny).toContain('The call needs the user, and nobody can be asked in this session. A rule sends this call straight to you.')
     expect(deny).toContain('Operation: shell:ls.')
     expect(deny).toContain('Behind it: rule privileged.')
-    expect(deny).toContain(`Safer alternative: Tell the user that this call was refused and why. ${routeText()}`)
+    // An ask-tier call may be approved in chat, so its alternative carries the call's code (tests/chat.test.ts).
+    expect(deny).toMatch(/Safer alternative: Tell the user that this call was refused and why, and give them its code, council:[0-9a-f]{6}\./)
+    expect(deny).toContain(routeText())
     expect(deny).toContain('Decided by: the user (not allowed).')
     expect(deny).toContain('Do not retry the same call unchanged.')
     // The call's own text is not in it: the flag is not part of the operation key.

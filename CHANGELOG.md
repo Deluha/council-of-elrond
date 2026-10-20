@@ -49,15 +49,26 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   ran, "Legendary commit acquired" as a toast and a band row for eight seconds.
 - **`/council` answers through Claude where nothing draws.** In the cloud web client, `claude -p`
   and the SDK, nothing the mod draws reaches you, so when you type `/council` status, report, rules
-  or test there, the same lines also go to Claude, fenced as the council's output and redacted line
-  by line, with an instruction to repeat them to you in its next reply. A scoped exception to "command
-  output never reaches Claude": no other subcommand, no command from a plugin or another session, and
-  nothing at all where a surface draws. `/council rules` shows an exact-string allowlist entry to
+  or test in the cloud web client, the same lines also go to Claude, fenced as the council's output
+  and redacted line by line, with an instruction to repeat them to you in its next reply. A scoped
+  exception to "command output never reaches Claude": no other subcommand, no command from a plugin
+  or another session, and nothing at all where a surface draws. `/council rules` shows an exact-string allowlist entry to
   Claude as `(an exact string, not shown)`, not its first three characters. See "Where nothing
   draws" in the README.
 - **A start notice where nothing draws.** The session starts with a row Claude reads, saying the
   council is active, that a call needing your approval is refused here with the reason, and how you
   can let it run (an allow rule in `rules.json` that you add yourself, or a terminal session).
+- **Approve in chat where nothing draws.** When a call is refused because nobody can be asked, the
+  refusal carries a code (`council:1a2b3c`) that Claude gives you; the start notice tells Claude to.
+  Type `council allow 1a2b3c` on a line of your own to let that exact call run once,
+  `council allow 1a2b3c session` to let it run for the rest of the session, or `council deny 1a2b3c`
+  to refuse it (not a failed attempt). The line is removed from your message and Claude is told what
+  it did. Only a person's own message counts (not `claude -p`, the SDK, a plugin or another
+  session), a code is answered only in your next message, a once-allowance ends at your next prompt,
+  and a protected path, a block rule or a high-confidence secret is never offered. The audit log
+  records `chat-allow`, `chat-session` and `chat-deny`, and `/council report` counts the first two
+  with the calls you allowed. The session record is now version 5; a version 4 record is read as 5,
+  so an upgrade keeps its rounds and lockouts. See "Where nothing draws" in the README.
 
 ### Changed
 - **The nobody-to-ask refusal says what was refused.** Where nothing draws and a call needs you, the
@@ -76,7 +87,13 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **`/council off`, `shadow on` and `model` only run when a person types them.** They loosen the
   gate, so a command from a plugin, another Claude session or a scheduled prompt is now refused
   with one line and changes nothing; `on`, `shadow off`, the `model` listing, `reload` and the
-  rest answer from any origin. The SDK counts as a person for now.
+  rest answer from any origin.
+- **`claude -p` and SDK prompts are no longer a person's.** The `sdk` prompt origin is the host's
+  own turn, not typed at a terminal (the cloud web client arrives as `composer`). So in `claude -p`
+  and the SDK `/council off`, `shadow on` and `model` are refused, a `/council` command gets no
+  relay to Claude, and a prompt no longer resets the per-prompt counters (rounds, failed attempts,
+  lockouts), which last until `/clear`. Any prompt not typed by a person, `sdk` included, clears
+  the cached approvals.
 - The default is now themed: `/council`, the dialog and the report name the characters, and the
   dialog's options read "Need: allow once" and "Pass: keep blocked". Turn on "Plain mode" in
   `/config` to keep the old text ("Allow once", "Keep blocked", role names).

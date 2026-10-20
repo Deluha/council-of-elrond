@@ -6,7 +6,18 @@ import { redact } from './redact.js'
  * reasons are redacted and cut.
  */
 
-export type Decision = 'allow-once' | 'allowlist' | 'keep-blocked' | 'instruction' | 'dismissed' | 'chat' | 'unavailable'
+/** `chat` is "Talk first"; `chat-allow`, `chat-session` and `chat-deny` are a person's typed council allow / deny (ROADMAP C4). */
+export type Decision =
+  | 'allow-once'
+  | 'allowlist'
+  | 'keep-blocked'
+  | 'instruction'
+  | 'dismissed'
+  | 'chat'
+  | 'unavailable'
+  | 'chat-allow'
+  | 'chat-session'
+  | 'chat-deny'
 
 export type AuditRecord = {
   ts: string

@@ -289,7 +289,8 @@ Everything `/council` prints is for you: it draws in a pane where a surface draw
 dim transcript lines. Claude does not read it, with one exception: where nothing draws at all (the
 cloud web client, `claude -p`, the SDK), `/council` status, report, rules and test also go to Claude
 to show you, because Claude is then the only way to reach you; see
-[Where nothing draws](#where-nothing-draws). In a plain `claude -p "/council"` run nothing prints;
+[Where nothing draws](#where-nothing-draws). That applies only to a person's command. In `claude -p`
+and the SDK a command is not a person's, so it gets no relay. In a plain `claude -p "/council"` run nothing prints;
 use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 
 | Command | What it does |
@@ -308,16 +309,17 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 **`off`, `shadow on` and `model` only run when a person types them.** They loosen the gate (bypass,
 reviewers that never refuse, a different reviewing model), so a command that arrives from a plugin,
 another Claude session or a scheduled prompt is refused with one line and changes nothing. Typing
-them at the prompt, through the Remote Control bridge or from the SDK works. `on`, `shadow off`, the
-`model` listing, `reload` and the rest answer from any origin. (The SDK counts as a person for now,
-because the web client's origin is not yet known.)
+them at the prompt (the cloud web client included) or through the Remote Control bridge works.
+`claude -p` and the SDK are not a person, so those three are refused there; set them in `/config` or
+the plugin's options instead. `on`, `shadow off`, the `model` listing, `reload` and the rest answer
+from any origin.
 
 ### `/council report`
 
 Read the report after a few days in shadow mode to tune the rules. It has four parts:
 
 - **Most refused:** the rules behind the most refusals, each with who refused (the rules, a reviewer, you, the secrets scan, a lockout), and the operations refused most.
-- **Stopped, then allowed by you:** calls the council stopped and you then allowed once (or allowlisted), by rule, with examples. These are the false-positive candidates. It also lists the allow rules you added that way.
+- **Stopped, then allowed by you:** calls the council stopped and you then allowed once, allowed in chat or allowlisted, by rule, with examples. These are the false-positive candidates. It also lists the allow rules you added that way.
 - **Shadow verdicts that would have refused:** per reviewer, how many blocks and revises it logged in shadow mode, and under which rules.
 - **Cost per reviewer:** tokens per reviewer, with its share of full councils (taken from each member's own tokens in the council), the full council's sittings, and the median review time. Review times are logged from Stage 5 on; older lines count for tokens only.
 
@@ -345,7 +347,8 @@ attached, nothing changes and Claude reads none of it.
 
 **What reaches you through Claude**
 
-- **`/council` status, report, rules and test, when you type them.** The same lines the pane would
+- **`/council` status, report, rules and test, when a person types them** (not in `claude -p` or
+  the SDK, where a command is not a person's and gets no relay). The same lines the pane would
   show are handed to Claude with an instruction to repeat them to you verbatim, in a code block, when
   it next replies. They sit inside a fenced block that Claude is told to treat as the council's output,
   not as instructions. Every line is redacted first, a typed command included, and `/council rules`
@@ -357,19 +360,61 @@ attached, nothing changes and Claude reads none of it.
   and why.
 - **The refusal when a call needs you and nobody can be asked.** It names the operation (the same
   redacted key the audit log holds), the rule behind it and the reviewers that looked at it, by
-  name only, and the way to let it run.
+  name only, and the way to let it run, with a code you can answer in chat
+  ([Approving in chat](#approving-in-chat)).
 
 **What never goes through Claude:** the read-only preview and any secrets finding (its label, its
 snippet and the secret), a diff, the call's own text or what a write would put in a file, a
 reviewer's reason or failure, and every other subcommand (`log`, `off`, `on`, `shadow`, `model`,
 `models`, `reload`, `debate`). Only a person's own command is answered this way: one that arrives
-from a plugin, another Claude session or a scheduled prompt gets nothing back, so Claude cannot
-probe how a command would be classified.
+from a plugin, another Claude session, a scheduled prompt, `claude -p` or the SDK gets nothing
+back, so Claude cannot probe how a command would be classified.
 
-**Letting a refused call run.** You can add an allow rule for it to `.claude/council-of-elrond/rules.json`
-yourself (Claude is told not to edit that file: it is a protected path), or continue the session in a
-terminal, where the council can ask you. Neither the notice nor the refusal offers turning the council
-off or shadow mode as a way round, and a chat approval does not exist yet.
+**Letting a refused call run.** You can approve it in chat (below), add an allow rule for it to
+`.claude/council-of-elrond/rules.json` yourself (Claude is told not to edit that file: it is a
+protected path), or continue the session in a terminal, where the council can ask you. Neither the
+notice nor the refusal offers turning the council off or shadow mode as a way round.
+
+### Approving in chat
+
+When a call is refused because nobody can be asked, the refusal carries a code, `council:` and six
+hex characters (say `council:1a2b3c`), and Claude is told to give it to you. The code is the first
+six characters of a hash of the call (its tool and arguments, without a shell command's
+`description`), so a retry with new wording keeps its code. You answer in your next message, with a
+line of your own that holds nothing else:
+
+| You type | What it does |
+| :- | :- |
+| `council allow 1a2b3c` | The council lets that exact call run once, if Claude makes it again with the same arguments. |
+| `council allow 1a2b3c session` | The same, whenever Claude makes it, until `/clear`. |
+| `council deny 1a2b3c` | Refuses it. Claude is told not to make it again. It is not counted as a failed attempt. |
+
+- **Typed on a line of their own.** Case and spacing do not matter, and
+  `council allow council:1a2b3c` works. A line that begins `council allow` or `council deny` but is
+  anything else (no code, a wrong code, `deny` with `session`, extra words) is answered as
+  malformed and records nothing. Every such line is removed from your message before Claude reads
+  it, and Claude is told what it did: only the code, never your raw line. At most ten such lines in
+  a message are acted on.
+- **Once or session.** A once-allowance ends at your next message of any kind (or the next prompt
+  that is not yours, such as a finished task) or when it is used, whichever is first. A session
+  allowance lasts until `/clear` and survives your messages; it is offered only where an allow rule
+  could be (not for a script, a long or multi-line command, a command whose words expand when it
+  runs, or one with a possible secret in it: for those `session` records nothing and Claude says so,
+  and you type the once form).
+- **Offers last until your next message.** A code from a refusal is answered only in the next
+  message you write; after a further message it is unknown, and Claude is told so.
+- **Never offered:** a protected path and a block rule have no code, and a high-confidence secret is
+  refused before any of this. Where a surface draws, nothing changes: you are asked in the dialog,
+  and an earlier chat answer does not skip it.
+- **An ordinary message.** Type the line in a message of its own words, not inside a slash command
+  (such as `/review`): a message that runs a slash command is never read for these lines.
+- **Only a line you type counts.** A message from `claude -p`, the SDK, a plugin, another session, a
+  channel or a schedule is ordinary text, and its `council allow` line is not removed or acted on.
+  In `claude -p` and the SDK there is therefore no chat approval.
+- **A limit:** you approve through what Claude relays, so read the operation the refusal names before
+  you type the line. The code stands for the exact call, but you only see the operation key.
+
+The audit log records these as the decisions `chat-allow`, `chat-session` and `chat-deny`.
 
 ## Secrets scan
 
@@ -424,7 +469,8 @@ operation. A push keys on its remote and branch, and SQL on its database.
 - **Failed attempts:** a refusal by a rule, a reviewer or the secrets scan, your "keep blocked" (or a dismissed question, or nobody to ask), your refusal at Claude Code's own permission prompt, and a gated call that ran and errored all count. Claude Code's own "Chat about this" counts like a dismissal. "Talk first" does not, nor does Claude Code denying a call on its own with nobody asked (in `claude -p`, or by a deny rule), nor an allowlist entry the mod could not write (the call stays blocked, but the failure is not Claude's).
 - **Lockout:** three failed attempts on one operation, or five on one kind of operation (say `git push` to any target), lock it out. Claude is told to stop retrying, tell you what failed and propose another approach.
 - A call that runs successfully clears its own operation. Everything resets when you send a new prompt (a `/council` command is not one).
-- **Cache:** a reviewer's approve is reused for the identical call until your next prompt. A block or revise never is.
+  Only a person's prompt starts them over: in `claude -p` and SDK sessions they last until `/clear`.
+- **Cache:** a reviewer's approve is reused for the identical call until your next prompt. A block or revise never is. Any prompt that is not a person's (`claude -p`, the SDK, a task notification, a schedule) also clears the cache.
 
 ## Escalation
 
@@ -479,7 +525,7 @@ Secrets get their own confirm-then-write path, the allowlist (see [Secrets scan]
 ## Audit log
 
 One JSONL line per gated call: time, tool, fingerprint, operation key, tier, rule, member, model,
-verdict, reason, shadow and bypass flags, your decision, outcome, latency (the whole call), the
+verdict, reason, shadow and bypass flags, your decision (`allow-once`, `allowlist`, `keep-blocked`, `instruction`, `dismissed`, `chat` for "Talk first", `unavailable` when nobody could be asked, and `chat-allow`, `chat-session` and `chat-deny` for a typed `council allow` or `council deny`), outcome, latency (the whole call), the
 review's own time (`reviewMs`), tokens, and the id of an allow rule you added for it (`ruleAdded`).
 A full council
 adds what made the call big, each member's own verdict and tokens, and each check's result and time. The outcome
