@@ -2,8 +2,8 @@
 
 Status: **final deliverables** (SPEC §21–22, §12 below), after Stage 6 (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
-Targets Claude Code **2.1.299** (built on **2.1.289**, checked on **2.1.291** from Stage 5, **2.1.294** from
-Stage 6, and **2.1.296** and **2.1.299** after it). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.299's) and
+Targets Claude Code **2.1.304** (built on **2.1.289**, checked on **2.1.291** from Stage 5, **2.1.294** from
+Stage 6, and **2.1.296**, **2.1.299** and **2.1.304** after it). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.304's) and
 are the source of truth over docs, samples and the spec. The 2.1.289 → 2.1.291 drift was additive: a
 new `prompt.mention` event, a `Color` type (theme keys or raw colours) for paint props, a `ceiling`
 on tool-check inputs, teammate record fields, and doc wording. The 2.1.291 → 2.1.294 drift is
@@ -31,6 +31,16 @@ changes were found by probe rather than in the types (§12.5): a hook that overr
 budget is now cut off, its `.catch` asked with `kind` `timeout`, and a `next(e)` it makes afterwards
 is refused; and a hook that blocks the hooks worker for 5 s has the worker replaced and its `.catch`
 asked with `kind` `throw`. Elrond's handler refuses in both cases, so both fail closed.
+The 2.1.299 → 2.1.304 drift is additive for every signature the mod calls. The additions:
+- a `prompt.change` event (the prompt box's text changed by history, undo, a plugin or the app);
+- `$.ui.view`, which shows an agent's transcript;
+- a key-or-layers form of `$.settings.read`;
+- a result from `$.env.set` (`{ deny? }`);
+- `isUnverified` on instruction files;
+- `decider` (`host` or `person`) on a `tool.check` verdict;
+- new element props and built-in tool fields.
+
+One removal: `HookFailure` no longer has the `re-entry` kind or its `cause`. A hook that the engine does not run, because the event was raised beneath its own frame, is now skipped without its `.catch` being asked; the C3 cloud log on 2.1.303 shows exactly that (§14.1). Elrond never relied on that path. The wording and the probes are in §12.6.
 
 ## 1. Step 0 findings
 
@@ -600,6 +610,21 @@ repository.
 - **Skipped:** `/council` output as `ui_log` in stream-json, already checked live on 2.1.299 in C2
   (§13.5 h).
 
+### 12.6 Re-read and re-probed on 2.1.304
+
+The `/upgrade-types` run for 2.1.304 read the binary with `grep -a` and made one headless `claude -p --plugin-dir` run per behaviour. The runs used a throwaway probe mod (not Elrond) in a throwaway repository, except the last, which ran Elrond.
+
+- **Refusal wordings: unchanged.** Both user-refusal wordings are in the binary and `USER_REFUSAL` matches them. Every automatic-denial wording found is matched by `AUTOMATIC_DENIAL`.
+- **A hook that overruns its own-time budget is still cut off.** A `tool.call` hook that spent 11 s in `$.clock.sleep` had its `.catch` asked with `kind` `timeout` and `called` false. Its later `next(e)` was refused ("next() after it settled; refused").
+- **`$.process.spawn` ends on `return()`.** A `sleep 30` ended by `stream.return()` from a `$.clock.after` timer finished after 1.5 s, with no orphan.
+- **`$.ui.ask` in `-p` rejects at once** with "`$.tool.call: no tool named "AskUserQuestion" in this session`".
+- **`/council status` in stream-json** arrives as `ui_log` events, with `num_turns: 0`.
+- **Not probed:** a hook that blocks the hooks worker. The types still say its worker is replaced and its `.catch` asked with `kind` `throw`.
+- **Worth a look for C4: `decider` on `tool.check`.**
+  - A `tool.check` hook that answers `ask` with `decider: 'person'` makes the ask one that only a person settles. The types say: "No machine's allow settles it, and any machine's refusal still refuses: the classifier's block, a PermissionRequest hook's deny … Where nobody can be asked it is a deny."
+  - That is the guarantee the C3 probe found `$.ui.ask` lacks (§14.1).
+  - Whether it holds in a cloud session in Auto mode, and whether it could carry the council's own question there, is not checked. It is a question for C4's design, not decided here.
+
 ## 13. Decisions after the final deliverables
 
 1. **A new branch's push has a range** (`orElse` in `members/galadriel.ts`, `runGitInspection` in `hooks/register.ts`). A push of a branch the remote doesn't have yet has no `<remote>/<branch>` ref, so `git log <remote>/<branch>..HEAD` and the council's `git diff` failed: no commits in the preview, and the diff reviewer sat out.
@@ -708,3 +733,46 @@ Decisions in recording it:
 2. **The guide shows `#main` and says to pin a release tag** once releases are tagged (`council-of-elrond--v<version>`, docs/MAINTENANCE.md "Releasing"): a gate that follows every merge changes under a team without its review.
 3. **The one-repository limit is in the guide now**, ahead of C5, since a second repository silently drops the project's rules and the audit log.
 4. **The README's "nothing is lost" note** now names the cloud as a place where `/council`'s transcript lines are not shown either.
+
+### 14.1 C3: `$.ui.ask` where nothing draws
+
+ROADMAP C3, run on 2026-10-19.
+
+**The probe.** A probe build ran on a branch that was never merged (`probe/c3-cloud-ask-DO-NOT-MERGE`).
+- Where `$.session.surfaces()` is empty, it attempted the escalation ask, with no timeout. On a rejection it fell back to the nobody-to-ask refusal.
+- It logged the ask, the hook's remaining own-time budget, the prompt and command origins, and the roster. The lines went to a file at the session root and to the debug log, with every string redacted.
+
+**The runs.**
+- **The cloud session.** The maintainer ran it once in a cloud session:
+  - Claude Code on the web, Claude Code 2.1.303, permission mode Auto;
+  - one repository, with the mod installed by the environment's setup script;
+  - one gated call, `sudo -n true` (rule `privileged`, ask tier, no reviewer).
+- **The terminal.** A second check ran `main` with the same call in a terminal (a GitHub Codespace, 2.1.303, Auto mode).
+
+| Question | Result |
+| :- | :- |
+| The roster in a cloud session | `surfaces: []`, `surface: null` and `isInteractive: false` at every session start, as in the first trial (the table above). |
+| The web client's prompts | Origin `composer`, `isMeta` false, no `command`. Not `bridge`, not `sdk`. |
+| Whether the ask reaches the person | **No.** The web client did not show the question. The engine sent the `AskUserQuestion` permission request to the remote host. The host answered 35.8 s later with the first option, "Need: allow once". The answer came back as a `control_response` with no device attestation, and the debug log reads "Slow permission decision: 35750ms for AskUserQuestion (mode=auto, behavior=allow)". The call ran (audit `decision: allow-once`, `outcome: ran`). The person saw nothing and chose nothing. |
+| The budget | A pending ask holds the call and does not count against the hook's own-time budget. `remainingMs` was 9989 when the ask started and 9988 when it was answered 35.8 s later. No `.catch` was asked, and the `tool.call` hook settled in 36,054 ms. This is ROADMAP fact 3, confirmed live. |
+| Re-entry | The engine skipped the mod's own `tool.call` hook for its `AskUserQuestion` (`skipped: re-entry`), as the types say (§12.1). |
+| The start notice | Claude read C2's notice as part of the person's first message, not as a row of its own. It said it could not tell whether the plugin was running. |
+| A terminal in Auto mode (`main`) | The question was shown and waited for the person, who answered it after about six minutes (`latencyMs` 365,433). Auto mode does not answer it there. |
+| Not measured | The run stopped once the ask had been answered without the person, so these were not measured: the origin of a `/council` command typed in the web client; whether such a command raises `prompt.submit` with `command` set; and the rejection message for a dismissal in the web client. Also not tried: a permission mode other than Auto in the cloud, and the desktop, VS Code and mobile surfaces in Auto mode. |
+
+Decisions:
+
+1. **Never ask where nothing draws.**
+   - An answer from `$.ui.ask` does not prove a person chose it: in a cloud session the host answered for them.
+   - `escalate` keeps returning `unavailable` before any ask when surfaces is empty, so `main` is unchanged, and no `cloudAsk` option exists.
+   - The C3 alternative, mapping a rejection to `unavailable`, does not arise.
+2. **C4 goes ahead.** The ROADMAP item was to be skipped only if the client answered the dialog for the person, and it does not: the question never reaches them. A person's prompt in the web client has origin `composer`, which is already in C4's list.
+3. **`sdk` in `HUMAN_ORIGINS` is reviewed with C4.**
+   - It counted as a person's until C3 named the web client's kind, and C3 named `composer`.
+   - Dropping `sdk` would be a tightening. `-p` and Agent SDK turns would then no longer:
+     - reset the per-prompt state;
+     - run `/council off`, `shadow on` or `model`;
+     - get the C2 relay.
+   - It changes code, so it goes with C4 and is not made here.
+4. **The probe build was installable** by anyone who named its branch while the branch existed. The branch is to be deleted once these results are recorded.
+5. **The types are 2.1.299; the run was on 2.1.303.** Regenerate them (`/upgrade-types`) before C4.
