@@ -2,8 +2,8 @@
 
 Status: **final deliverables** (SPEC §21–22, §12 below), after Stage 6 (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
-Targets Claude Code **2.1.299** (built on **2.1.289**, checked on **2.1.291** from Stage 5, **2.1.294** from
-Stage 6, and **2.1.296** and **2.1.299** after it). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.299's) and
+Targets Claude Code **2.1.304** (built on **2.1.289**, checked on **2.1.291** from Stage 5, **2.1.294** from
+Stage 6, and **2.1.296**, **2.1.299** and **2.1.304** after it). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.304's) and
 are the source of truth over docs, samples and the spec. The 2.1.289 → 2.1.291 drift was additive: a
 new `prompt.mention` event, a `Color` type (theme keys or raw colours) for paint props, a `ceiling`
 on tool-check inputs, teammate record fields, and doc wording. The 2.1.291 → 2.1.294 drift is
@@ -31,6 +31,16 @@ changes were found by probe rather than in the types (§12.5): a hook that overr
 budget is now cut off, its `.catch` asked with `kind` `timeout`, and a `next(e)` it makes afterwards
 is refused; and a hook that blocks the hooks worker for 5 s has the worker replaced and its `.catch`
 asked with `kind` `throw`. Elrond's handler refuses in both cases, so both fail closed.
+The 2.1.299 → 2.1.304 drift is additive for every signature the mod calls. The additions:
+- a `prompt.change` event (the prompt box's text changed by history, undo, a plugin or the app);
+- `$.ui.view`, which shows an agent's transcript;
+- a key-or-layers form of `$.settings.read`;
+- a result from `$.env.set` (`{ deny? }`);
+- `isUnverified` on instruction files;
+- `decider` (`host` or `person`) on a `tool.check` verdict;
+- new element props and built-in tool fields.
+
+One removal: `HookFailure` no longer has the `re-entry` kind or its `cause`. A hook that the engine does not run, because the event was raised beneath its own frame, is now skipped without its `.catch` being asked; the C3 cloud log on 2.1.303 shows exactly that (§14.1). Elrond never relied on that path. The wording and the probes are in §12.6.
 
 ## 1. Step 0 findings
 
@@ -599,6 +609,21 @@ repository.
   reset (§13.6).
 - **Skipped:** `/council` output as `ui_log` in stream-json, already checked live on 2.1.299 in C2
   (§13.5 h).
+
+### 12.6 Re-read and re-probed on 2.1.304
+
+The `/upgrade-types` run for 2.1.304 read the binary with `grep -a` and made one headless `claude -p --plugin-dir` run per behaviour. The runs used a throwaway probe mod (not Elrond) in a throwaway repository, except the last, which ran Elrond.
+
+- **Refusal wordings: unchanged.** Both user-refusal wordings are in the binary and `USER_REFUSAL` matches them. Every automatic-denial wording found is matched by `AUTOMATIC_DENIAL`.
+- **A hook that overruns its own-time budget is still cut off.** A `tool.call` hook that spent 11 s in `$.clock.sleep` had its `.catch` asked with `kind` `timeout` and `called` false. Its later `next(e)` was refused ("next() after it settled; refused").
+- **`$.process.spawn` ends on `return()`.** A `sleep 30` ended by `stream.return()` from a `$.clock.after` timer finished after 1.5 s, with no orphan.
+- **`$.ui.ask` in `-p` rejects at once** with "`$.tool.call: no tool named "AskUserQuestion" in this session`".
+- **`/council status` in stream-json** arrives as `ui_log` events, with `num_turns: 0`.
+- **Not probed:** a hook that blocks the hooks worker. The types still say its worker is replaced and its `.catch` asked with `kind` `throw`.
+- **Worth a look for C4: `decider` on `tool.check`.**
+  - A `tool.check` hook that answers `ask` with `decider: 'person'` makes the ask one that only a person settles. The types say: "No machine's allow settles it, and any machine's refusal still refuses: the classifier's block, a PermissionRequest hook's deny … Where nobody can be asked it is a deny."
+  - That is the guarantee the C3 probe found `$.ui.ask` lacks (§14.1).
+  - Whether it holds in a cloud session in Auto mode, and whether it could carry the council's own question there, is not checked. It is a question for C4's design, not decided here.
 
 ## 13. Decisions after the final deliverables
 
