@@ -834,7 +834,7 @@ async function convene(
 
 /** Puts the call to the user; where nobody can be asked, says so. */
 async function escalate($: EngineInterface, question: string, withAllowlist: boolean): Promise<Answer | Unanswered> {
-  const surfaces = await $.session.surfaces().catch(() => [])
+  const surfaces = await $.session.surfaces()
   if (surfaces.length === 0) return 'unavailable'
   try {
     // One mode for the labels offered and the labels compared: they must match exactly.
@@ -895,7 +895,7 @@ async function offerRule(
   const suggested = suggestRule(call, classification, ctx.loaded.compiled, where, { hadSecret, declined: state.declinedRules })
   if (suggested.kind === 'none') return undefined
   const { rule, key } = suggested.suggestion
-  if ((await $.session.surfaces().catch(() => [])).length === 0) return undefined
+  if ((await $.session.surfaces()).length === 0) return undefined
   const question = text('ask.suggestRule', { path: OVERRIDES_PATH, json: ruleJson(rule) })
   const answer = await $.ui
     .ask(question, { options: [text('ask.suggestAdd'), text('ask.suggestDecline')], header: text('ask.header') })
@@ -967,7 +967,7 @@ async function noteWrite($: EngineInterface, call: Call, cwd: string, home: stri
 async function syncIndicator($: EngineInterface): Promise<void> {
   const state = sessionOf(await read($, session))
   const label = state.bypass ? text('mode.bypass') : isShadow(state, settings.shadowMode) ? text('mode.shadow') : undefined
-  const surfaces = await $.session.surfaces().catch(() => [])
+  const surfaces = await $.session.surfaces()
   $.ui.status(surfaces.some(surface => surface !== 'terminal' && surface !== 'desktop') ? label : undefined)
 }
 
@@ -1001,7 +1001,7 @@ async function relayOf($: EngineInterface, command: CouncilCommand, origin: stri
 
 /** Shows `/council` output to the user: in its pane where one draws, else as transcript lines. */
 async function show($: EngineInterface, output: Output): Promise<void> {
-  const surfaces = await $.session.surfaces().catch(() => [])
+  const surfaces = await $.session.surfaces()
   if (surfaces.length > 0) {
     await update($, panel, () => output)
     const opened = await $.ui.open({ id: PANE_ID, title: output.title }).catch(() => undefined)
@@ -1028,13 +1028,13 @@ async function openDebatePane($: EngineInterface): Promise<void> {
   if (sessionOf(await read($, session)).debateOpened) return
   // Claimed before the open, so a parallel call does not open it too.
   await update($, session, value => markDebateOpened(sessionOf(value)))
-  if ((await $.session.surfaces().catch(() => [])).length === 0) return
+  if ((await $.session.surfaces()).length === 0) return
   await $.ui.open({ id: DEBATE_PANE_ID, title: text('debate.title'), rows: DEBATE_PANE_ROWS }).catch(() => undefined)
 }
 
 /** `/council debate`: the pane at any width (it answers the person's command), else the same rows as transcript lines. */
 async function showDebate($: EngineInterface): Promise<void> {
-  const surfaces = await $.session.surfaces().catch(() => [])
+  const surfaces = await $.session.surfaces()
   if (surfaces.length > 0) {
     const opened = await $.ui.open({ id: DEBATE_PANE_ID, title: text('debate.title'), rows: DEBATE_PANE_ROWS }).catch(() => undefined)
     if (opened?.isPlaced === true) return

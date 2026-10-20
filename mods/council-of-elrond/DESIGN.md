@@ -973,3 +973,37 @@ ROADMAP C5, approved 2026-10-20. When the session root is the parent of several 
 - (iv) a path target outside every repository bringing in the root scope: "a working directory in no repository brings in the root scope; a named path in none brings in nothing" and "shell targets: a path in another repository brings it in; a path in none does not bring in the root";
 - (v) `rm-outside-repo` measured against the session root instead of the scope's directory: "rm -rf of another repository is blocked: …", "a file edit in app resolves app's rules; …", "a project protected path is anchored at its repository" and the `/dev/null` test;
 - (vi) the link check removed from `loadChild`: "a link to a repository is not one; a folder whose .git is a file (a worktree) is".
+
+### 14.6 C6: small things seen in the log
+
+ROADMAP C6.
+
+**`$.session.surfaces()` never rejects.** The 2.1.304 types say so ("Empty in a plain -p run; never rejects"), and a hook on `session.surfaces` that fails is skipped, with the hooks beneath and core answering in its place (`EngineEventOf`), so another plugin cannot make it reject either. The six `.catch(() => [])` wrappers on it in `register.ts` were dead and are gone. Nothing changes, so no test: the fixtures answer `session.surfaces` and none rejects.
+
+**A project check whose binary is missing.** Checked live headless on 2.1.304 (`claude -p --plugin-dir`, a throwaway repository with a local bare remote, `git push origin main` convening the full council; one `/council test`, then two councils, six reviews on Opus):
+- *A bare missing binary* (`["c6-no-such-binary", "--check"]`): `$.process.spawn` rejects its first pull, as the types say; the engine's debug log reads `failed to start: ENOENT: Executable not found in $PATH: "c6-no-such-binary"`. The check ended in 12 ms with status `error`, and Claude read `"bare" could not be started.` among the reasons for the block. No hang. The engine's message is not passed on: `runCheck` drops the rejection, so the refusal does not say why the check could not start.
+- *The same binary behind `env`* (`["env", "CI=1", "c6-no-such-binary", "--check"]`, the README's form for a non-interactive check): `env` starts and exits 127, so the check ended in 22 ms with status `failed`, and Claude read `"wrapped" failed with exit code 127. Its last lines:` followed by `env: 'c6-no-such-binary': No such file or directory`.
+- With both in one rules file, the first one's block stopped the `env` one (status `stopped`, 24 ms), as §8 step 5 says: the first failing check stops the others. The README said only a reviewer's block does; it now says both.
+
+**The unit test.** "a check that cannot start blocks" (`tests/council.test.ts`) pins the first case: the fixtures' `process.spawn` answers `{ deny }`, which rejects the first pull as the engine does. Mutation: `statusOf` returning `stopped` instead of `error` for a run with no exit fails it and "a check keeps the last 20 lines, and passes on exit code 0 only". The second case is a non-zero exit like any other, covered by "a failing check is a block, with its last lines". No new test is needed.
+
+**The cloud check** (for the maintainer; not run here, it needs a cloud environment). It confirms that a cloud container's `PATH` lookup fails the same way, at once, and not by hanging.
+1. A throwaway GitHub repository (never this one, never one that holds the mod's checkout) with one commit, including `.claude/council-of-elrond/rules.json`:
+   ```json
+   {
+     "schemaVersion": 1,
+     "gimli": {
+       "commands": [
+         { "name": "probe", "argv": ["c6-no-such-binary", "--check"], "timeoutMs": 60000 }
+       ]
+     }
+   }
+   ```
+   One check only: with two, the first to fail stops the other.
+2. A cloud environment holding only that repository, whose setup script installs the mod at the branch or tag under test (docs/INSTALL.md, "Cloud sessions").
+3. In a new session, one prompt: `Run exactly this shell command once with the Bash tool and report its result verbatim; do not retry: git push origin HEAD:refs/heads/c6-probe`. The push convenes the full council (three reviews on Opus); the check makes it a block, so nothing is pushed.
+4. Note the refusal Claude relays, and the time from sending the prompt to the refusal. Expected: `"probe" could not be started.` among the reasons, after the reviewers' few seconds. A hang would read `"probe" did not finish within 60 s and was ended.` after a minute.
+5. Don't try to read the audit line from inside the session: `.claude/council-of-elrond/` is a protected path, and a protected path gets no chat code (§14.4), so where nothing draws the read is refused. The refusal from step 4 is the record.
+6. Record the result here and tick C6 in ROADMAP.md.
+
+**Not done.** Passing the engine's message (`ENOENT: Executable not found in $PATH: …`) on to Claude in the refusal: put to the maintainer at the C6 checkpoint.
