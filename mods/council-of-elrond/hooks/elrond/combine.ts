@@ -64,7 +64,13 @@ export function runLine(run: GimliRun): string {
   }
 }
 
-const withTail = (run: GimliRun): string => (run.tail === '' ? runLine(run) : `${runLine(run)} ${text('gimli.tail', { tail: run.tail }, 'plain')}`)
+/** The detailed line, for Claude only: the engine's error (a check that could not start) and the last lines. */
+const withTail = (run: GimliRun): string =>
+  [
+    runLine(run),
+    ...(run.problem !== undefined && run.problem !== '' ? [text('gimli.problem', { problem: run.problem }, 'plain')] : []),
+    ...(run.tail === '' ? [] : [text('gimli.tail', { tail: run.tail }, 'plain')]),
+  ].join(' ')
 
 export function combine(voices: readonly Voice[], runs: readonly GimliRun[]): Combined {
   let verdict: VerdictValue = 'approve'

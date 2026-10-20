@@ -92,9 +92,9 @@ export type ProcessReply = { exitCode: number; stdout: string } | 'timeout'
 /**
  * How a spawned check answers, by its argv: its output and exit code; `hang`
  * writes its output and never exits (until the clock or Esc ends it);
- * `no-start` cannot start.
+ * `no-start` cannot start, with an `ENOENT` message; `noStart` cannot start, with this message.
  */
-export type SpawnReply = { code: number | null; signal?: string | null; output?: string } | { hang: true; output?: string } | 'no-start'
+export type SpawnReply = { code: number | null; signal?: string | null; output?: string } | { hang: true; output?: string } | { noStart: string } | 'no-start'
 
 export type World = {
   cwd: string
@@ -321,6 +321,7 @@ export function world(
     w.spawnCwds.push(e.cwd)
     const reply = w.spawnReply(e.argv)
     if (reply === 'no-start') return { deny: `ENOENT: ${e.argv[0]}` }
+    if ('noStart' in reply) return { deny: reply.noStart }
     let isDone = false
     try {
       if (reply.output !== undefined) yield { stream: 'stdout' as const, text: reply.output }

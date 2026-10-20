@@ -52,7 +52,7 @@ import type { Brief } from './members/brief.js'
 import { formatPreview, INSPECTION_TIMEOUT_MS, MAX_LISTED, planPreview, rangeDiffInspection } from './members/galadriel.js'
 import type { Inspection, InspectionResult } from './members/galadriel.js'
 import { GANDALF_LIMITS } from './members/gandalf.js'
-import { isGimliBlock, keepTail, statusOf, tailOf } from './members/gimli.js'
+import { isGimliBlock, keepTail, problemOf, statusOf, tailOf } from './members/gimli.js'
 import type { GimliRun } from './members/gimli.js'
 import { patternsWith, scanCall, warnsPasswordFingerprint } from './members/gollum.js'
 import { callDiff, LEGOLAS_LIMITS } from './members/legolas.js'
@@ -705,6 +705,7 @@ async function runCheck($: EngineInterface, command: GimliCommand, dir: string, 
   let ended: 'timeout' | 'stopped' | undefined
   let exit: ProcessSpawnResult | undefined
   let output = ''
+  let rejection: string | undefined
   let isEnded: () => void = () => undefined
   const endedEarly = new Promise<void>(resolve => {
     isEnded = resolve
@@ -724,8 +725,9 @@ async function runCheck($: EngineInterface, command: GimliCommand, dir: string, 
   const reading = (async () => {
     for await (const chunk of stream) output = keepTail(output, chunk.text)
     if (ended === undefined) exit = await stream.result
-  })().catch(() => {
-    // It could not start, or its stream broke: no exit code, so it does not pass.
+  })().catch((error: unknown) => {
+    // It could not start, or its stream broke: no exit code, so it does not pass. Keep the engine's message to tell Claude why.
+    rejection = error instanceof Error ? error.message : String(error)
   })
   try {
     // Ended early, the run is over even if the stream is slow to close.
@@ -735,11 +737,14 @@ async function runCheck($: EngineInterface, command: GimliCommand, dir: string, 
     stop.removeEventListener('abort', onStop)
   }
   const ms = (await $.clock.now()) - started
+  const status = statusOf(ended, exit)
   return {
     name: command.name,
-    status: statusOf(ended, exit),
+    status,
     ...(ended === undefined && exit !== undefined && { code: exit.code, signal: exit.signal }),
     tail: tailOf(output),
+    // Only when it broke by itself: a run the council or the clock ended says nothing of the sort.
+    ...(status === 'error' && rejection !== undefined && { problem: rejection }),
     ms,
   }
 }
@@ -834,7 +839,7 @@ async function convene(
 
 /** Puts the call to the user; where nobody can be asked, says so. */
 async function escalate($: EngineInterface, question: string, withAllowlist: boolean): Promise<Answer | Unanswered> {
-  const surfaces = await $.session.surfaces().catch(() => [])
+  const surfaces = await $.session.surfaces()
   if (surfaces.length === 0) return 'unavailable'
   try {
     // One mode for the labels offered and the labels compared: they must match exactly.
@@ -895,7 +900,7 @@ async function offerRule(
   const suggested = suggestRule(call, classification, ctx.loaded.compiled, where, { hadSecret, declined: state.declinedRules })
   if (suggested.kind === 'none') return undefined
   const { rule, key } = suggested.suggestion
-  if ((await $.session.surfaces().catch(() => [])).length === 0) return undefined
+  if ((await $.session.surfaces()).length === 0) return undefined
   const question = text('ask.suggestRule', { path: OVERRIDES_PATH, json: ruleJson(rule) })
   const answer = await $.ui
     .ask(question, { options: [text('ask.suggestAdd'), text('ask.suggestDecline')], header: text('ask.header') })
@@ -967,7 +972,7 @@ async function noteWrite($: EngineInterface, call: Call, cwd: string, home: stri
 async function syncIndicator($: EngineInterface): Promise<void> {
   const state = sessionOf(await read($, session))
   const label = state.bypass ? text('mode.bypass') : isShadow(state, settings.shadowMode) ? text('mode.shadow') : undefined
-  const surfaces = await $.session.surfaces().catch(() => [])
+  const surfaces = await $.session.surfaces()
   $.ui.status(surfaces.some(surface => surface !== 'terminal' && surface !== 'desktop') ? label : undefined)
 }
 
@@ -1001,7 +1006,7 @@ async function relayOf($: EngineInterface, command: CouncilCommand, origin: stri
 
 /** Shows `/council` output to the user: in its pane where one draws, else as transcript lines. */
 async function show($: EngineInterface, output: Output): Promise<void> {
-  const surfaces = await $.session.surfaces().catch(() => [])
+  const surfaces = await $.session.surfaces()
   if (surfaces.length > 0) {
     await update($, panel, () => output)
     const opened = await $.ui.open({ id: PANE_ID, title: output.title }).catch(() => undefined)
@@ -1028,13 +1033,13 @@ async function openDebatePane($: EngineInterface): Promise<void> {
   if (sessionOf(await read($, session)).debateOpened) return
   // Claimed before the open, so a parallel call does not open it too.
   await update($, session, value => markDebateOpened(sessionOf(value)))
-  if ((await $.session.surfaces().catch(() => [])).length === 0) return
+  if ((await $.session.surfaces()).length === 0) return
   await $.ui.open({ id: DEBATE_PANE_ID, title: text('debate.title'), rows: DEBATE_PANE_ROWS }).catch(() => undefined)
 }
 
 /** `/council debate`: the pane at any width (it answers the person's command), else the same rows as transcript lines. */
 async function showDebate($: EngineInterface): Promise<void> {
-  const surfaces = await $.session.surfaces().catch(() => [])
+  const surfaces = await $.session.surfaces()
   if (surfaces.length > 0) {
     const opened = await $.ui.open({ id: DEBATE_PANE_ID, title: text('debate.title'), rows: DEBATE_PANE_ROWS }).catch(() => undefined)
     if (opened?.isPlaced === true) return
@@ -1857,7 +1862,12 @@ export const register: Register = (on, options) => {
         await update($, session, value => closeDebate(sessionOf(value), debateId, 'aborted')).catch(() => undefined)
         return finish({ deny: refusalText({ who: 'who.fullCouncil', verdict: 'interrupted', reason: text('reason.aborted'), alternative: '' }) }, false)
       }
-      const runs = held.runs.map(run => ({ ...run, tail: redact(run.tail, ctx.patterns) }))
+      // Redact before capping: a cut could split a secret the patterns would catch whole.
+      const runs = held.runs.map(run => ({
+        ...run,
+        tail: redact(run.tail, ctx.patterns),
+        ...(run.problem !== undefined && { problem: problemOf(redact(run.problem, ctx.patterns)) }),
+      }))
       const combined = combine(held.voices, runs)
       const councilMs = (await $.clock.now()) - reviewStarted
       reviewMs = councilMs

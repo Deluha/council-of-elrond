@@ -153,6 +153,16 @@ describe('combining verdicts', () => {
     expect(combine([voice('gandalf', 'who.gandalf', 'approve', 'Fine.')], [run('stopped')]).verdict).toBe('approve')
   })
 
+  test('the error of a check that cannot start is in the reason Claude reads, before the tail, and in no summary or opinion', () => {
+    const combined = combine([voice('gandalf', 'who.gandalf', 'approve', 'Fine.')], [{ ...run('error', 'partial output'), problem: 'ENOENT: no-such-runner' }])
+    expect(combined.reason).toContain('the project checks (block): "tests" could not be started. The error: ENOENT: no-such-runner Its last lines:\npartial output')
+    expect(combined.summary).toBe('the project checks (block): "tests" could not be started.')
+    expect(JSON.stringify(combined.opinions)).not.toContain('ENOENT')
+    expect(combined.opinions).toContainEqual({ who: 'who.gimli', verdict: 'block', reason: '"tests" could not be started.' })
+    // An empty message says nothing.
+    expect(combine([], [{ ...run('error'), problem: '' }]).reason).toBe('\n- the project checks (block): "tests" could not be started.')
+  })
+
   test('a check keeps the last 20 lines, and passes on exit code 0 only', () => {
     const output = Array.from({ length: 50 }, (_, i) => `line ${i}`).join('\n')
     expect(tailOf(`${output}\n\n`).split('\n')).toEqual(Array.from({ length: 20 }, (_, i) => `line ${i + 30}`))
@@ -376,7 +386,33 @@ describe('the project checks', () => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     withChecks(w, [{ name: 'tests', argv: ['no-such-runner'] }])
     w.spawnReply = () => 'no-start'
-    expect(denyOf(await $.tool.call(PUSH))).toContain('"tests" could not be started.')
+    const deny = denyOf(await $.tool.call(PUSH))
+    // The test engine prefixes its own words to the message the fixture denies with.
+    expect(deny).toMatch(/"tests" could not be started\. The error: .*ENOENT: no-such-runner/)
+    // Claude reads why; the audit log keeps no check output, the error included.
+    expect(JSON.stringify((await auditLines(w))[0])).not.toContain('ENOENT')
+    expect((await auditLines(w))[0]?.reason).toBe('the project checks (block): "tests" could not be started.')
+  })
+
+  test('the error of a check that cannot start is redacted, and kept to one line of a few hundred characters', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], isClockMocked: true })
+    // The refusal redacts with the shipped patterns again; a project's own pattern is only the call's.
+    w.files.set(
+      RULES,
+      JSON.stringify({
+        schemaVersion: 1,
+        gimli: { commands: [{ name: 'tests', argv: ['no-such-runner'] }] },
+        gollum: { patterns: [{ id: 'acme', level: 'high', regex: 'ACME-[0-9]{8}', label: 'Acme key' }] },
+      }),
+    )
+    w.spawnReply = () => ({ noStart: `spawn failed\napi_key = "hunter2hunter2" ACME-12345678\n${'x'.repeat(2_000)}` })
+    const deny = denyOf(await $.tool.call(PUSH))
+    expect(deny).toMatch(/"tests" could not be started\. The error: .*spawn failed api_key = "\[REDACTED/)
+    expect(deny).not.toContain('hunter2hunter2')
+    expect(deny).not.toContain('ACME-12345678')
+    expect(deny).not.toContain('x'.repeat(401))
+    expect(deny).toContain('…')
+    expect(JSON.stringify((await auditLines(w))[0])).not.toContain('spawn failed')
   })
 
   test('a check past its own timeout is ended and blocks; the timeout is its own, outside the model deadline', async ($, on) => {
@@ -395,6 +431,8 @@ describe('the project checks', () => {
     const deny = denyOf(await pending)
     expect(deny).toContain('"tests" did not finish within 90 s and was ended.')
     expect(deny).toContain('still running')
+    // Ended by the clock, it did not break by itself: no engine error.
+    expect(deny).not.toContain('The error:')
     // Leaving the loop is what ends the child.
     await w.clock?.advance(1_000)
     expect(w.ended).toBe(1)

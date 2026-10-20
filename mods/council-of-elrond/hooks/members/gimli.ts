@@ -14,6 +14,9 @@ export const KEEP_CHARS = 16_000
 
 const TAIL_CHARS = 2_400
 
+/** The engine's message about a check that could not start: one line, a few hundred characters. */
+export const PROBLEM_CHARS = 400
+
 export type GimliStatus =
   /** Exited 0. */
   | 'passed'
@@ -34,6 +37,8 @@ export type GimliRun = {
   signal?: string | null
   /** The last lines of what it wrote, both pipes interleaved as they came (redact before showing). */
   tail: string
+  /** Why it could not start or its stream broke, as the engine said; only for status `error` (redact before showing). */
+  problem?: string
   ms: number
 }
 
@@ -48,6 +53,12 @@ export function tailOf(output: string, lines = TAIL_LINES): string {
   const all = output.replace(/\s+$/, '').split('\n')
   const kept = all.slice(-lines).join('\n')
   return kept.length > TAIL_CHARS ? `…${kept.slice(kept.length - TAIL_CHARS + 1)}` : kept
+}
+
+/** An engine message on one line, cut to PROBLEM_CHARS. Redact first: a cut could split a secret. */
+export function problemOf(message: string): string {
+  const line = message.replace(/\s+/g, ' ').trim()
+  return line.length > PROBLEM_CHARS ? `${line.slice(0, PROBLEM_CHARS - 1)}…` : line
 }
 
 /** How one run ended, from what the runner saw: why it was ended, if it was, and how it exited. */
