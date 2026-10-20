@@ -79,7 +79,8 @@ const GIMLI_COMMAND_KEYS = ['name', 'argv', 'timeoutMs'] as const
 /** A check command's timeout: 120 s unless set, between 1 s and 10 minutes (the most a process may run). */
 export const GIMLI_TIMEOUT = { default: 120_000, min: 1_000, max: 600_000 } as const
 
-const MAX_GIMLI_COMMANDS = 8
+/** At most this many project checks, in one rules file or across the repositories a call touches. */
+export const MAX_GIMLI_COMMANDS = 8
 
 const GOLLUM_KEYS = ['patterns', 'allowlist'] as const
 const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label', 'kind'] as const

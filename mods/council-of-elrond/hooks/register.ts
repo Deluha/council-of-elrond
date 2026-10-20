@@ -62,9 +62,10 @@ import { newNonce, parseVerdict, truncate } from './members/shared.js'
 import type { Verdict } from './members/shared.js'
 import { redact } from './redact.js'
 import type { SecretPattern } from './redact.js'
-import { classify, FILE_PATH_FIELDS, SHELL_TOOLS } from './rules/classify.js'
-import type { Call, Classification, ClassifyContext } from './rules/classify.js'
+import { classify, FILE_PATH_FIELDS, SHELL_TOOLS, targetsOf } from './rules/classify.js'
+import type { Call, Classification, ClassifyContext, Target } from './rules/classify.js'
 import { isInside, relativeTo, resolve } from './rules/paths.js'
+import { auditDirsOf, candidateChildren, checksOf, combineClassifications, intersection, scopesTouched, scopeTagOf, unionById, writeDirOf } from './rules/scopes.js'
 import {
   addReviewTime,
   addTokens,
@@ -218,6 +219,25 @@ type Context = {
   home?: string
   /** Shipped and configured secret patterns: the scan's, and every redaction's. */
   patterns: readonly SecretPattern[]
+  /** C5: the root holds no rules file and no `.git`, so each call looks up the repositories below it. */
+  isMulti: boolean
+}
+
+/** A rules scope: the session root, or a repository directly below it (C5). */
+type Scope = { dir: string; loaded: LoadedConfig; patterns: readonly SecretPattern[] }
+
+/**
+ * The context one call is decided in: `root` stays the session root, `loaded` is
+ * the deciding scope's, and the rest is what the touched scopes share.
+ */
+type CallContext = Context & {
+  scopes: readonly Scope[]
+  /** Where git runs: the deciding scope's directory. */
+  gitDir: string
+  /** Secrets allowed in every touched scope. */
+  allowlist: readonly string[]
+  /** Where a rules entry may be written for this call; none when it touched more than one scope or the root alone in a multi-repository root. */
+  writeDir: string | undefined
 }
 
 type Review =
@@ -227,8 +247,11 @@ type Review =
 // Module state: starts over on every load, as the module does.
 let settings: Settings = settingsOf({})
 let context: Promise<Context> | undefined
+/** C5: one entry per child of the root, a repository's scope or undefined for a plain folder. */
+const children = new Map<string, Promise<Scope | undefined>>()
 let auditQueue: Promise<void> = Promise.resolve()
-let isGitignoreChecked = false
+/** The folders whose audit `.gitignore` was looked at since the module loaded. */
+const gitignoreChecked = new Set<string>()
 const warned = new Set<string>()
 
 const wipePolicy = (): WipePolicy => ({ toolErrors: settings.toolErrorsAreWipes })
@@ -260,14 +283,13 @@ function warnOnce($: EngineInterface, key: string, line: string, toast?: string)
   if (toast !== undefined) $.ui.toast(toast, { timeoutMs: 8_000 })
 }
 
-async function loadContext($: EngineInterface): Promise<Context> {
-  const root = await $.session.root()
-  const realRoot = (await $.fs.stat(root, { resolve: true }).catch(() => undefined))?.realPath ?? root
-  const home = await $.env.get('HOME')
-  const path = `${root}/${OVERRIDES_PATH}`
+/** Reads and validates the rules file of one directory; a broken one warns once under `key`. */
+async function loadRules($: EngineInterface, dir: string, key: string): Promise<{ loaded: LoadedConfig; hasFile: boolean }> {
+  const path = `${dir}/${OVERRIDES_PATH}`
   let fileText: string | undefined
   let readProblem: string | undefined
-  if (await $.fs.exists(path)) {
+  const hasFile = await $.fs.exists(path)
+  if (hasFile) {
     fileText = await $.fs.read(path).catch((error: unknown) => {
       readProblem = `(file): could not be read: ${error instanceof Error ? error.message : String(error)}`
       return undefined
@@ -277,13 +299,23 @@ async function loadContext($: EngineInterface): Promise<Context> {
   if (loaded.errors.length > 0) {
     warnOnce(
       $,
-      'config',
+      key,
       text('notice.configBroken', { path: OVERRIDES_PATH, errors: loaded.errors.join('; ') }),
       text('notice.configBrokenShort'),
     )
   }
+  return { loaded, hasFile }
+}
+
+async function loadContext($: EngineInterface): Promise<Context> {
+  const root = await $.session.root()
+  const realRoot = (await $.fs.stat(root, { resolve: true }).catch(() => undefined))?.realPath ?? root
+  const home = await $.env.get('HOME')
+  const { loaded, hasFile } = await loadRules($, root, 'config')
+  // C5: a rules file at the root, or a root that is itself a repository, keeps today's single scope.
+  const isMulti = !hasFile && !(await $.fs.exists(`${root}/.git`))
   const patterns = patternsWith(loaded.compiled.config.gollum.patterns)
-  return { loaded, root, realRoot, patterns, ...(home !== undefined && { home }) }
+  return { loaded, root, realRoot, patterns, isMulti, ...(home !== undefined && { home }) }
 }
 
 async function contextOf($: EngineInterface): Promise<Context> {
@@ -296,13 +328,110 @@ async function contextOf($: EngineInterface): Promise<Context> {
   return context
 }
 
-/** Reads the rules again (decision 9: after the mod's own writes, and on `/council reload`). */
+/** A direct child of the root as a scope: a real directory holding `.git` is a repository, anything else is not. */
+async function loadChild($: EngineInterface, dir: string): Promise<Scope | undefined> {
+  const stat = await $.fs.stat(dir).catch(() => undefined)
+  if (stat === undefined || stat.isLink || stat.kind !== 'dir') return undefined
+  if (!(await $.fs.exists(`${dir}/.git`))) return undefined
+  const { loaded } = await loadRules($, dir, `config:${dir}`)
+  return { dir, loaded, patterns: patternsWith(loaded.compiled.config.gollum.patterns) }
+}
+
+/** The scope of a child directory of the root, or undefined when it is not a repository. Cached, negatives too; a failed load is not. */
+function childScope($: EngineInterface, dir: string): Promise<Scope | undefined> {
+  let entry = children.get(dir)
+  if (entry === undefined) {
+    const loading: Promise<Scope | undefined> = loadChild($, dir).catch((error: unknown) => {
+      if (children.get(dir) === loading) children.delete(dir)
+      throw error
+    })
+    entry = loading
+    children.set(dir, entry)
+  }
+  return entry
+}
+
+const rootScopeOf = (ctx: Context): Scope => ({ dir: ctx.root, loaded: ctx.loaded, patterns: ctx.patterns })
+
+/** The scopes a call touches, in order (DESIGN §14.5); the root scope alone when the lookup is off. */
+async function scopesOf($: EngineInterface, ctx: Context, targets: readonly Target[]): Promise<Scope[]> {
+  const rootScope = rootScopeOf(ctx)
+  if (!ctx.isMulti) return [rootScope]
+  const candidates = candidateChildren(targets, ctx.root)
+  const found = await Promise.all(candidates.map(dir => childScope($, dir)))
+  const repositories = new Map<string, Scope>()
+  candidates.forEach((dir, index) => {
+    const scope = found[index]
+    if (scope !== undefined) repositories.set(dir, scope)
+  })
+  return scopesTouched(targets, ctx.root, new Set(repositories.keys())).map(dir => repositories.get(dir) ?? rootScope)
+}
+
+/** The context for the scopes a call touched; `index` is the deciding one. */
+function callContextOf(ctx: Context, scopes: readonly Scope[], index: number): CallContext {
+  const deciding = scopes[index] ?? rootScopeOf(ctx)
+  const dirs = scopes.map(scope => scope.dir)
+  return {
+    ...ctx,
+    loaded: deciding.loaded,
+    patterns: scopeTagOf(dirs, ctx.root) === '' ? ctx.patterns : unionById([ctx.patterns, ...scopes.map(scope => scope.patterns)]),
+    scopes,
+    gitDir: deciding.dir,
+    allowlist: intersection(scopes.map(scope => scope.loaded.compiled.config.gollum.allowlist)),
+    writeDir: writeDirOf(dirs, ctx.root, ctx.isMulti),
+  }
+}
+
+/** The classification of a call across the scopes it touches: the strictest wins (DESIGN §14.5). */
+async function classifyIn(
+  $: EngineInterface,
+  ctx: Context,
+  call: Call,
+  where: ClassifyContext,
+): Promise<{ classification: Classification; ctx: CallContext }> {
+  const scopes = await scopesOf($, ctx, targetsOf(call, where))
+  const { classification, index } = combineClassifications(scopes.map(scope => classify(call, scope.loaded.compiled, { ...where, root: scope.dir })))
+  return { classification, ctx: callContextOf(ctx, scopes, index) }
+}
+
+/** The scope of the session's working directory: its repository, else the root's. For `/council` and the start suggestion. */
+async function cwdScopeOf($: EngineInterface, ctx: Context): Promise<Scope> {
+  const [scope] = await scopesOf($, ctx, [{ path: await $.session.cwd(), isWorkingDir: true }])
+  return scope ?? rootScopeOf(ctx)
+}
+
+/** The root's context seen through one scope's config, for the `/council` subcommands. */
+const inScope = (ctx: Context, scope: Scope): Context =>
+  scope.dir === ctx.root ? ctx : { ...ctx, loaded: scope.loaded, patterns: unionById([ctx.patterns, scope.patterns]) }
+
+/** Reads the rules again (decision 9: after the mod's own writes, and on `/council reload`): the root's and every repository's. */
 async function reloadContext($: EngineInterface): Promise<Context> {
   context = undefined
-  warned.delete('config')
+  children.clear()
+  for (const key of [...warned]) if (key === 'config' || key.startsWith('config:')) warned.delete(key)
   const fresh = await contextOf($)
   await update($, session, value => clearCache(sessionOf(value)))
   return fresh
+}
+
+/** The context seen through the session's working directory's scope, for the `/council` subcommands. */
+async function cwdContextOf($: EngineInterface): Promise<Context> {
+  const ctx = await contextOf($)
+  return inScope(ctx, await cwdScopeOf($, ctx))
+}
+
+/** After the mod wrote a rules file in `dir`: the root's context, or that repository's entry alone. */
+async function reloadAt($: EngineInterface, ctx: Context, dir: string): Promise<void> {
+  if (dir === ctx.root) await reloadContext($)
+  else await reloadScope($, dir)
+}
+
+/** After the mod wrote a repository's rules file: that entry alone is read again. */
+async function reloadScope($: EngineInterface, dir: string): Promise<void> {
+  children.delete(dir)
+  warned.delete(`config:${dir}`)
+  await childScope($, dir)
+  await update($, session, value => clearCache(sessionOf(value)))
 }
 
 /** Where a file tool's path really lands, symbolic links resolved, mapped under the root. */
@@ -354,9 +483,9 @@ async function scriptsOf(
 async function runGitInspection(
   $: EngineInterface,
   step: { label: string; argv: readonly string[]; orElse?: { label: string; argv: readonly string[] } },
-  ctx: Context,
+  ctx: CallContext,
 ): Promise<{ label: string; run: ProcessRunResult }> {
-  const attempt = (argv: readonly string[]): Promise<ProcessRunResult> => $.process.run(argv, { cwd: ctx.root, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
+  const attempt = (argv: readonly string[]): Promise<ProcessRunResult> => $.process.run(argv, { cwd: ctx.gitDir, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
   let first: ProcessRunResult | undefined
   let failure: unknown
   try {
@@ -380,7 +509,7 @@ async function runGitInspection(
  * Runs Galadriel's inspections: only what the table planned, read-only, each
  * on its own timeout. A failure is no preview, never a decision.
  */
-async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: Context): Promise<string | undefined> {
+async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: CallContext): Promise<string | undefined> {
   const results: InspectionResult[] = []
   for (const step of plan) {
     try {
@@ -538,9 +667,9 @@ async function review($: EngineInterface, brief: Brief, model: string, deadlineM
 }
 
 /** The checked-out branch, for whether a merge lands on a protected one; unknown on any failure. */
-async function currentBranchOf($: EngineInterface, root: string): Promise<string | undefined> {
+async function currentBranchOf($: EngineInterface, dir: string): Promise<string | undefined> {
   try {
-    const run = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
+    const run = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: dir, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
     const branch = run.stdout.trim()
     return run.exitCode === 0 && branch !== '' ? branch : undefined
   } catch {
@@ -554,7 +683,7 @@ async function currentBranchOf($: EngineInterface, root: string): Promise<string
  * redacted, with the range that was read (the table's fallback range when the
  * first can't be read). Undefined when git can't say.
  */
-async function rangeDiffOf($: EngineInterface, step: Extract<Inspection, { kind: 'git' }>, ctx: Context): Promise<{ label: string; diff: string } | undefined> {
+async function rangeDiffOf($: EngineInterface, step: Extract<Inspection, { kind: 'git' }>, ctx: CallContext): Promise<{ label: string; diff: string } | undefined> {
   try {
     const { label, run } = await runGitInspection($, step, ctx)
     if (run.exitCode !== 0) return undefined
@@ -566,12 +695,12 @@ async function rangeDiffOf($: EngineInterface, step: Extract<Inspection, { kind:
 }
 
 /**
- * Runs one of the project's checks from the rules file, by argument vector,
- * in the project root. Its own timeout ends it (a clock timer, which costs
+ * Runs one of the project's checks from a rules file, by argument vector,
+ * in the directory of the scope that lists it. Its own timeout ends it (a clock timer, which costs
  * the hook no budget while the child's output is awaited); so does `stop`
  * once the council has blocked, and Esc, through the dispatch's signal.
  */
-async function runCheck($: EngineInterface, command: GimliCommand, root: string, stop: AbortSignal): Promise<GimliRun> {
+async function runCheck($: EngineInterface, command: GimliCommand, dir: string, stop: AbortSignal): Promise<GimliRun> {
   const started = await $.clock.now()
   let ended: 'timeout' | 'stopped' | undefined
   let exit: ProcessSpawnResult | undefined
@@ -580,7 +709,7 @@ async function runCheck($: EngineInterface, command: GimliCommand, root: string,
   const endedEarly = new Promise<void>(resolve => {
     isEnded = resolve
   })
-  const stream = $.process.spawn({ argv: command.argv, cwd: root })
+  const stream = $.process.spawn({ argv: command.argv, cwd: dir })
   const end = (why: 'timeout' | 'stopped'): void => {
     if (ended !== undefined || exit !== undefined) return
     ended = why
@@ -635,8 +764,7 @@ async function convene(
   model: string,
   deadlineMs: number,
   isSequential: boolean,
-  checks: readonly GimliCommand[],
-  root: string,
+  checks: readonly { command: GimliCommand; dir: string }[],
   signal: AbortSignal,
   progress: (event: Progress) => Promise<void>,
 ): Promise<Held> {
@@ -654,8 +782,8 @@ async function convene(
       noted.push(Promise.resolve().then(() => progress(event)).catch(() => undefined))
     }
     const checking = Promise.all(
-      checks.map(command =>
-        runCheck($, command, root, stop.signal).then(run => {
+      checks.map(check =>
+        runCheck($, check.command, check.dir, stop.signal).then(run => {
           if (isGimliBlock(run)) {
             isCheckFailed = true
             stop.abort()
@@ -751,9 +879,18 @@ async function writeOverrides($: EngineInterface, root: string, change: (current
  * After "allow once" and a call that ran: offers the allow rule for it, showing
  * the exact JSON, and writes it only on "Add the rule" (then reloads, decision
  * 9). Any other answer, or dismissing, declines it for the session. Returns the
- * id of the rule written.
+ * id of the rule written. `where` is the single scope's (its root is `dir`), and
+ * the rule goes to the rules file in `dir`.
  */
-async function offerRule($: EngineInterface, call: Call, classification: Classification, where: ClassifyContext, ctx: Context, hadSecret: boolean): Promise<string | undefined> {
+async function offerRule(
+  $: EngineInterface,
+  call: Call,
+  classification: Classification,
+  where: ClassifyContext,
+  ctx: Context,
+  hadSecret: boolean,
+  dir: string,
+): Promise<string | undefined> {
   const state = sessionOf(await read($, session))
   const suggested = suggestRule(call, classification, ctx.loaded.compiled, where, { hadSecret, declined: state.declinedRules })
   if (suggested.kind === 'none') return undefined
@@ -767,12 +904,12 @@ async function offerRule($: EngineInterface, call: Call, classification: Classif
     await update($, session, value => declineRule(sessionOf(value), key))
     return undefined
   }
-  const written = await writeOverrides($, ctx.root, current => withRule(current, rule))
+  const written = await writeOverrides($, dir, current => withRule(current, rule))
   if (!written.ok) {
     $.ui.log(text('notice.ruleFailed', { problem: written.problem }))
     return undefined
   }
-  await reloadContext($)
+  await reloadAt($, ctx, dir)
   $.ui.log(text('notice.ruleWritten', { id: rule.id, path: OVERRIDES_PATH }))
   return rule.id
 }
@@ -780,8 +917,8 @@ async function offerRule($: EngineInterface, call: Call, classification: Classif
 async function appendAudit($: EngineInterface, record: AuditRecord, root: string): Promise<void> {
   const path = resolve(settings.auditLogPath, root)
   const folder = path.slice(0, path.lastIndexOf('/'))
-  if (!isGitignoreChecked) {
-    isGitignoreChecked = true
+  if (!gitignoreChecked.has(folder)) {
+    gitignoreChecked.add(folder)
     const ignore = `${folder}/.gitignore`
     if (isInside(path, root) && !(await $.fs.exists(ignore))) await $.fs.write(ignore, AUDIT_GITIGNORE)
   }
@@ -799,16 +936,19 @@ async function appendAudit($: EngineInterface, record: AuditRecord, root: string
 }
 
 /**
- * Queues one audit line. Writes run in order, but nobody waits for them: a
+ * Queues one audit line for each of `dirs` (the call's repositories, else the
+ * root: DESIGN §14.5). Writes run in order, but nobody waits for them: a
  * failed write is logged and a hanging one holds back only the lines queued
  * after it, never a decision or the call that follows.
  */
-function audit($: EngineInterface, record: AuditRecord, root: string): void {
-  auditQueue = auditQueue
-    .then(() => appendAudit($, record, root))
-    .catch((error: unknown) => {
-      $.ui.log(text('notice.auditFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
-    })
+function audit($: EngineInterface, record: AuditRecord, dirs: readonly string[]): void {
+  for (const dir of dirs) {
+    auditQueue = auditQueue
+      .then(() => appendAudit($, record, dir))
+      .catch((error: unknown) => {
+        $.ui.log(text('notice.auditFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
+      })
+  }
 }
 
 /** Notes a file Claude wrote, once the write has run. */
@@ -962,6 +1102,10 @@ function modelChoice(slot: ModelSlot, ctx: Context, sessionModels: Readonly<Part
   })
 }
 
+/** The project checks a call would run: every touched scope's, each in its own directory (empty when Gimli is off). */
+const checksIn = (ctx: CallContext): { command: GimliCommand; dir: string }[] =>
+  settings.gimliEnabled ? checksOf(ctx.scopes.map(scope => ({ dir: scope.dir, commands: scope.loaded.compiled.config.gimli.commands }))) : []
+
 async function councilModel($: EngineInterface, command: Extract<CouncilCommand, { kind: 'model' }>): Promise<Output> {
   const title = text('cmd.title')
   if (!isSlot(command.slot)) return { title, lines: [text('cmd.modelBadSlot', { slot: command.slot, slots: MODEL_SLOTS.join(', ') })] }
@@ -1039,8 +1183,7 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
       await syncIndicator($)
       return inMode(() => ({ title, lines: [text(command.on ? 'cmd.shadowOn' : 'cmd.shadowOff')] }))
     case 'log': {
-      const ctx = await contextOf($)
-      const path = resolve(settings.auditLogPath, ctx.root)
+      const path = resolve(settings.auditLogPath, (await cwdScopeOf($, await contextOf($))).dir)
       try {
         const logText = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
         return inMode(() => logOutput(logText, command.count))
@@ -1050,16 +1193,17 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
       }
     }
     case 'rules': {
-      const ctx = await contextOf($)
+      const ctx = await cwdContextOf($)
       return inMode(() => rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors, mode !== undefined))
     }
     case 'test': {
-      // Classification only: nothing the command names is run, read or stat'ed.
-      const ctx = await contextOf($)
+      // Classification only: nothing the command names is run or read. The directories below the root
+      // it names are looked at, as for a real call, to know which repositories it touches.
+      const root = await contextOf($)
       const cwd = await $.session.cwd()
       const call: Call = { tool: 'Bash', input: { command: command.command } }
-      const where = { root: ctx.root, cwd, ...(ctx.home !== undefined && { home: ctx.home }) }
-      const classification = classify(call, ctx.loaded.compiled, where)
+      const where = { root: root.root, cwd, ...(root.home !== undefined && { home: root.home }) }
+      const { classification, ctx } = await classifyIn($, root, call, where)
       const operation = classification.tier === 'allow' ? undefined : operationOf(call, classification, where)
       const state = sessionOf(await read($, session))
       const seated = classification.tier === 'review' ? route(call, classification, enabledMembers()) : undefined
@@ -1077,14 +1221,14 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
               enabled: settings.councilEnabled,
               seats: councilSeats(call, classification, enabledMembers(), { ranges: settings.galadrielEnabled }),
               choice: modelChoice('council', ctx, state.models),
-              checks: settings.gimliEnabled ? ctx.loaded.compiled.config.gimli.commands.map(check => check.name) : [],
+              checks: settings.gimliEnabled ? checksIn(ctx).map(check => check.command.name) : [],
               isBranchAssumed: big.entry === 'merge-to-protected' && needsCurrentBranch(classification, ctx.loaded.compiled),
             }
       const typed = redact(command.command, ctx.patterns)
       return inMode(() => testOutput(typed, classification, operation, reviewer, council))
     }
     case 'models': {
-      const ctx = await contextOf($)
+      const ctx = await cwdContextOf($)
       const state = sessionOf(await read($, session))
       const choices = Object.fromEntries(MODEL_SLOTS.map(slot => [slot, modelChoice(slot, ctx, state.models)])) as Record<ModelSlot, ModelChoice>
       return inMode(() => modelsOutput(choices))
@@ -1100,8 +1244,8 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
       })
     }
     case 'report': {
-      const ctx = await contextOf($)
-      return reportFrom($, resolve(settings.auditLogPath, ctx.root), mode)
+      const scope = await cwdScopeOf($, await contextOf($))
+      return reportFrom($, resolve(settings.auditLogPath, scope.dir), mode)
     }
     case 'usage':
       return inMode(() => ({ title, lines: [text(command.key, command.params ?? {}), ...(command.key === 'cmd.unknown' ? [text('cmd.help')] : [])] }))
@@ -1141,7 +1285,8 @@ export const register: Register = (on, options) => {
       })
     // Decision 6: suggest shadow mode once, while the council has logged nothing.
     if (ctx !== undefined && !isShadow(sessionOf(await read($, session)), settings.shadowMode)) {
-      const isEmpty = !(await $.fs.exists(resolve(settings.auditLogPath, ctx.root)).catch(() => true))
+      const dir = (await cwdScopeOf($, ctx).catch(() => undefined))?.dir ?? ctx.root
+      const isEmpty = !(await $.fs.exists(resolve(settings.auditLogPath, dir)).catch(() => true))
       if (isEmpty) warnOnce($, 'shadow-suggest', text('notice.shadowSuggest'), text('notice.shadowSuggest'))
     }
     await syncIndicator($).catch(() => undefined)
@@ -1259,23 +1404,30 @@ export const register: Register = (on, options) => {
         ? { deny: refusalText({ who: 'who.council', verdict: 'error', reason: text('reason.internal'), alternative: text('alternative.ask') }) }
         : next(e)
 
-    const ctx = await contextOf($)
+    const sessionCtx = await contextOf($)
     const cwd = await $.session.cwd()
-    const realPath = await realPathOf($, call, cwd, ctx)
+    const realPath = await realPathOf($, call, cwd, sessionCtx)
+    // The session root's: operation keys, previews and the Legolas brief's paths keep it, so two repositories' keys never meet.
     const where = {
-      root: ctx.root,
+      root: sessionCtx.root,
       cwd,
-      ...(ctx.home !== undefined && { home: ctx.home }),
+      ...(sessionCtx.home !== undefined && { home: sessionCtx.home }),
       ...(realPath !== undefined && { realPath }),
     }
-    const classification = classify(call, ctx.loaded.compiled, where)
+    // C5: classified against every repository the call touches; the strictest decides, and its scope's config is `ctx`'s.
+    const { classification, ctx } = await classifyIn($, sessionCtx, call, where)
+    const scopeDirs = ctx.scopes.map(scope => scope.dir)
+    const scopeTag = scopeTagOf(scopeDirs, ctx.root)
+    const logDirs = auditDirsOf(scopeDirs, ctx.root, settings.auditLogPath)
+    // The one scope the call touched, for the rules it may be offered (a repository's `where` has its own root).
+    const writeWhere = { ...where, root: ctx.scopes[0]?.dir ?? ctx.root }
 
     if (classification.tier === 'allow') {
       // High-confidence secrets refuse an allowed call too (DESIGN §13.2). It has
       // no operation, so no rounds, no failed attempt and no state write; low
       // findings are ignored here, as the mod never asks on an allowed call.
       if (settings.gollumEnabled) {
-        const scan = await scanCall(call, ctx.patterns, ctx.loaded.compiled.config.gollum.allowlist)
+        const scan = await scanCall(call, ctx.patterns, ctx.allowlist)
         const first = scan.high[0]
         if (first !== undefined) {
           const deny = refusalText({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') })
@@ -1303,7 +1455,7 @@ export const register: Register = (on, options) => {
               tokens: 0,
               ...(e.agentId !== undefined && { agentId: e.agentId }),
             },
-            ctx.root,
+            logDirs,
           )
           return { deny }
         }
@@ -1326,6 +1478,8 @@ export const register: Register = (on, options) => {
     const epoch = state.promptEpoch
     const thisPrompt = (value: CouncilSession | undefined): boolean => sessionOf(value).promptEpoch === epoch
     const fingerprint = await fingerprintOf(call.tool, call.input)
+    // The verdict cache key: the fingerprint, apart per scope outside the root scope alone (the audit line keeps the plain one).
+    const cacheKey = scopeTag === '' ? fingerprint : await fingerprintOf(call.tool, call.input, scopeTag)
     const operation = operationOf(call, classification, where)
     const decided = classification.decided
     const shadow = isShadow(state, settings.shadowMode)
@@ -1398,7 +1552,7 @@ export const register: Register = (on, options) => {
         ...(councilRecord !== undefined && { council: councilRecord }),
         ...(e.agentId !== undefined && { agentId: e.agentId }),
       }
-      audit($, record, ctx.root)
+      audit($, record, logDirs)
       const counts = result.deny !== undefined ? isWipe : isWipeOutcome(outcome, wipePolicy())
       if (counts || outcome === 'ran') {
         await update($, session, value => {
@@ -1433,7 +1587,8 @@ export const register: Register = (on, options) => {
       }
       const result = await proceed()
       if (outcomeOf(result) === 'ran') {
-        ruleAdded = await offerRule($, call, classification, where, ctx, hadSecret).catch(() => undefined)
+        // Only where one rules file is the call's own (DESIGN §14.5): never a root file that would end the lookup.
+        ruleAdded = ctx.writeDir === undefined ? undefined : await offerRule($, call, classification, writeWhere, ctx, hadSecret, ctx.writeDir).catch(() => undefined)
       }
       return finish(result)
     }
@@ -1455,16 +1610,16 @@ export const register: Register = (on, options) => {
           opinions,
           ...(preview !== undefined && { preview }),
           ...(secrets.length > 0 && { secrets: secrets.map(finding => ({ label: finding.label, snippet: finding.snippet })) }),
-          canAllowlist: secrets.length === 1,
+          canAllowlist: secrets.length === 1 && ctx.writeDir !== undefined,
         },
         currentMode(),
       )
       // One entry per confirm: the allowlist is offered for a single finding only.
-      const answer = await escalate($, question, secrets.length === 1)
+      const answer = await escalate($, question, secrets.length === 1 && ctx.writeDir !== undefined)
       if (answer === 'unavailable') {
         decision = answer
         // Chat approval (ROADMAP C4): only where nothing draws, and never for a protected path or a block rule.
-        const callKey = isOfferable(classification) ? await callKeyOf(call) : undefined
+        const callKey = isOfferable(classification) ? await callKeyOf(call, scopeTag) : undefined
         if (callKey !== undefined) {
           // Consumed in one write, and used only if that write took it: two identical calls must not both spend one.
           const spent: { use: ChatUse } = { use: undefined }
@@ -1490,7 +1645,8 @@ export const register: Register = (on, options) => {
             ? undefined
             : {
                 code: codeOf(callKey),
-                canSession: suggestRule(call, classification, ctx.loaded.compiled, where, { hadSecret, declined: [] }).kind === 'rule',
+                // The deciding scope's config and root, the pair its classification came from.
+                canSession: suggestRule(call, classification, ctx.loaded.compiled, { ...where, root: ctx.gitDir }, { hadSecret, declined: [] }).kind === 'rule',
               }
         if (callKey !== undefined && chat !== undefined) {
           await update($, session, value => noteOffer(sessionOf(value), { ...chat, callKey }, epoch))
@@ -1523,12 +1679,14 @@ export const register: Register = (on, options) => {
       }
       if (answer.kind === 'allowlist') {
         const finding = secrets[0]
-        if (finding !== undefined && (await confirmAllowlist($, finding))) {
-          const written = await writeOverrides($, ctx.root, current => withAllowlistEntry(current, finding.fingerprint))
+        // Not offered without a rules file of its own to write to, so an answer without one is not honoured.
+        const writeDir = ctx.writeDir
+        if (finding !== undefined && writeDir !== undefined && (await confirmAllowlist($, finding))) {
+          const written = await writeOverrides($, writeDir, current => withAllowlistEntry(current, finding.fingerprint))
           if (written.ok) {
             decision = 'allowlist'
             $.ui.log(text('notice.allowlistWritten', { entry: finding.fingerprint, path: OVERRIDES_PATH }))
-            await reloadContext($)
+            await reloadAt($, ctx, writeDir)
             return 'allowed'
           }
           $.ui.log(text('notice.allowlistFailed', { problem: written.problem }))
@@ -1590,7 +1748,7 @@ export const register: Register = (on, options) => {
     // 6. The secrets scan: high refuses without asking; low asks.
     let isAllowedByUser = false
     if (settings.gollumEnabled) {
-      const scan = await scanCall(call, ctx.patterns, ctx.loaded.compiled.config.gollum.allowlist)
+      const scan = await scanCall(call, ctx.patterns, ctx.allowlist)
       if (scan.high.length > 0) {
         member = 'gollum'
         verdictText = 'block'
@@ -1617,7 +1775,7 @@ export const register: Register = (on, options) => {
     }
 
     // Review. An identical call approved this prompt is not reviewed again.
-    if (state.cache.includes(fingerprint)) {
+    if (state.cache.includes(cacheKey)) {
       isCached = true
       verdictText = 'approve'
       reasonText = null
@@ -1666,7 +1824,7 @@ export const register: Register = (on, options) => {
         const asked: Seat = seat.member === 'aragorn' ? { member: 'aragorn', profile: seat.profile } : { member: seat.member }
         sittings.push({ seat, who, brief: await briefOf($, asked, call, classification, cwd, realPath, state, preview, ctx) })
       }
-      const checks = settings.gimliEnabled ? ctx.loaded.compiled.config.gimli.commands : []
+      const checks = checksIn(ctx)
       const debate = debateOf(
         'council',
         sittings.map(sitting => ({
@@ -1675,7 +1833,7 @@ export const register: Register = (on, options) => {
           status: sitting.brief === undefined ? ('skipped' as const) : ('waiting' as const),
           ...(sitting.brief === undefined && sitting.skip !== undefined && { reason: tidyReason(sitting.skip) }),
         })),
-        checks.map(check => ({ name: check.name, status: 'running' as const })),
+        checks.map(check => ({ name: check.command.name, status: 'running' as const })),
       )
       await update($, session, value => openDebate(sessionOf(value), debate)).catch(() => undefined)
       await openDebatePane($).catch(() => undefined)
@@ -1689,7 +1847,7 @@ export const register: Register = (on, options) => {
         await update($, session, value => noteVoice(sessionOf(value), debateId, event.index, outcome.status, detail))
       }
       const reviewStarted = await $.clock.now()
-      const held = await convene($, sittings, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), settings.councilSequential, checks, ctx.root, next.signal, progress)
+      const held = await convene($, sittings, choice.model, deadlineFor(choice.model, settings.reviewDeadlineSeconds), settings.councilSequential, checks, next.signal, progress)
       // Esc aborts the model calls and kills the checks. That is not a verdict
       // and not the user keeping the call blocked: refuse plainly, no wipe, no
       // round, no dialog on an abandoned dispatch.
@@ -1738,7 +1896,7 @@ export const register: Register = (on, options) => {
         await update($, session, value => {
           const current = sessionOf(value)
           if (!thisPrompt(current)) return current // do not cache into a newer prompt
-          return { ...current, cache: cacheApprove(current.cache, fingerprint) }
+          return { ...current, cache: cacheApprove(current.cache, cacheKey) }
         })
         return finish(await proceed())
       }
@@ -1753,7 +1911,7 @@ export const register: Register = (on, options) => {
     if (isOutOfRounds(state, operation.key) && !shadow) return askUser('escalate.rounds', [])
     if (settings.councilEnabled) {
       const compiled = ctx.loaded.compiled
-      const branch = needsCurrentBranch(classification, compiled) ? await currentBranchOf($, ctx.root) : undefined
+      const branch = needsCurrentBranch(classification, compiled) ? await currentBranchOf($, ctx.gitDir) : undefined
       const big = bigOperationOf(classification, compiled, branch !== undefined ? { currentBranch: branch } : {})
       if (big !== undefined) return holdCouncil(big)
     }
@@ -1806,7 +1964,7 @@ export const register: Register = (on, options) => {
       await update($, session, value => {
         const current = sessionOf(value)
         if (!thisPrompt(current)) return current // do not cache into a newer prompt
-        return { ...current, cache: cacheApprove(current.cache, fingerprint) }
+        return { ...current, cache: cacheApprove(current.cache, cacheKey) }
       })
       return finish(await proceed())
     }

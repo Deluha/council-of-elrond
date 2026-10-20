@@ -11,6 +11,15 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 ## [Unreleased]
 
 ### Added
+- **Rules per repository under one root.** When the session root is the parent of several
+  repositories (no `rules.json` of its own, no `.git`), each repository directly below it can have
+  its own `.claude/council-of-elrond/rules.json`. A call is decided by the repositories it touches
+  (the directories it runs in and the paths it names), the strictest winning; protected paths and
+  the project checks resolve against their repository, git runs there, and the audit line is
+  written inside each repository touched. `rm -rf` of another repository is blocked. Approvals and
+  chat codes stay within the repositories they were given for. Allow rules and the secrets allowlist
+  are offered only for a call in one repository. A root that has a `rules.json`, or is a repository,
+  behaves as before. See "Several repositories under one root" in the README.
 - **More secret formats.** Refused as high-confidence: GitLab personal access tokens, npm tokens,
   Google OAuth client secrets, Slack webhook URLs and PGP private key blocks. Asked about as
   low-confidence: JWTs, `Authorization: Bearer` and `Basic` headers, a `mysql -p<password>`

@@ -99,11 +99,16 @@ function canonical(value: unknown, collapseWhitespace = false): unknown {
   return value
 }
 
-/** The text a fingerprint hashes: tool name plus arguments, canonicalised. */
-export const fingerprintText = (tool: string, input: unknown): string => `${tool}\u0000${JSON.stringify(canonical(input))}`
+/**
+ * The text a fingerprint hashes: tool name plus arguments, canonicalised. A
+ * `scope` (the repositories a call touches, C5) is mixed in when given, so one
+ * call in two repositories has two keys; none leaves the text as it always was.
+ */
+export const fingerprintText = (tool: string, input: unknown, scope = ''): string =>
+  `${tool}\u0000${JSON.stringify(canonical(input))}${scope === '' ? '' : `\u0000scope\u0000${scope}`}`
 
-export async function fingerprintOf(tool: string, input: unknown): Promise<string> {
-  const bytes = new TextEncoder().encode(fingerprintText(tool, input))
+export async function fingerprintOf(tool: string, input: unknown, scope = ''): Promise<string> {
+  const bytes = new TextEncoder().encode(fingerprintText(tool, input, scope))
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
   return Array.from(digest.slice(0, 8), byte => byte.toString(16).padStart(2, '0')).join('')
 }

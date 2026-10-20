@@ -135,7 +135,7 @@ why.
 }
 ```
 
-- **Only these commands run.** They run by argument vector with no shell, in the project root, and nothing comes from Claude or the call. `rules.json` is a protected path, so Claude can't add a command without asking you.
+- **Only these commands run.** They run by argument vector with no shell, in the project root (with several repositories under one root, in each repository's own directory), and nothing comes from Claude or the call. `rules.json` is a protected path, so Claude can't add a command without asking you.
 - **Pass or fail by exit code.** A failure, a timeout or a command that can't start is a block. Claude gets the check's last 20 lines (redacted) so it can fix the cause; the audit log keeps none of them.
 - **Each command has its own timeout:** 120 s unless `timeoutMs` says otherwise, at most 600 s. It runs outside the reviewers' deadline, so a council can take as long as the longer of the two.
 - **Stopping early:** Esc ends them. Once a reviewer has blocked, a check still running is stopped, since it can only add a block.
@@ -201,6 +201,62 @@ Put project overrides in `.claude/council-of-elrond/rules.json`:
 field in the transcript.
 
 The overrides file is itself a protected path, so Claude can't edit it without asking you.
+
+**Where the file lives.** At the top of the project: `.claude/council-of-elrond/rules.json` under
+the session root. When the session root is the parent of several repositories, each repository
+directly below it has its own, at its own top (see the next section). No other depth counts: a
+file in an arbitrary subfolder is never read, so a planted file cannot set rules for the calls
+beneath it.
+
+### Several repositories under one root
+
+Some environments (a cloud environment with two repositories, a workspace folder) start the
+session in a folder that holds several repositories rather than in one of them. If that folder has
+no `rules.json` of its own and is not itself a repository (no `.git`), the mod looks up the rules
+per call:
+
+- **A repository** is a real directory (not a link) directly below the session root that holds
+  `.git`. Its rules are its own `.claude/council-of-elrond/rules.json`, or the shipped defaults when
+  it has none. A rules file in a folder with no `.git`, or deeper than a repository's top, is
+  ignored.
+- **A call touches the repositories it works in or names.** For a shell command that is the
+  directory each part runs in (the session's, moved by a `cd` earlier in the command) and every path
+  the part names; for a file edit, the file. `cd app && make` from the root touches the root and
+  `app`; `cat ../app/x` run in `lib` touches `lib` and `app`; `cmd > /dev/null` names a path in no
+  repository and adds nothing. A directory the call works in that is in no repository (the root, a
+  plain folder, `/`, an unknown `cd $X`) brings in the root's own rules, which are the shipped
+  defaults.
+- **The strictest repository decides.** The call is classified against each repository it touches
+  and the strictest tier wins: a call that one repository's rule allows but another's defaults
+  review is reviewed. The deciding repository's models, big operations, protected branches and
+  routing apply. `rm -rf ../lib` run in `app` is blocked, since `lib` is outside the repository the
+  rule measures against (deleting a repository is like `rm -rf .`).
+- **Protected paths, production patterns and project checks resolve against their repository.**
+  `protectedPaths: ["config/secret/**"]` in `app`'s file is `app/config/secret/**`. A council
+  call runs the checks of every repository it touches, each in its own directory, eight in all
+  (the repositories' lists joined in the order they were touched). Git (the preview, a push's range,
+  the current branch for a merge) runs in the deciding repository.
+- **Secrets.** The patterns of the root and of every repository the call touches apply, and
+  everything the call shows is redacted by all of them. An allowlist entry counts only when every
+  touched repository lists it.
+- **The audit log is written in the repository.** A call that touched one or more repositories adds
+  its line to the log of each; a call that touched none goes to the root's, as before. A
+  `.gitignore` is written beside each. `/council log`, `report`, `rules` and `models` read the
+  repository of the session's working directory (the root's when it is in none).
+- **Approvals do not travel.** A cached approval, and a code typed in chat, apply to the same call
+  in the same set of repositories only.
+- **Allow rules and the allowlist are offered only for a call in one repository.** The rule or
+  entry is written to that repository's file. A call touching two, or only the root, is not offered
+  either (a file at the root would turn this lookup off): add the rule to the file by hand.
+
+Each repository's file is read once and kept; `/council reload` reads them all again, and the mod's
+own write to a repository's file reloads that one. A repository created after the session started
+is seen after `/council reload`. A session root that has a `rules.json`, or is itself a repository,
+keeps the single set of rules it always had. The lookup is on for any root with neither, even one
+that holds no repository: a plain folder is then offered no allow rule or allowlist entry for calls
+outside a repository, so give it a `rules.json` (even `{"schemaVersion": 1}`) to get them back. The
+cloud guide has the setup:
+[Cloud sessions](../../docs/INSTALL.md#cloud-sessions).
 
 ## Models
 
@@ -302,7 +358,7 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | `/council rules` | Every effective rule with its source (`shipped` or `project`), and the lists. |
 | `/council test "<command>"` | Which tier, rule, reviewer (and profile, and why it fell back to Gandalf if it did) and operation key a shell command would get. For a big operation it shows the full council's seats, model and checks. Runs nothing, so a merge is assumed to land on a protected branch. |
 | `/council model [<member> <model> [--save]]` | Lists each slot's model and where it came from, or switches one for this session (`default` clears the switch). `--save` also writes the `/config` row when the model is one of its picker values. |
-| `/council reload` | Reads `rules.json` again. |
+| `/council reload` | Reads `rules.json` again (every repository's, when the session root holds several). |
 | `/council report` | A summary of the audit log, rotated files included (see below). |
 | `/council debate` | Opens the [debate pane](#debate-pane-and-council-check) at any width (where nothing draws, prints its rows as transcript lines). |
 
@@ -531,7 +587,7 @@ A full council
 adds what made the call big, each member's own verdict and tokens, and each check's result and time. The outcome
 tells apart a call you refused at Claude Code's permission prompt (`refused-by-user`), one that
 check denied with nobody asked (`denied-by-permission`), and one that ran and errored (`error`). It never holds file contents, diffs or secrets: the
-call itself appears only as a hash. A `.gitignore` beside it keeps it out of git.
+call itself appears only as a hash. A `.gitignore` beside it keeps it out of git. With several repositories under one root, the line goes to each repository the call touched.
 
 Lines are written in order after the call, and nothing waits for them: a failed write is noted in
 the debug log, and one that never returns holds back only the lines queued after it, never a
@@ -585,6 +641,7 @@ hold is classified (0.5.0); the gaps that remain:
 - **Low-confidence secrets in allowed calls.** An allowed call is scanned for high-confidence secrets only: a `password=…`-style assignment or a random-looking token in an allowed `curl` or `echo` passes without a question.
 - **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`), an identifier without a digit and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through the scan (redaction still hides it).
 - **Two sessions in one project share one audit log without a lock.** Claude Code's file access has none, so lines can interleave or be lost; the report skips lines it cannot parse.
+- **Several repositories: a command too long or too complex to parse** names no `cd` or path, so it is classified against the repository of the session's working directory only (it is reviewed at least). Two repositories' checks with the same name show under one name in the debate pane.
 - **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb.
 - A hook that overruns its time limit. The engine may run the call; Elrond refuses rather than pass with its budget nearly spent, but it can't act once it has run out.
 

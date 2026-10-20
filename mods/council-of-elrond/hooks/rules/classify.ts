@@ -139,6 +139,49 @@ function subjectsOf(call: Call, context: ClassifyContext): { subjects: Subject[]
 const SCRIPT_RULES = /^script-/
 
 /**
+ * Where a shell part leaves the working directory: `cd` and `pushd` (not
+ * nested) move where later parts' paths land. A target the parser cannot
+ * know (a variable, `-`) lands anywhere: `/`. The one copy, shared by
+ * `classify` and `targetsOf`.
+ */
+export function cwdAfter(part: ShellPart | undefined, cwd: string, home?: string): string {
+  if (part === undefined || part.isNested || (part.coreWords[0] !== 'cd' && part.coreWords[0] !== 'pushd')) return cwd
+  const target = part.coreWords.find((word, index) => index > 0 && !word.startsWith('-')) ?? home ?? '/'
+  return /[$`]|^-$/.test(target) ? '/' : resolve(target, cwd, home)
+}
+
+/** A place a call touches (C5): a working directory, or a path it names. */
+export type Target = { path: string; isWorkingDir: boolean }
+
+/**
+ * Where a call works and what it names, absolute, in the order met (the first
+ * is where the call starts). A shell part runs in the directory before its own
+ * `cd`; a file tool's path (and its real path) count as working directories,
+ * so a file outside every repository falls to the root's rules.
+ */
+export function targetsOf(call: Call, context: ClassifyContext): Target[] {
+  if (SHELL_TOOLS.has(call.tool)) {
+    const targets: Target[] = []
+    let cwd = context.cwd
+    for (const subject of subjectsOf(call, context).subjects) {
+      targets.push({ path: cwd, isWorkingDir: true })
+      for (const word of subject.candidates) {
+        targets.push({ path: resolve(word.replace(/^['"]|['"]$/g, ''), cwd, context.home), isWorkingDir: false })
+      }
+      cwd = cwdAfter(subject.part, cwd, context.home)
+    }
+    return targets.length === 0 ? [{ path: context.cwd, isWorkingDir: true }] : targets
+  }
+  const field = FILE_PATH_FIELDS[call.tool]
+  const given = field !== undefined ? call.input[field] : undefined
+  if (typeof given === 'string') {
+    const files = [resolve(given, context.cwd, context.home), ...(context.realPath !== undefined ? [context.realPath] : [])]
+    return files.map(path => ({ path, isWorkingDir: true }))
+  }
+  return [{ path: context.cwd, isWorkingDir: true }]
+}
+
+/**
  * The tier of a call, by the rules alone: pure, no I/O.
  *
  * Per subject (each shell part, or the file path): a project rule that
@@ -168,15 +211,10 @@ export function classify(call: Call, config: CompiledConfig, context: ClassifyCo
     })
   }
 
-  // `cd` earlier in a compound command moves where later parts' paths land.
-  // A target the parser cannot know (a variable, `-`) lands anywhere: `/`.
   let cwd = context.cwd
   for (const subject of subjects) {
     const part = subject.part
-    if (part !== undefined && !part.isNested && (part.coreWords[0] === 'cd' || part.coreWords[0] === 'pushd')) {
-      const target = part.coreWords.find((word, index) => index > 0 && !word.startsWith('-')) ?? context.home ?? '/'
-      cwd = /[$`]|^-$/.test(target) ? '/' : resolve(target, cwd, context.home)
-    }
+    cwd = cwdAfter(part, cwd, context.home)
     const partContext = { ...checkContext, cwd }
     const matches = config.rules.filter(rule => ruleMatches(rule, call, subject, inputJson, partContext))
     const project = matches.find(rule => rule.source === 'project')

@@ -42,6 +42,9 @@ export const FAKE_RANDOM_TOKEN = ['q8Zr2LkP0vT7mN4bW9sX1c', 'Y6hJ3dF5gA0eR8tU2iO
 export const ROOT = '/work'
 export const HOME = '/home/me'
 
+/** The rules file of `/work/app` in the `multiRepo` world. */
+export const APP_RULES = `${ROOT}/app/.claude/council-of-elrond/rules.json`
+
 export const CONTEXT: ClassifyContext = { root: ROOT, cwd: ROOT, home: HOME }
 
 export const SHIPPED_COMPILED: CompiledConfig = compileConfig(SHIPPED, new Set())
@@ -116,14 +119,17 @@ export type World = {
   toolResult: Record<string, unknown>
   /** Every process the mod started, as argv. */
   processes: string[][]
+  /** The working folder each of `processes` was started in (the same order). */
+  processCwds: (string | undefined)[]
   /** How a process answers, by its argv; absent: exit 0, no output. */
   processReply: (argv: readonly string[]) => ProcessReply
   /** The mocked clock, when the world was made with one. */
   clock: MockClock | undefined
   /** How long each model request takes on the mocked clock, in order (absent: at once). */
   modelDelays: number[]
-  /** Every check the mod spawned, as argv, and how many were ended before they exited. */
+  /** Every check the mod spawned, as argv, the folder each ran in (the same order), and how many were ended before they exited. */
   spawned: string[][]
+  spawnCwds: (string | undefined)[]
   spawnReply: (argv: readonly string[]) => SpawnReply
   ended: number
   /** Whether a write to this path is refused (the call rejects). */
@@ -168,6 +174,12 @@ export function world(
     isClockMocked?: boolean
     /** The engine's own band above the prompt, beneath the plugin: it draws "engine band". */
     isBandDrawn?: boolean
+    /**
+     * C5: the root is the parent of two repositories, not one itself. `/work/app` holds `.git` and a
+     * rules file (an allow rule for `npm publish`, the protected path `config/secret/**`, one check
+     * `app-tests`); `/work/lib` holds `.git` and no rules file.
+     */
+    multiRepo?: boolean
   } = {},
 ): World {
   const w: World = {
@@ -176,7 +188,8 @@ export function world(
       [`${ROOT}/src/app.ts`, 'export const app = 1\n'],
       [`${ROOT}/package.json`, '{"name":"work"}\n'],
     ]),
-    dirs: new Set([ROOT, `${ROOT}/src`, `${ROOT}/build`, HOME, '/', '/etc', `${ROOT}/.claude`]),
+    // The root is a repository, as a project normally is: one scope, today's rules (C5 `multiRepo` below).
+    dirs: new Set([ROOT, `${ROOT}/.git`, `${ROOT}/src`, `${ROOT}/build`, HOME, '/', '/etc', `${ROOT}/.claude`]),
     links: new Map(),
     surfaces: setup.surfaces ?? ['terminal'],
     answer: setup.answer ?? KEEP_BLOCKED,
@@ -190,10 +203,12 @@ export function world(
     toasts: [],
     toolResult: { result: 'ran' },
     processes: [],
+    processCwds: [],
     processReply: () => ({ exitCode: 0, stdout: '' }),
     clock: undefined,
     modelDelays: [],
     spawned: [],
+    spawnCwds: [],
     spawnReply: () => ({ code: 0 }),
     ended: 0,
     writeFails: () => false,
@@ -211,6 +226,23 @@ export function world(
     commandSpecs: [],
     appended: [],
     appendFails: setup.appendFails === true,
+  }
+
+  if (setup.multiRepo === true) {
+    w.dirs.delete(`${ROOT}/.git`)
+    for (const dir of ['app', 'app/.git', 'app/.claude', 'app/.claude/council-of-elrond', 'app/src', 'app/config', 'app/config/secret', 'lib', 'lib/.git', 'lib/src', 'lib/config', 'lib/config/secret']) {
+      w.dirs.add(`${ROOT}/${dir}`)
+    }
+    for (const file of ['app/src/main.ts', 'app/config/secret/x', 'lib/src/lib.ts', 'lib/config/secret/x']) w.files.set(`${ROOT}/${file}`, 'export const x = 1\n')
+    w.files.set(
+      APP_RULES,
+      JSON.stringify({
+        schemaVersion: 1,
+        rules: [{ id: 'app-allow-publish', tier: 'allow', tools: ['Bash'], command: String.raw`^npm\s+publish(\s|$)`, reason: 'The app publishes on purpose.' }],
+        protectedPaths: ['config/secret/**'],
+        gimli: { commands: [{ name: 'app-tests', argv: ['npm', 'test'] }] },
+      }),
+    )
   }
 
   on('session.root', () => ({ value: ROOT }))
@@ -268,6 +300,7 @@ export function world(
   })
   on('process.run', ($, e) => {
     w.processes.push([...e.argv])
+    w.processCwds.push(e.init?.cwd)
     const reply = w.processReply(e.argv)
     if (reply === 'timeout') return { deny: 'timed out' }
     return { value: { exitCode: reply.exitCode, stdout: reply.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -285,6 +318,7 @@ export function world(
   else on('clock.now', () => ({ value: Date.now() }))
   on('process.spawn', async function* ($, e, next) {
     w.spawned.push([...e.argv])
+    w.spawnCwds.push(e.cwd)
     const reply = w.spawnReply(e.argv)
     if (reply === 'no-start') return { deny: `ENOENT: ${e.argv[0]}` }
     let isDone = false
