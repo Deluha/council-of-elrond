@@ -49,10 +49,10 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   ran, "Legendary commit acquired" as a toast and a band row for eight seconds.
 - **`/council` answers through Claude where nothing draws.** In the cloud web client, `claude -p`
   and the SDK, nothing the mod draws reaches you, so when you type `/council` status, report, rules
-  or test there, the same lines also go to Claude, fenced as the council's output and redacted line
-  by line, with an instruction to repeat them to you in its next reply. A scoped exception to "command
-  output never reaches Claude": no other subcommand, no command from a plugin or another session, and
-  nothing at all where a surface draws. `/council rules` shows an exact-string allowlist entry to
+  or test in the cloud web client, the same lines also go to Claude, fenced as the council's output
+  and redacted line by line, with an instruction to repeat them to you in its next reply. A scoped
+  exception to "command output never reaches Claude": no other subcommand, no command from a plugin
+  or another session, and nothing at all where a surface draws. `/council rules` shows an exact-string allowlist entry to
   Claude as `(an exact string, not shown)`, not its first three characters. See "Where nothing
   draws" in the README.
 - **A start notice where nothing draws.** The session starts with a row Claude reads, saying the

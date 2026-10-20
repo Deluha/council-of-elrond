@@ -8,7 +8,7 @@ taken, and [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for how it works and
 
 ```sh
 cd council-of-elrond
-claude plugin test mods/council-of-elrond       # 529 tests, about 40 s
+claude plugin test mods/council-of-elrond       # 532 tests, about 40 s
 tsc -p mods                                    # strict, against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
 ```
@@ -57,8 +57,9 @@ function in that file (passing `$` to an imported function fails validation). Ke
 - `tool.call` runs Elrond's pipeline. Every pass-through goes through `proceed()`, which refuses
   when the hook's remaining own-time budget is under one second. The `.catch` replays the real
   result if `next.called`, else refuses.
-- `prompt.submit` runs `resetForPrompt`, the single per-prompt reset, except for a `/council`
-  command; its `.catch` passes the prompt through, so a failure there never costs the prompt or the
+- `prompt.submit` runs `resetForPrompt`, the single per-prompt reset, for a person's prompt
+  (`HUMAN_ORIGINS`) except a `/council` command; any other prompt only clears the approve cache;
+  its `.catch` passes the prompt through, so a failure there never costs the prompt or the
   plugin.
 - `session.start` loads the config, registers `/council` and, where nothing draws, appends the start
   notice; `command.run` answers it; `session.attach` and `session.detach` keep the status line in step.
@@ -145,8 +146,10 @@ claude -p --plugin-dir /path/to/council-of-elrond/mods/council-of-elrond \
 - A refusal reaches Claude as the tool's error text. A question can't be answered in `-p`, so
   escalations refuse with "nobody can be asked"; that is the path you are testing.
 - `/council …` output arrives as `system/ui_log` lines in stream-json; in plain `-p` it prints
-  nothing. In `-p` nothing draws, so a start notice is appended for Claude and a person's
-  `/council` status, report, rules and test also return a `context` for it (DESIGN §13.5).
+  nothing. In `-p` nothing draws, so a start notice is appended for Claude. A `-p` prompt or
+  command has origin `sdk`, which is not a person's, so `/council` returns no `context` there and
+  `off`, `shadow on` and `model` are refused: those paths are covered by unit tests only
+  (DESIGN §14.3).
 - Loading writes `.claude-plugin/types/` and `tsconfig.json` into the mod folder (gitignored),
   and the probe's `.claude/council-of-elrond/audit/` into the throwaway repo.
 - Interactive UI (the dialog, the pane, the band, the mode label) can only be checked by the
