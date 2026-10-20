@@ -623,7 +623,7 @@ The `/upgrade-types` run for 2.1.304 read the binary with `grep -a` and made one
 - **Worth a look for C4: `decider` on `tool.check`.**
   - A `tool.check` hook that answers `ask` with `decider: 'person'` makes the ask one that only a person settles. The types say: "No machine's allow settles it, and any machine's refusal still refuses: the classifier's block, a PermissionRequest hook's deny … Where nobody can be asked it is a deny."
   - That is the guarantee the C3 probe found `$.ui.ask` lacks (§14.1).
-  - Whether it holds in a cloud session in Auto mode, and whether it could carry the council's own question there, is not checked. It is a question for C4's design, not decided here.
+  - Probed headless for C4 in §14.2: it holds against every machine inside the engine, but a host program's allow settles it. The cloud is still unchecked.
 
 ## 13. Decisions after the final deliverables
 
@@ -776,3 +776,45 @@ Decisions:
    - It changes code, so it goes with C4 and is not made here.
 4. **The probe build was installable** by anyone who named its branch while the branch existed. The branch is to be deleted once these results are recorded.
 5. **The types are 2.1.299; the run was on 2.1.303.** Regenerate them (`/upgrade-types`) before C4.
+
+### 14.2 C4: `tool.check` and `decider`
+
+ROADMAP C4, step 1, run on 2026-10-20 on Claude Code 2.1.304.
+
+**The probes.** The probe was a throwaway mod, not Elrond, with one `tool.call` hook and one `tool.check` hook. It ran headless with `claude -p --plugin-dir` in a throwaway repository.
+- It gated only `echo` commands that carried a marker. For a marked call, the `tool.call` hook noted the call's `tool_use_id`. The `tool.check` hook then answered one of three ways: `{ decision: 'ask', decider: 'person', reason }` (a person ask), a plain `{ decision: 'ask', reason }` as the control, or `decider: 'host'`.
+- A host was emulated with `--input-format stream-json --permission-prompt-tool stdio` and a script that answered each `can_use_tool` request.
+- A PermissionRequest command hook that always allows came from `--settings`.
+- Every log line was redacted.
+
+| Question | Result |
+| :- | :- |
+| The order | `tool.check` runs inside the `tool.call` hook's `next(e)`: the `tool.call` hook first, then `tool.check`, then `next(e)` resolves. Both carry the same `tool_use_id`, so a `tool.call` hook can pass what it decided to its own `tool.check` hook. A `$.tool.check` query from inside `tool.call` runs the plugin's own `tool.check` hook too, with no `tool_use_id`. |
+| `-p`, with nobody to answer | A person ask is a deny in every mode tried: default, `auto`, `bypassPermissions`, `dontAsk`, and default with `--permission-prompts none`. The model reads "Permission to use Bash denied by plugin decider-probe: <reason>". A plain ask in default mode reads "Bash needs approval (asked by plugin decider-probe: <reason>)". Both come back from `next(e)` as `isError: true`. |
+| The classifier | In `auto` mode the classifier settled a plain ask, and the call ran. It did not settle a person ask: with nobody to answer, that was a deny; with a host, it went to the host. |
+| A PermissionRequest hook | An allowing hook settled a plain ask. For a person ask its allow was ignored, and a host that denied 4 s later decided. Without the delay, the host and the hook race. |
+| Allow rules and bypass | An allow rule for the whole tool (`--allowedTools Bash`, core's verdict `allow` with `rule: "Bash"`) did not settle a person ask, and neither did `bypassPermissions`. |
+| A host | **A host program's allow settles a person ask:** the call ran. The `can_use_tool` request for a person ask differs from a plain one only by `suppress_always_allow_rule: true`. No field names a person, and nothing in the host's answer shows that one chose. In default mode the request carries the hook's reason (`decision_reason`, with `decision_reason_type: "hook"`). In `auto` mode it carried neither the reason nor the hook (`decision_reason_type: "other"`). A host's deny reached the model as the host's own message, verbatim. |
+| `decider: 'host'` from a hook | It behaved as a plain ask, as the types say. |
+| The budget | A host answer that took 4 s held the call without counting against the `tool.call` hook's own-time budget (`remainingMs` 9998 afterwards). |
+| Prompt origins | Prompts in `-p` and in stream-json input both arrive as `sdk`. So does a slash command in `-p`, at `command.run`. |
+
+Conclusions:
+
+1. **The engine keeps every machine but the host out of a person ask.**
+   - The classifier, a PermissionRequest hook, an allow rule and `bypassPermissions` cannot settle it.
+   - Where nobody can be asked, it is a deny.
+   - That is the guarantee `$.ui.ask` lacks inside the engine.
+2. **The host is trusted with a person ask, and told little about it.**
+   - In a hosted session, the host's permission callback answers a person ask like any other ask. All it is told is to suppress an "always allow" rule.
+   - In a cloud session, that host is the program that answered the C3 question without the person (§14.1).
+   - So whether a person ask reaches a person in the web client in Auto mode depends on the cloud host. Only a cloud run can show it, and the mod cannot check it per call.
+3. **The mod would still have exactly one `tool.call` hook.**
+   - A `tool.check` hook is a separate event. It does not re-enter `tool.call` and raises no `AskUserQuestion`.
+   - A design using it would note the decision for the call's `tool_use_id` in `tool.call` and answer it in `tool.check`.
+   - If that lookup misses, the hook falls back to core's verdict, which can be `allow`. So such a design would first check with a `$.tool.check` query, and refuse unless the query comes back as a person ask.
+4. **What a person sees is the engine's prompt, not the council's question.**
+   - The options are the engine's own: never "Talk first", the allowlist, or the allow-rule offer.
+   - In Auto mode, the reason may not reach the host.
+   - The `-p` denial wording is not one that `isAutomaticDenial` matches.
+5. **Pending:** a cloud run of a probe build, and the maintainer's decision on what this changes in C4 (ROADMAP C4).
