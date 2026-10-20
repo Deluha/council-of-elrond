@@ -928,7 +928,7 @@ ROADMAP C5, approved 2026-10-20. When the session root is the parent of several 
 - *Keys.* When the touched scopes are anything other than exactly the root scope, `scopeTagOf` (their directories, sorted, joined with a newline) is mixed into the verdict cache key (`fingerprintOf(tool, input, scope)`) and the chat call key (`callKeyOf(call, scope)`), so an approval in one repository never applies in another. With the root scope alone both keys are byte-identical to before, so existing state and tests are unaffected. The audit line's `fingerprint` stays the plain one.
 - *`/council`.* `log`, `report`, `rules` and `models` use the scope of the session cwd (its repository, else the root scope); so does the start-up shadow suggestion. `test` classifies like a real Bash call (all touched scopes, combined) and lists the combined checks. `prompt.submit` and the start-notice relay keep the root context.
 
-**Decisions.** Those marked *approved 2026-10-20* were put to the maintainer and decided; the rest are mine, each with the safer side taken or the question left open.
+**Decisions.** Those marked *approved 2026-10-20* were put to the maintainer and decided; the rest are mine, each with the safer side taken.
 1. **Where a rules file may sit** (ROADMAP's C5 row): only at the top of a repository directly below the root. A file in a plain child, or at depth two (`app/sub/`, even with its own `.git`), is never read (the plain-folder and depth-two test, and mutation (i), pin it).
 2. **A root rules file wins, and a root that is a repository turns the lookup off** *(approved 2026-10-20)*. Either keeps today's single scope. The lookup is on for any root with neither, even one holding no repository.
 3. **The shell target** *(approved 2026-10-20)*: working directories and path words as in "A call's targets". A part runs in the directory before its own `cd`, and its words resolve there too (`cd app` names `<dir>/app`); `classify` itself keeps resolving a `cd` part's words against the directory after it, as before.
@@ -939,7 +939,7 @@ ROADMAP C5, approved 2026-10-20. When the session root is the parent of several 
 8. **Offers only for one scope** (as in the brief). Where it applies, `offerRule` is given the scope's own `where` (its root is the repository), because `suggestRule` classifies again with the rule in place.
 9. **An unknowable `cd`** (`cd $X && make` from `app`) lands the later parts at `/`, outside every repository, so the root scope's defaults are brought in beside `app`'s (a working directory in no repository).
 
-*Interpretations to confirm.*
+*Interpretations, confirmed by the maintainer 2026-10-20.*
 - **Audit with the root scope and a repository.** "Every touched repository" is read literally: `cd app && make` from the root touches the root scope and `app`, and writes only `app`'s log. The root's log gets the line only when no repository was touched.
 - **`status` and `reload`** still use the root context (the brief lists `log`, `report`, `rules`, `models`, `test` and the suggestion). `status` therefore shows the root scope's models and check count, `models` the cwd scope's.
 - **The chat `canSession` flag** is computed against the deciding scope, as `suggestRule` does for the one-scope case, even for a call that gets no allow-rule offer: the session allowance writes nothing, and its key carries the scope tag.
