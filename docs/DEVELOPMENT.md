@@ -8,7 +8,7 @@ taken, and [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for how it works and
 
 ```sh
 cd council-of-elrond
-claude plugin test mods/council-of-elrond       # 635 tests, about 40 s
+claude plugin test mods/council-of-elrond       # 675 tests, about 40 s
 tsc -p mods                                    # strict, against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
 ```

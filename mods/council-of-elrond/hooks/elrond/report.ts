@@ -30,6 +30,8 @@ export type Entry = {
   reviewMs?: number
   ruleAdded?: string
   council?: { voices: { member: string; profile: string | null; tokens: number }[] }
+  /** A council line (a `council` field, or `member` is `council`) whose `voices` is not an array: it adds no cost. */
+  councilUnreadable?: true
 }
 
 const TOP = 5
@@ -57,12 +59,14 @@ function entryOf(value: unknown): Entry | undefined {
         return member === null ? [] : [{ member, profile: str(v.profile), tokens: num(v.tokens) }]
       })
     : undefined
+  const member = str(raw.member)
+  const isCouncilLine = (raw.council !== undefined && raw.council !== null) || member === 'council'
   return {
     ts,
     tool,
     opKey: str(raw.opKey),
     ruleId: str(raw.ruleId),
-    member: str(raw.member),
+    member,
     profile: str(raw.profile),
     model: str(raw.model),
     verdict: str(raw.verdict),
@@ -74,6 +78,7 @@ function entryOf(value: unknown): Entry | undefined {
     ...(typeof raw.reviewMs === 'number' && { reviewMs: num(raw.reviewMs) }),
     ...(str(raw.ruleAdded) !== null && { ruleAdded: str(raw.ruleAdded) as string }),
     ...(voices !== undefined && { council: { voices } }),
+    ...(isCouncilLine && voices === undefined && { councilUnreadable: true as const }),
   }
 }
 
@@ -211,6 +216,8 @@ export function reportOutput(files: readonly string[], unreadable: readonly stri
   let total = 0
   for (const entry of entries) {
     if (entry.model === null || entry.cached || entry.member === null) continue
+    // A council line without a readable voices list: its cost cannot be split, so it adds none.
+    if (entry.councilUnreadable === true) continue
     total += entry.tokens
     if (entry.council !== undefined) {
       const sitting = costOf('council')

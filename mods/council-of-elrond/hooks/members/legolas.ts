@@ -52,7 +52,22 @@ const MAX_MATCH_CELLS = 250_000
 
 type Op = { kind: ' ' | '-' | '+'; line: string }
 
-const linesOf = (text: string): string[] => (text === '' ? [] : text.replace(/\n$/, '').split('\n'))
+/** Appended to the last line of a text that does not end in a newline; a line holds no `\n`, so it is unambiguous. */
+const NO_EOL = '\n'
+
+const NO_EOL_MARKER = '\\ No newline at end of file'
+
+/**
+ * A text as lines. `keys` are what is compared and shown: a trailing `\r` is
+ * stripped, and a final line with no newline carries NO_EOL, so it differs
+ * from the same line with one (as in git). `raw` keeps the `\r`.
+ */
+function linesOf(text: string): { keys: string[]; raw: string[] } {
+  if (text === '') return { keys: [], raw: [] }
+  const raw = text.replace(/\n$/, '').split('\n')
+  const keys = raw.map((line, index) => line.replace(/\r$/, '') + (index === raw.length - 1 && !text.endsWith('\n') ? NO_EOL : ''))
+  return { keys, raw }
+}
 
 /**
  * A line diff, bounded: the common head and tail are trimmed, and the middle
@@ -133,8 +148,14 @@ export function unified(ops: readonly Op[]): string[] {
     const slice = ops.slice(start, end + 1)
     const oldCount = slice.filter(op => op.kind !== '+').length
     const newCount = slice.filter(op => op.kind !== '-').length
-    out.push(`@@ -${oldAt[start]},${oldCount} +${newAt[start]},${newCount} @@`)
-    for (const op of slice) out.push(`${op.kind}${op.line}`)
+    // A side with no lines starts at the line before, as git writes it (`-0,0` for a new file).
+    const oldStart = oldCount === 0 ? (oldAt[start] as number) - 1 : oldAt[start]
+    const newStart = newCount === 0 ? (newAt[start] as number) - 1 : newAt[start]
+    out.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`)
+    for (const op of slice) {
+      if (op.line.endsWith(NO_EOL)) out.push(`${op.kind}${op.line.slice(0, -NO_EOL.length)}`, NO_EOL_MARKER)
+      else out.push(`${op.kind}${op.line}`)
+    }
     k++
   }
   return out
@@ -143,8 +164,24 @@ export function unified(ops: readonly Op[]): string[] {
 /** A unified diff of `before` to `after` under a `---`/`+++` header, cut to `maxLines`. */
 export function textDiff(path: string, before: string | undefined, after: string, maxLines: number): string {
   const header = [`--- ${before === undefined ? '/dev/null' : `a/${path}`}`, `+++ b/${path}`]
-  const hunks = unified(lineOps(linesOf(before ?? ''), linesOf(after)))
-  const body = hunks.length === 0 ? ['(no change)'] : hunks
+  const from = linesOf(before ?? '')
+  const to = linesOf(after)
+  const ops = lineOps(from.keys, to.keys)
+  // Lines equal once `\r` is stripped but not as written: only their line endings change.
+  let endings = 0
+  let i = 0
+  let j = 0
+  for (const op of ops) {
+    if (op.kind === ' ' && from.raw[i] !== to.raw[j]) endings++
+    if (op.kind !== '+') i++
+    if (op.kind !== '-') j++
+  }
+  const lines = (count: number): string => `${count} ${count === 1 ? 'line' : 'lines'}`
+  const hunks = unified(ops)
+  const body =
+    hunks.length > 0
+      ? [...hunks, ...(endings > 0 ? [`(line endings also change on ${lines(endings)})`] : [])]
+      : [endings > 0 ? `(only line endings change, on ${lines(endings)})` : '(no change)']
   return truncate([...header, ...body].join('\n'), maxLines + header.length, LEGOLAS_LIMITS.diffChars)
 }
 
@@ -164,6 +201,16 @@ function cellSource(notebook: string, cellId: string | undefined): { text: strin
   }
 }
 
+/** A snippet or a cell is not a file's end: end its last line, so no "no newline" marker shows on it. */
+const whole = (text: string): string => (text === '' || text.endsWith('\n') ? text : `${text}\n`)
+
+/** One Edit step on `text`; `undefined` when its `old_string` is missing, empty or not found. */
+function applyEdit(text: string, step: unknown): string | undefined {
+  const { old_string: oldText, new_string: newText, replace_all: all } = (typeof step === 'object' && step !== null ? step : {}) as Record<string, unknown>
+  if (typeof oldText !== 'string' || oldText === '' || !text.includes(oldText)) return undefined
+  return all === true ? text.split(oldText).join(str(newText)) : text.replace(oldText, () => str(newText))
+}
+
 /**
  * What a file tool call would change, as a diff, from its arguments and the
  * file as it stands. An Edit whose text is not found, or a file that can't
@@ -175,19 +222,27 @@ export function callDiff(call: Call, path: string, current: Current, maxLines: n
   if (call.tool === 'Edit') {
     const oldText = str(call.input.old_string)
     const newText = str(call.input.new_string)
-    if (before !== undefined && oldText !== '' && before.includes(oldText)) {
-      const after = call.input.replace_all === true ? before.split(oldText).join(newText) : before.replace(oldText, () => newText)
-      return { diff: textDiff(path, before, after, maxLines), isNew: false }
+    // The 2.1.304 types have no `edits` field, but the secrets scan reads one, so the diff does too:
+    // the top-level edit first, then each entry, every one on the text the last left.
+    const edits: unknown[] | undefined = Array.isArray(call.input.edits) ? call.input.edits : undefined
+    const steps = edits === undefined ? [call.input] : [...(oldText === '' ? [] : [call.input]), ...edits]
+    if (before !== undefined && steps.length > 0) {
+      let after: string | undefined = before
+      for (const step of steps) {
+        after = after === undefined ? undefined : applyEdit(after, step)
+      }
+      // One step that does not apply means no partial diff.
+      if (after !== undefined) return { diff: textDiff(path, before, after, maxLines), isNew: false }
     }
     return {
-      diff: textDiff(path, oldText, newText, maxLines),
+      diff: textDiff(path, whole(oldText), whole(newText), maxLines),
       note: before === undefined ? 'unreadable' : 'not-found',
       isNew,
     }
   }
   if (call.tool === 'NotebookEdit') {
     const mode = str(call.input.edit_mode) || 'replace'
-    const newSource = str(call.input.new_source)
+    const newSource = whole(str(call.input.new_source))
     const cellId = typeof call.input.cell_id === 'string' ? call.input.cell_id : undefined
     const cell = before === undefined || mode === 'insert' ? undefined : cellSource(before, cellId)
     const label = `${path} (cell ${cellId ?? 'first'}, ${mode})`
@@ -195,7 +250,7 @@ export function callDiff(call: Call, path: string, current: Current, maxLines: n
     if (cell === undefined) {
       return { diff: textDiff(label, undefined, mode === 'delete' ? '' : newSource, maxLines), note: before === undefined ? 'unreadable' : 'notebook-unparsed', isNew }
     }
-    return { diff: textDiff(label, cell.text, mode === 'delete' ? '' : newSource, maxLines), isNew: false }
+    return { diff: textDiff(label, whole(cell.text), mode === 'delete' ? '' : newSource, maxLines), isNew: false }
   }
   // Write: the whole new content against the file as it stands.
   const content = str(call.input.content)

@@ -78,6 +78,8 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   records `chat-allow`, `chat-session` and `chat-deny`, and `/council report` counts the first two
   with the calls you allowed. The session record is now version 5; a version 4 record is read as 5,
   so an upgrade keeps its rounds and lockouts. See "Where nothing draws" in the README.
+- **`sqlite3` joins the database reviewer's clients.** Its SQL is read from `-cmd`, from the
+  statement after the database file (`sqlite3 app.db "DROP TABLE x"`) and from `-init` files.
 
 ### Changed
 - **The nobody-to-ask refusal says what was refused.** Where nothing draws and a call needs you, the
@@ -127,6 +129,17 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **A project check that can't start says why.** The refusal Claude reads now carries the engine's
   error, such as a program missing from the PATH, redacted and cut to one line. The audit log still
   keeps no check output.
+- **Operation keys follow what a call does, not how it is worded.** A SQL client's inline SQL
+  (`psql -c "…"`, `--command=…`, `mysql -e`) is no longer part of its key, so rewording a statement
+  no longer starts a fresh set of rounds and failed attempts. A redirect write to a file keys on the
+  file (`echo x > out.txt` and `echo y > out.txt` are one operation). `git push origin HEAD` is the
+  same operation as `git push origin`, and `git push -o <value> origin main` the same as
+  `git push origin main`. `psql -n` no longer swallows the next word. Counts stored under the old
+  keys simply stop matching.
+- **A switched-off diff reviewer named for a shell command is reported as off**, not as "no file to
+  diff". The call is still reviewed by the destructive-operations reviewer.
+- **`/council report`:** a council line in the audit log with no readable `voices` list adds no cost,
+  instead of counting under a reviewer named `council`.
 
 
 ### Security
@@ -134,6 +147,15 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   `echo` used to reach the network or the transcript unscanned; it is now refused, as on a gated
   call, and logged with tier `allow` so `/council report` counts it. Low-confidence findings on an
   allowed call still pass: the mod never asks on an allowed call.
+- **No preview where git would run elsewhere.** The preview, the diff reviewer's read and a merge's
+  current-branch check now skip a call that points git at another repository: `GIT_DIR=`,
+  `GIT_WORK_TREE=` and the other location variables (also from an earlier `export` or `env`),
+  `--namespace`, or a `cd` to a folder outside the project or one the mod cannot name (`cd $X`). The
+  diff reviewer then sits out ("not asked: the changes could not be read"), and a merge whose branch is
+  unknown counts as a merge into a protected branch, so it goes to the full council.
+- **The mod's own git starts no configured program.** The write preview's `git diff --stat` turns off
+  external diff drivers and textconv filters, and every git the mod runs switches off `core.fsmonitor`
+  and `log.showSignature` (which runs the configured gpg program).
 
 ### Fixed
 - **The status line is cleared when its surface leaves.** A label set for a phone or VS Code
@@ -170,6 +192,19 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   as a failed attempt; before, they were ordinary tool errors.
 - **A failure in the prompt hook no longer risks the mod.** The mod's prompt hook now has its own
   error handler, so if it fails the prompt goes through as typed and the mod stays loaded.
+- **The diff reviewer sees the whole change of an `Edit` that carries an `edits` array**, instead of
+  an empty or partial diff.
+- **Diffs read as git writes them.** A new file starts at `-0,0`, CRLF files show without stray `\r`,
+  a change of line endings alone is named, and a missing newline at the end of a file is marked.
+- **A reviewer's `safer_alternative` is cut to 400 characters**, as its reason already was.
+- **Git previews follow a `cd`.** A push, merge, reset or rebase after a `cd` into a folder inside the
+  project is previewed in that folder (links are resolved, and a folder that really lies outside the
+  project is not used), including the diff the full council's diff reviewer reads and the branch a
+  merge is checked against.
+- **`git push -o`, `--push-option` and `--receive-pack` values are read as values.** The preview and the
+  diff reviewer no longer take `ci.skip` in `git push -o ci.skip origin main` for the remote.
+- **A quoted delete target** is previewed under its own name (a name with literal quote characters keeps
+  them).
 
 ## [0.5.0] - 2026-10-08
 

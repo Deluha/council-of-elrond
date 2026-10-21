@@ -126,6 +126,41 @@ describe('the report', () => {
     expect(joined).toContain('the full council: 1 sittings, 3000 tokens, median 2.0 s')
   })
 
+  test('a council line without a readable voices list adds no cost, and is not counted under a member named council', () => {
+    const council = (extra: Record<string, unknown>): string =>
+      JSON.stringify({ ts: '2026-10-05T12:00:00.000Z', tool: 'Bash', outcome: 'ran', model: 'opus', verdict: 'approve', tokens: 3_000, reviewMs: 2_000, ...extra }) + '\n'
+    const solo = review('gandalf', 'approve', 100, 1_000)
+    // The cost section only: the span line counts every line, the unreadable council line included.
+    const costOf = (...extra: string[]): string => reportOutput([solo + extra.join('')]).lines.join('\n').split('\n\nCost per reviewer')[1] ?? ''
+    const baseline = costOf()
+    expect(baseline).toContain(' (100 tokens in all):')
+    // `voices` missing, not an array, or a council field of another shape.
+    for (const bad of [{ member: 'gandalf', council: {} }, { member: 'gandalf', council: { voices: 'x' } }, { member: 'gandalf', council: { voices: { a: 1 } } }, { member: 'gandalf', council: 'x' }]) {
+      expect(costOf(council(bad)), JSON.stringify(bad)).toBe(baseline)
+    }
+    // No `council` field, but the member is `council`.
+    const named = costOf(council({ member: 'council' }))
+    expect(named).toBe(baseline)
+    expect(named).not.toContain('[council]')
+    expect(named).not.toContain('sittings')
+    expect(costOf(council({ member: 'council', council: { voices: 'x' } }))).toBe(baseline)
+    // The rest of the line still counts: a refusal is a refusal.
+    expect(reportOutput([council({ member: 'council', outcome: 'refused', ruleId: 'r1' })]).lines.join('\n')).toContain('r1: 1')
+  })
+
+  test('a council line with a valid voices list is counted as before, even when it filters to none', () => {
+    const council = (voices: unknown): string =>
+      JSON.stringify({ ts: '2026-10-05T12:00:00.000Z', tool: 'Bash', outcome: 'ran', member: 'council', model: 'opus', verdict: 'approve', tokens: 3_000, reviewMs: 2_000, council: { voices } }) + '\n'
+    const full = reportOutput([council([{ member: 'gandalf', tokens: 1_000 }])]).lines.join('\n')
+    expect(full).toContain('Cost per reviewer (3000 tokens in all):')
+    expect(full).toContain('the full council: 1 sittings, 3000 tokens, median 2.0 s')
+    expect(full).toContain('[gandalf]: 0 reviews alone, 1000 tokens (1000 of them in the full council)')
+    const empty = reportOutput([council([{ nonsense: true }])]).lines.join('\n')
+    expect(empty).toContain('Cost per reviewer (3000 tokens in all):')
+    expect(empty).toContain('the full council: 1 sittings, 3000 tokens, median 2.0 s')
+    expect(reportOutput([council([])]).lines.join('\n')).toContain('the full council: 1 sittings')
+  })
+
   test('an empty log, and lines from before review times were logged', () => {
     expect(reportOutput([]).lines).toEqual(['No gated calls are logged yet.'])
     const old = reportOutput([line({ member: 'gandalf', model: 'sonnet', verdict: 'approve', tokens: 900 })]).lines.join('\n')

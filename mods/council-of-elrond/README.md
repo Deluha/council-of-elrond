@@ -235,7 +235,8 @@ per call:
   `protectedPaths: ["config/secret/**"]` in `app`'s file is `app/config/secret/**`. A council
   call runs the checks of every repository it touches, each in its own directory, eight in all
   (the repositories' lists joined in the order they were touched). Git (the preview, a push's range,
-  the current branch for a merge) runs in the deciding repository.
+  the current branch for a merge) runs in the deciding repository (or in the folder a `cd` in the
+  command leads to, when it is inside the project).
 - **Secrets.** The patterns of the root and of every repository the call touches apply, and
   everything the call shows is redacted by all of them. An allowlist entry counts only when every
   touched repository lists it.
@@ -513,6 +514,11 @@ data, and the proposed command never runs.
 - **`git reset`, `git rebase`, `git commit --amend`:** recent commits, marked with the remote branches that point at them, and uncommitted changes.
 - **Write, Edit:** the file's diff stat against `HEAD`, and whether git tracks it.
 
+They run in the repository the call is decided in, or in the folder a `cd` earlier in the command
+leads to when that folder is inside the project. A call that points git elsewhere (`-C`,
+`--git-dir`, `--work-tree`, `--namespace`, `GIT_DIR=` and the other location variables, or a `cd`
+outside the project) gets no git preview, and the diff reviewer sits out of its council.
+
 Each inspection has 5 seconds. No preview is never a reason to allow or block.
 
 ## Rounds, failed attempts and lockout
@@ -624,6 +630,8 @@ hold is classified (0.5.0); the gaps that remain:
 - **Shell symbolic links aren't resolved.** File-tool paths are resolved to their real path; paths in shell commands are not.
 - **Two-sided glob intersection isn't computed.** A glob that names a protected file directly (`cat .en*`) is caught, but a glob with a wildcard in a middle segment against a protected `**` glob (`cat .github/*/ci.yml`) may not be.
 - **Not every program that changes things is named.** The shipped rules cover the common ones; a cloud or database CLI, an HTTP write or an interpreter route they don't list may pass. Add a project rule, or propose a default.
+- **Alternating verbs on one target are separate operations.** `rm build`, `trash build`, `find build -delete` and a script that deletes it each get their own rounds and their own failed attempts, since the key starts with the verb. Three refusals of `rm` do not lock out the fourth try with `trash`; the per-kind counter catches only retries of the same verb.
+- **A `.sql` file's content isn't read by the block rules.** The database reviewer reads a `.sql` file a command names inside the project (`psql -h prod-db -f drop.sql`), but the rules classify the command without opening any file, so a destructive file run against production is reviewed, not blocked. Put a project rule on the command if a file must never run against a database.
 - **POSIX only:** no Windows paths or PowerShell parsing. Windows is unsupported ([docs/INSTALL.md](../../docs/INSTALL.md)).
 - **Long commands aren't parsed.** Commands longer than 20,000 characters, or nested more than four levels deep, go to review.
 
@@ -635,14 +643,15 @@ hold is classified (0.5.0); the gaps that remain:
 - **Diffs are built from the call, not from git.** The diff reviewer sees the change the call describes against the file as it stands when the hook runs; a file over 4 MiB, or one it can't read, is shown as the call's own text only, and the prompt says so.
 - **The project checks run your project's code.** Claude can edit the tests and scripts they run (file edits go to the diff reviewer, not to you), so a passing check is only as good as the code it runs. They run as you, with your environment.
 - **A push with no range to read.** For a branch the remote doesn't have yet, the range is read against the remote's default branch, which needs `<remote>/HEAD`: `git clone` sets it, `git remote add` does not (`git remote set-head origin -a` sets it). Without it, or for a push that names no remote, the diff reviewer sits out of that council and the preview shows no commits.
-- **The database reviewer sees only the SQL it can find**: inline `-c`/`-e`, heredocs, and `.sql` files named in the command and inside the project. A migration tool's own migration files (`prisma migrate deploy`) are not looked up.
+- **Git pointed elsewhere.** For a push or merge that runs git in another repository (`git -C`, `GIT_DIR=`, a `cd` out of the project), the mod does not read that repository: the preview shows no commits, the diff reviewer sits out of the council, and a merge counts as one into a protected branch.
+- **The database reviewer sees only the SQL it can find**: inline `-c`/`-e` (and `sqlite3`'s `-cmd` and its statement after the database file), heredocs, and `.sql` files named in the command and inside the project. A migration tool's own migration files (`prisma migrate deploy`) are not looked up.
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.
 - Rules you loosen, and calls you allow. An allow rule you add skips review, the ask tier and the secrets scan for that exact command; it does not follow a `cd` earlier in another command, so `rm -r build` is allowed in whichever folder Claude runs it.
 - **Low-confidence secrets in allowed calls.** An allowed call is scanned for high-confidence secrets only: a `password=…`-style assignment or a random-looking token in an allowed `curl` or `echo` passes without a question.
 - **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`), an identifier without a digit and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through the scan (redaction still hides it).
 - **Two sessions in one project share one audit log without a lock.** Claude Code's file access has none, so lines can interleave or be lost; the report skips lines it cannot parse.
 - **Several repositories: a command too long or too complex to parse** names no `cd` or path, so it is classified against the repository of the session's working directory only (it is reviewed at least). Two repositories' checks with the same name show under one name in the debate pane.
-- **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb.
+- **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb. A key names the verb and its targets, not the wording: a SQL client's inline statement, the text an `echo` writes to a file and the value of a push option are not part of it.
 - A hook that overruns its time limit. The engine may run the call; Elrond refuses rather than pass with its budget nearly spent, but it can't act once it has run out.
 
 ## Adding a member

@@ -49,7 +49,7 @@ import { ARAGORN_LIMITS, productionHits, sqlOf } from './members/aragorn.js'
 import type { SqlPiece } from './members/aragorn.js'
 import { requestOf, whoOf } from './members/brief.js'
 import type { Brief } from './members/brief.js'
-import { formatPreview, INSPECTION_TIMEOUT_MS, MAX_LISTED, planPreview, rangeDiffInspection } from './members/galadriel.js'
+import { formatPreview, INSPECTION_TIMEOUT_MS, MAX_LISTED, mergePlace, planPreview, rangeDiffInspection } from './members/galadriel.js'
 import type { Inspection, InspectionResult } from './members/galadriel.js'
 import { GANDALF_LIMITS } from './members/gandalf.js'
 import { isGimliBlock, keepTail, problemOf, statusOf, tailOf } from './members/gimli.js'
@@ -153,8 +153,22 @@ const CONFIG_ROWS: Readonly<Partial<Record<ModelSlot, string>>> = {
 /** What the `/config` model picker offers; anything else is session-only. */
 const PICKER_OPTIONS: readonly string[] = ['default', 'sonnet', 'opus', 'fable', 'haiku']
 
-/** Git for previews: no locks taken, no prompts, plain output. */
-const GIT_ENV: Record<string, string> = { GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', LC_ALL: 'C' }
+/**
+ * Git for previews: no locks taken, no prompts, plain output, and no program
+ * started from the repository's config: `core.fsmonitor` and `log.showSignature`
+ * (which runs the configured gpg program) are forced off.
+ */
+const GIT_ENV: Record<string, string> = {
+  GIT_OPTIONAL_LOCKS: '0',
+  GIT_TERMINAL_PROMPT: '0',
+  GIT_PAGER: 'cat',
+  LC_ALL: 'C',
+  GIT_CONFIG_COUNT: '2',
+  GIT_CONFIG_KEY_0: 'core.fsmonitor',
+  GIT_CONFIG_VALUE_0: 'false',
+  GIT_CONFIG_KEY_1: 'log.showSignature',
+  GIT_CONFIG_VALUE_1: 'false',
+}
 
 const PROBE_TIMEOUT_MS = 20_000
 
@@ -475,17 +489,32 @@ async function scriptsOf(
 }
 
 /**
+ * The folder git runs in: the deciding scope's, or, for a call that `cd`s
+ * inside the root, that folder with its links resolved. Undefined when it
+ * cannot be resolved or really lies outside the root (a link may lead out).
+ */
+async function gitDirOf($: EngineInterface, cwd: string | undefined, ctx: CallContext): Promise<string | undefined> {
+  if (cwd === undefined) return ctx.gitDir
+  const real = (await $.fs.stat(cwd, { resolve: true }).catch(() => undefined))?.realPath
+  return real !== undefined && (real === ctx.realRoot || isInside(real, ctx.realRoot)) ? real : undefined
+}
+
+/**
  * Runs one git inspection from the table: its argv, then, only if that exits
  * non-zero or throws and the table gives one, its fixed `orElse` argv, once.
  * The fallback's result (and label) stands only if it succeeds; otherwise the
- * first attempt's outcome is kept, as if there were no fallback.
+ * first attempt's outcome is kept, as if there were no fallback. A step with
+ * a folder of its own runs there if that really lies inside the root, and
+ * does not run (it throws, as any failure) if not.
  */
 async function runGitInspection(
   $: EngineInterface,
-  step: { label: string; argv: readonly string[]; orElse?: { label: string; argv: readonly string[] } },
+  step: { label: string; argv: readonly string[]; orElse?: { label: string; argv: readonly string[] }; cwd?: string },
   ctx: CallContext,
 ): Promise<{ label: string; run: ProcessRunResult }> {
-  const attempt = (argv: readonly string[]): Promise<ProcessRunResult> => $.process.run(argv, { cwd: ctx.gitDir, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
+  const dir = await gitDirOf($, step.cwd, ctx)
+  if (dir === undefined) throw new Error('git would run outside the project')
+  const attempt = (argv: readonly string[]): Promise<ProcessRunResult> => $.process.run(argv, { cwd: dir, env: GIT_ENV, timeoutMs: INSPECTION_TIMEOUT_MS })
   let first: ProcessRunResult | undefined
   let failure: unknown
   try {
@@ -1810,7 +1839,9 @@ export const register: Register = (on, options) => {
       for (const seat of seats) {
         const who = whoOf(seat.member, seat.member === 'aragorn' ? seat.profile : undefined)
         if (seat.member === 'legolas' && seat.range !== undefined) {
-          const inspection = range === undefined ? undefined : rangeDiffInspection(range.kind, range.part)
+          // The part's own folder (after any `cd`): rangeOf names the part, the finding holds where it runs.
+          const rangeCwd = range === undefined ? undefined : classification.findings.find(finding => finding.part === range.part)?.cwd
+          const inspection = range === undefined ? undefined : rangeDiffInspection(range.kind, range.part, call, where, rangeCwd)
           const read = inspection?.kind === 'git' ? await rangeDiffOf($, inspection, ctx) : undefined
           sittings.push(
             read === undefined
@@ -1921,7 +1952,10 @@ export const register: Register = (on, options) => {
     if (isOutOfRounds(state, operation.key) && !shadow) return askUser('escalate.rounds', [])
     if (settings.councilEnabled) {
       const compiled = ctx.loaded.compiled
-      const branch = needsCurrentBranch(classification, compiled) ? await currentBranchOf($, ctx.gitDir) : undefined
+      // A merge that would run elsewhere (-C, GIT_DIR, a folder outside the root) has an unknown branch, which counts as protected.
+      const place = needsCurrentBranch(classification, compiled) ? mergePlace(call, classification, where) : undefined
+      const branchDir = place === undefined ? undefined : await gitDirOf($, place.cwd, ctx)
+      const branch = branchDir === undefined ? undefined : await currentBranchOf($, branchDir)
       const big = bigOperationOf(classification, compiled, branch !== undefined ? { currentBranch: branch } : {})
       if (big !== undefined) return holdCouncil(big)
     }

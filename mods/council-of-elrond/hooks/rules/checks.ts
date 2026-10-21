@@ -55,7 +55,8 @@ function rmOutsideRepo(part: ShellPart, context: CheckContext): boolean {
   })
 }
 
-const OPTIONS_WITH_ARG = new Set(['--repo', '-o', '--push-option', '--receive-pack', '--exec'])
+/** Options of `git push` that take the next word as their value. */
+export const PUSH_OPTIONS_WITH_ARG: ReadonlySet<string> = new Set(['--repo', '-o', '--push-option', '--receive-pack', '--exec'])
 
 /** A force push (or a delete) naming a protected branch, or of every branch. */
 function forcePushProtected(part: ShellPart, context: CheckContext): boolean {
@@ -67,7 +68,7 @@ function forcePushProtected(part: ShellPart, context: CheckContext): boolean {
   const positional: string[] = []
   for (let i = 0; i < rest.length; i++) {
     const word = rest[i] as string
-    if (OPTIONS_WITH_ARG.has(word)) {
+    if (PUSH_OPTIONS_WITH_ARG.has(word)) {
       i++
     } else if (word === '--force' || word === '-f' || word.startsWith('--force-with-lease') || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(word)) {
       isForce = true

@@ -47,8 +47,19 @@ export const ARAGORN_LIMITS = {
   maxSqlFiles: 3,
 } as const
 
+export type ClientOptions = {
+  /** Options whose value is SQL. */
+  inline: readonly string[]
+  /** Options whose value is a file of SQL. */
+  file: readonly string[]
+  /** The 1-based positional that is SQL too (sqlite3 takes `sqlite3 DATABASE SQL`). */
+  sqlArgAt?: number
+  /** Other options that take values, with how many words each takes, so a value is not read as a positional. Used with `sqlArgAt`. */
+  valueOptions?: Readonly<Record<string, number>>
+}
+
 /** Per SQL client: the options that take SQL inline, and those that take a file of it. */
-const CLIENT_OPTIONS: Readonly<Record<string, { inline: readonly string[]; file: readonly string[] }>> = {
+export const CLIENT_OPTIONS: Readonly<Record<string, ClientOptions>> = {
   psql: { inline: ['-c', '--command'], file: ['-f', '--file'] },
   mysql: { inline: ['-e', '--execute'], file: [] },
   mariadb: { inline: ['-e', '--execute'], file: [] },
@@ -58,6 +69,17 @@ const CLIENT_OPTIONS: Readonly<Record<string, { inline: readonly string[]; file:
   'clickhouse-client': { inline: ['-q', '--query'], file: ['--queries-file'] },
   sqlcmd: { inline: ['-Q', '-q'], file: ['-i'] },
   cqlsh: { inline: ['-e', '--execute'], file: ['-f', '--file'] },
+  // `-heap`, `-pagecache` and `-lookaside` take two words (SIZE and N).
+  sqlite3: {
+    // sqlite3 accepts every option with one dash or two.
+    inline: ['-cmd', '--cmd'],
+    file: ['-init', '--init'],
+    sqlArgAt: 2,
+    valueOptions: {
+      ...Object.fromEntries(['separator', 'newline', 'nullvalue', 'vfs', 'maxsize', 'mmap', 'escape'].flatMap(name => [[`-${name}`, 1], [`--${name}`, 1]])),
+      ...Object.fromEntries(['heap', 'pagecache', 'lookaside'].flatMap(name => [[`-${name}`, 2], [`--${name}`, 2]])),
+    },
+  },
 }
 
 const isSqlFile = (word: string): boolean => /\.sql$/i.test(word)
@@ -77,7 +99,8 @@ export function sqlOf(classification: Classification): { inline: SqlPiece[]; fil
     if (part === undefined || seat?.member !== 'aragorn' || seat.profile !== 'database') continue
     const words = part.coreWords
     const program = words[0] ?? ''
-    const options = CLIENT_OPTIONS[program.slice(program.lastIndexOf('/') + 1)] ?? { inline: [], file: [] }
+    const options: ClientOptions = CLIENT_OPTIONS[program.slice(program.lastIndexOf('/') + 1)] ?? { inline: [], file: [] }
+    let positional = 0
     const named = (word: string): void => {
       if (!/[$`*?]/.test(word)) files.push({ word, ...(finding.cwd !== undefined && { cwd: finding.cwd }) })
     }
@@ -92,6 +115,10 @@ export function sqlOf(classification: Classification): { inline: SqlPiece[]; fil
       } else if (options.file.includes(option) && value !== undefined) {
         named(value)
         if (eq < 0) i++
+      } else if (options.valueOptions?.[word] !== undefined) {
+        i += options.valueOptions[word] as number
+      } else if (options.sqlArgAt !== undefined && !word.startsWith('-') && ++positional === options.sqlArgAt) {
+        inline.push({ label: `${program} argument`, text: word })
       } else if (isSqlFile(word)) {
         named(word)
       }
