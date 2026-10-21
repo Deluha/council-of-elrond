@@ -34,6 +34,19 @@ describe('verdict parsing', () => {
     for (const reply of malformed) expect(parseVerdict(reply).ok, reply).toBe(false)
   })
 
+  test('safer_alternative is capped at 400 characters, not cut to sentences; a missing one is fine on approve only', () => {
+    const long = parseVerdict(`{"verdict":"revise","reason":"Too wide.","safer_alternative":"${'x'.repeat(1000)}"}`)
+    expect(long.ok && long.verdict.safer_alternative).toBe(`${'x'.repeat(399)}…`)
+    const command = parseVerdict('{"verdict":"revise","reason":"Too wide.","safer_alternative":"  rm a.txt. Then rm b.txt. Then rm c.txt.  "}')
+    expect(command.ok && command.verdict.safer_alternative).toBe('rm a.txt. Then rm b.txt. Then rm c.txt.')
+    expect(parseVerdict('{"verdict":"approve","reason":"Fine."}')).toEqual({
+      ok: true,
+      verdict: { verdict: 'approve', reason: 'Fine.', safer_alternative: '' },
+    })
+    expect(parseVerdict('{"verdict":"block","reason":"No."}').ok).toBe(false)
+    expect(parseVerdict('{"verdict":"revise","reason":"No."}').ok).toBe(false)
+  })
+
   test('the reason is held to two sentences', () => {
     const parsed = parseVerdict('{"verdict":"approve","reason":"One. Two. Three. Four.","safer_alternative":""}')
     expect(parsed.ok && parsed.verdict.reason).toBe('One. Two.')

@@ -1,4 +1,6 @@
+import { CLIENT_OPTIONS } from '../members/aragorn.js'
 import { redact } from '../redact.js'
+import { PUSH_OPTIONS_WITH_ARG } from '../rules/checks.js'
 import { FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
 import type { Call, Classification } from '../rules/classify.js'
 import { relativeTo, resolve } from '../rules/paths.js'
@@ -41,12 +43,10 @@ const SQL_CLIENTS: ReadonlySet<string> = new Set([
 ])
 
 /** Options of SQL clients that name the database or its host. */
-const SQL_TARGET_OPTIONS: ReadonlySet<string> = new Set(['-d', '--dbname', '-h', '--host', '-D', '--database', '--db', '-n'])
+const SQL_TARGET_OPTIONS: ReadonlySet<string> = new Set(['-d', '--dbname', '-h', '--host', '-D', '--database', '--db'])
 
 const MAX_TARGETS = 8
 const MAX_KEY_CHARS = 300
-
-const unquote = (word: string): string => word.replace(/^['"]|['"]$/g, '')
 
 const programOf = (part: ShellPart): string => {
   const first = part.coreWords[0] ?? ''
@@ -55,7 +55,7 @@ const programOf = (part: ShellPart): string => {
 
 /** A path as the key spells it: relative to the root when inside it, no trailing slash. */
 function normalPath(word: string, cwd: string, context: OperationContext): string {
-  const absolute = resolve(unquote(word), cwd, context.home)
+  const absolute = resolve(word, cwd, context.home)
   const relative = relativeTo(absolute, context.root)
   const out = relative ?? absolute
   return out === '' ? '.' : out.replace(/\/+$/, '') || '/'
@@ -65,30 +65,48 @@ const positionals = (words: readonly string[]): string[] => words.filter(word =>
 
 /** `git push [options] [remote] [refspec...]`: remote plus destination branches. */
 function pushTargets(args: readonly string[]): string[] {
-  const words = positionals(args)
+  const words: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const word = args[i] ?? ''
+    if (PUSH_OPTIONS_WITH_ARG.has(word)) i++ // `-o ci.skip`: the value is not the remote
+    else if (!word.startsWith('-') && word !== '') words.push(word)
+  }
   const remote = words[0] ?? '(default remote)'
   const branches = words.slice(1).map(refspec => {
     const destination = refspec.includes(':') ? refspec.slice(refspec.indexOf(':') + 1) : refspec
-    return destination.replace(/^\+/, '').replace(/^refs\/heads\//, '')
+    const branch = destination.replace(/^\+/, '').replace(/^refs\/heads\//, '')
+    return branch === 'HEAD' || branch === '@' ? '(current branch)' : branch
   })
   return [remote, ...(branches.length > 0 ? branches : ['(current branch)'])]
 }
 
-/** The database a SQL client talks to: option values, else its first positional. */
-function sqlTargets(args: readonly string[]): string[] {
-  const out: string[] = []
+/**
+ * The database a SQL client talks to: option values, else its first
+ * positional. The value of an inline-SQL option (`-c "..."`) is skipped, so a
+ * rephrased statement is the same operation.
+ */
+function sqlTargets(program: string, args: readonly string[]): string[] {
+  const inline = CLIENT_OPTIONS[program]?.inline ?? []
+  const rest: string[] = []
   for (let i = 0; i < args.length; i++) {
     const word = args[i] ?? ''
+    if (inline.includes(word)) i++
+    else if (word.startsWith('--') && word.includes('=') && inline.includes(word.slice(0, word.indexOf('=')))) continue
+    else rest.push(word)
+  }
+  const out: string[] = []
+  for (let i = 0; i < rest.length; i++) {
+    const word = rest[i] ?? ''
     const eq = word.indexOf('=')
     if (eq > 0 && SQL_TARGET_OPTIONS.has(word.slice(0, eq))) out.push(word.slice(eq + 1))
-    else if (SQL_TARGET_OPTIONS.has(word) && args[i + 1] !== undefined) out.push(args[++i] ?? '')
+    else if (SQL_TARGET_OPTIONS.has(word) && rest[i + 1] !== undefined) out.push(rest[++i] ?? '')
     else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(word)) out.push(word)
   }
   if (out.length === 0) {
-    const first = positionals(args)[0]
+    const first = positionals(rest)[0]
     if (first !== undefined) out.push(first)
   }
-  return out.map(target => redact(unquote(target)))
+  return out.map(target => redact(target))
 }
 
 /** Files a part's redirects write to (not `2>&1`, not /dev/null). */
@@ -108,18 +126,20 @@ export function partOperation(part: ShellPart, cwd: string, context: OperationCo
     const sub = args[index] ?? ''
     const rest = args.slice(index + 1)
     if (sub === 'push') return { verb: 'git push', targets: pushTargets(rest) }
-    return { verb: `git ${sub}`.trim(), targets: positionals(rest).map(unquote) }
+    return { verb: `git ${sub}`.trim(), targets: positionals(rest) }
   }
-  if (SQL_CLIENTS.has(program)) return { verb: program, targets: sqlTargets(args) }
+  if (SQL_CLIENTS.has(program)) return { verb: program, targets: sqlTargets(program, args) }
   if (SUBCOMMAND_PROGRAMS.has(program)) {
     const sub = positionals(args)[0]
     const rest = sub === undefined ? [] : args.slice(args.indexOf(sub) + 1)
-    return { verb: sub === undefined ? program : `${program} ${sub}`, targets: positionals(rest).map(unquote) }
+    return { verb: sub === undefined ? program : `${program} ${sub}`, targets: positionals(rest) }
   }
   if (PATH_PROGRAMS.has(program)) {
     return { verb: program, targets: [...positionals(args).map(word => normalPath(word, cwd, context)), ...writtenFiles(part, cwd, context)] }
   }
-  return { verb: program, targets: [...positionals(args).map(unquote), ...writtenFiles(part, cwd, context)] }
+  // A redirect write is what the part does: key on the file, not on what the program was given.
+  const written = writtenFiles(part, cwd, context)
+  return { verb: program, targets: written.length > 0 ? written : positionals(args) }
 }
 
 const cap = (key: string): string => (key.length > MAX_KEY_CHARS ? `${key.slice(0, MAX_KEY_CHARS - 1)}…` : key)

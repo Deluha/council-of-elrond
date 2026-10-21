@@ -16,16 +16,18 @@ export type ParsedVerdict = { ok: true; verdict: Verdict } | { ok: false; proble
 
 const MAX_REASON_CHARS = 400
 
+const capChars = (text: string): string => (text.length > MAX_REASON_CHARS ? `${text.slice(0, MAX_REASON_CHARS - 1)}…` : text)
+
 /** At most two sentences, and at most MAX_REASON_CHARS. */
 export function twoSentences(text: string): string {
   // A sentence ends at . ! or ? before whitespace, so `notes.txt` or `v1.2` stay whole.
-  const kept = text.trim().split(/(?<=[.!?])\s+/).slice(0, 2).join(' ')
-  return kept.length > MAX_REASON_CHARS ? `${kept.slice(0, MAX_REASON_CHARS - 1)}…` : kept
+  return capChars(text.trim().split(/(?<=[.!?])\s+/).slice(0, 2).join(' '))
 }
 
 /**
  * Strict: after stripping a code fence, the reply must be one JSON object
- * with exactly `verdict`, `reason` and `safer_alternative`. Anything else is
+ * whose keys are only `verdict`, `reason` and `safer_alternative`;
+ * `safer_alternative` may be left out on `approve` only. Anything else is
  * malformed, and a malformed verdict fails closed.
  */
 export function parseVerdict(reply: string): ParsedVerdict {
@@ -63,7 +65,8 @@ export function parseVerdict(reply: string): ParsedVerdict {
   }
   return {
     ok: true,
-    verdict: { verdict: verdict as VerdictValue, reason: twoSentences(reason), safer_alternative: safer },
+    // Capped, not cut to sentences: an alternative is often a command.
+    verdict: { verdict: verdict as VerdictValue, reason: twoSentences(reason), safer_alternative: capChars(safer) },
   }
 }
 

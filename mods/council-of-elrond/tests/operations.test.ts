@@ -8,6 +8,7 @@ import {
   noteWipe,
   operationOf,
   outcomeOf,
+  partOperation,
   resetOperation,
   resetRounds,
   roundsLeft,
@@ -15,6 +16,7 @@ import {
 import type { OpsState } from '../hooks/elrond/operations.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
+import { splitShell } from '../hooks/rules/shell.js'
 import { INITIAL_SESSION, resetForPrompt } from '../hooks/state.js'
 import { CONTEXT, FAKE_GITHUB_TOKEN, ROOT, SHIPPED_COMPILED } from './fixtures.js'
 
@@ -74,6 +76,83 @@ describe('operation keys', () => {
 
   test('MCP tools key on the tool', () => {
     expect(opOf({ tool: 'mcp__github__merge_pull_request', input: { number: 7 } }).key).toBe('tool:mcp__github__merge_pull_request')
+  })
+})
+
+/** The key text of the first part of a command, gated or not: verb, then its sorted targets. */
+const partKey = (command: string): string => {
+  const part = splitShell(command).parts[0]
+  if (part === undefined) throw new Error('no part')
+  const op = partOperation(part, ROOT, { ...CONTEXT, cwd: ROOT })
+  return `${op.verb} ${[...new Set(op.targets)].sort().join(' ')}`.trim()
+}
+
+describe('operation keys: accuracy (H3)', () => {
+  test('inline SQL is not a target: every rephrase of a statement shares one key', () => {
+    expect(bash('psql -c "DELETE FROM users"').key).toBe('shell:psql')
+    expect(bash('psql -c "delete from users where 1=1"').key).toBe(bash('psql -c "DELETE FROM users"').key)
+    expect(partKey('psql --command="DROP TABLE t"')).toBe('psql')
+    expect(partKey('psql --command "DROP TABLE t"')).toBe('psql')
+    expect(partKey('mysql -e "drop table t"')).toBe('mysql')
+    expect(partKey('mysql --execute="drop table t" appdb')).toBe('mysql appdb')
+    expect(partKey('mysql -h prod-db -e "drop table t"')).toBe('mysql prod-db')
+    // The database is still the target, and a file option is not skipped.
+    expect(bash('psql -d staging -c "select 1"').key).toBe('shell:psql staging')
+    expect(partKey('psql -f drop.sql')).toBe('psql drop.sql')
+    // sqlite3: its inline option is skipped, so the database file is the target.
+    expect(partKey('sqlite3 -cmd "select 1" app.db')).toBe('sqlite3 app.db')
+    expect(partKey('sqlite3 app.db "DROP TABLE x"')).toBe('sqlite3 app.db')
+    expect(partKey('sqlite3 --cmd "DROP TABLE x" app.db')).toBe('sqlite3 app.db')
+  })
+
+  test('psql -n takes no value, so the database after it is still read', () => {
+    expect(partKey('psql -n -d prod -c x')).toBe('psql prod')
+    expect(bash('psql -n -d prod -c x').key).toBe('shell:psql prod')
+  })
+
+  test('a redirect write keys on the written file, not on what the program was given', () => {
+    expect(partKey('echo x > out.txt')).toBe('echo out.txt')
+    expect(partKey('echo y > out.txt')).toBe(partKey('echo x > out.txt'))
+    expect(partKey('echo x >> ./out.txt')).toBe('echo out.txt')
+    expect(partKey('cat a b > out.txt')).toBe('cat out.txt')
+    // No redirect write: unchanged. A copy of stderr onto stdout is not a write.
+    expect(partKey('echo x')).toBe('echo x')
+    expect(partKey('echo x 2>&1')).toBe('echo x')
+    expect(partKey('echo x > /dev/null')).toBe('echo x')
+    // The special sets are unchanged: path programs keep their positionals.
+    expect(partKey('rm -r build > log.txt')).toBe('rm build log.txt')
+    expect(partKey('tee a.txt > b.txt')).toBe('tee a.txt b.txt')
+  })
+
+  test('git push reads HEAD as the current branch, and skips the value of a push option', () => {
+    expect(partKey('git push origin HEAD')).toBe(partKey('git push origin'))
+    expect(partKey('git push origin @')).toBe(partKey('git push origin'))
+    expect(partKey('git push origin HEAD')).toBe('git push (current branch) origin')
+    expect(partKey('git push origin +HEAD')).toBe('git push (current branch) origin')
+    expect(partKey('git push origin HEAD:main')).toBe('git push main origin')
+    expect(partKey('git push origin HEAD:refs/heads/main')).toBe(partKey('git push origin main'))
+    expect(partKey('git push -o ci.skip origin main')).toBe(partKey('git push origin main'))
+    expect(partKey('git push --push-option ci.skip origin main')).toBe(partKey('git push origin main'))
+    expect(partKey('git push --push-option=ci.skip origin main')).toBe(partKey('git push origin main'))
+    expect(bash('git push origin HEAD').key).toBe(bash('git push origin').key)
+    // A named branch is still a different operation.
+    expect(partKey('git push origin feature')).not.toBe(partKey('git push origin HEAD'))
+  })
+
+  test('quoted words key as they did: the parser already removes the quotes', () => {
+    expect(partKey('rm -r "build dir"')).toBe('rm build dir')
+    expect(partKey("rm -r 'build dir'")).toBe('rm build dir')
+    expect(bash('rm -r "build dir"').key).toBe('shell:rm build dir')
+    expect(partKey("psql -d 'staging' -c \"select 1\"")).toBe('psql staging')
+    expect(partKey('psql -d "staging"')).toBe('psql staging')
+    expect(partKey('git push \'origin\' "main"')).toBe('git push main origin')
+    expect(bash('git push \'origin\' "main"').key).toBe('shell:git push main origin')
+    expect(partKey('rm -r build > "log file.txt"')).toBe('rm build log file.txt')
+    expect(partKey('echo x > "out.txt"')).toBe(partKey('echo x > out.txt'))
+    expect(partKey('npm run "build"')).toBe('npm run build')
+    expect(partKey('git add "a b"')).toBe('git add a b')
+    expect(partKey('echo "a b"')).toBe('echo a b')
+    expect(partKey('psql "postgres://u@db.example.com/app"')).toBe('psql postgres://u@db.example.com/app')
   })
 })
 

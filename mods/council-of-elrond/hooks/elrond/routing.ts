@@ -52,12 +52,13 @@ export function route(call: Call, classification: Classification, enabled: Enabl
   if (isMixed) {
     seat = GANDALF
     fallback = 'mixed'
+  } else if (!enabled[seat.member]) {
+    // Before `no-diff`: a switched-off diff reviewer is reported as off, not as lacking a file.
+    seat = GANDALF
+    fallback = 'disabled'
   } else if (seat.member === 'legolas' && FILE_PATH_FIELDS[call.tool] === undefined) {
     seat = GANDALF
     fallback = 'no-diff'
-  } else if (!enabled[seat.member]) {
-    seat = GANDALF
-    fallback = 'disabled'
   }
   if (!enabled[seat.member]) return { kind: 'none', wanted: first }
   return { kind: 'member', ...seat, ...(fallback !== undefined && { fallback, wanted: first }) }

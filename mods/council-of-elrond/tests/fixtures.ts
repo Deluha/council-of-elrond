@@ -121,6 +121,8 @@ export type World = {
   processes: string[][]
   /** The working folder each of `processes` was started in (the same order). */
   processCwds: (string | undefined)[]
+  /** The environment variables each of `processes` was started with (the same order). */
+  processEnvs: (Record<string, string> | undefined)[]
   /** How a process answers, by its argv; absent: exit 0, no output. */
   processReply: (argv: readonly string[]) => ProcessReply
   /** The mocked clock, when the world was made with one. */
@@ -204,6 +206,7 @@ export function world(
     toolResult: { result: 'ran' },
     processes: [],
     processCwds: [],
+    processEnvs: [],
     processReply: () => ({ exitCode: 0, stdout: '' }),
     clock: undefined,
     modelDelays: [],
@@ -301,6 +304,7 @@ export function world(
   on('process.run', ($, e) => {
     w.processes.push([...e.argv])
     w.processCwds.push(e.init?.cwd)
+    w.processEnvs.push(e.init?.env)
     const reply = w.processReply(e.argv)
     if (reply === 'timeout') return { deny: 'timed out' }
     return { value: { exitCode: reply.exitCode, stdout: reply.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }

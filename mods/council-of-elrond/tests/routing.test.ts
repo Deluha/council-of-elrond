@@ -68,6 +68,20 @@ describe('Gandalf is the fallback', () => {
     expect(bash('git fetch && git push origin feature')).toEqual({ kind: 'member', member: 'aragorn', profile: 'git' })
   })
 
+  test('a mixed call with Gandalf off comes to the user, though a specialist is on', () => {
+    expect(bash('git push origin feature && rm -rf build', { ...ALL, gandalf: false })).toEqual({ kind: 'none', wanted: { member: 'aragorn', profile: 'git' } })
+    expect(bash('git push origin feature && psql -c "select 1"', { ...ALL, gandalf: false })).toMatchObject({ kind: 'none' })
+  })
+
+  test('a switched-off diff reviewer named for a shell command reports disabled, not no-diff', () => {
+    const compiled = compileConfig(
+      { ...SHIPPED, rules: [{ id: 'deploy', tier: 'review', tools: ['Bash'], command: '^make deploy', member: 'legolas', reason: 'Deploys.' }, ...SHIPPED.rules] },
+      new Set(),
+    )
+    expect(routeOf({ tool: 'Bash', input: { command: 'make deploy' } }, { ...ALL, legolas: false }, compiled)).toMatchObject({ member: 'gandalf', fallback: 'disabled', wanted: { member: 'legolas' } })
+    expect(routeOf({ tool: 'Bash', input: { command: 'make deploy' } }, { ...ALL, legolas: false, gandalf: false }, compiled)).toEqual({ kind: 'none', wanted: { member: 'legolas' } })
+  })
+
   test('the diff reviewer named for a shell command falls back: there is no file to diff', () => {
     const compiled = compileConfig(
       { ...SHIPPED, rules: [{ id: 'deploy', tier: 'review', tools: ['Bash'], command: '^make deploy', member: 'legolas', reason: 'Deploys.' }, ...SHIPPED.rules] },

@@ -10,8 +10,9 @@ const plan = (call: Call) => planPreview(call, classify(call, SHIPPED_COMPILED, 
 const bash = (command: string) => plan({ tool: 'Bash', input: { command } })
 const rangeDiff = (command: string, kind: 'push' | 'merge') => {
   const call: Call = { tool: 'Bash', input: { command } }
-  const range = rangeOf(classify(call, SHIPPED_COMPILED, CONTEXT))
-  return range === undefined ? undefined : rangeDiffInspection(kind, range.part)
+  const classification = classify(call, SHIPPED_COMPILED, CONTEXT)
+  const range = rangeOf(classification)
+  return range === undefined ? undefined : rangeDiffInspection(kind, range.part, call, CONTEXT, classification.findings.find(finding => finding.part === range.part)?.cwd)
 }
 
 describe('the plan comes from the table alone', () => {
@@ -93,7 +94,7 @@ describe('the plan comes from the table alone', () => {
     expect(bash('git commit --amend -m x').at(0)).toMatchObject({ argv: ['git', 'log', '--oneline', '--decorate=short', '-n', '20', '--'] })
     const write = plan({ tool: 'Write', input: { file_path: `${ROOT}/src/app.ts`, content: 'x' } })
     expect(write.map(step => (step.kind === 'git' ? step.argv : []))).toEqual([
-      ['git', 'diff', '--stat', 'HEAD', '--', 'src/app.ts'],
+      ['git', 'diff', '--stat', '--no-ext-diff', '--no-textconv', 'HEAD', '--', 'src/app.ts'],
       ['git', 'ls-files', '--error-unmatch', '--', 'src/app.ts'],
     ])
     expect(plan({ tool: 'Write', input: { file_path: '/etc/hosts', content: 'x' } })).toEqual([])
@@ -109,6 +110,82 @@ describe('the plan comes from the table alone', () => {
     expect(preview?.split('\n').length).toBeLessThanOrEqual(11)
     expect(preview).toContain('[... truncated]')
     expect(formatPreview([{ kind: 'failed', label: 'x' }], 10)).toBeUndefined()
+  })
+})
+
+const gitSteps = (command: string) => bash(command).filter(step => step.kind === 'git')
+
+describe('where git would run', () => {
+  test('a part git would run elsewhere gets no git inspection and no range diff', () => {
+    for (const command of [
+      'cd ../other && git push origin main',
+      'cd $X && git push origin main',
+      'cd "$(mktemp -d)" && git push origin main',
+      'GIT_DIR=/x git push origin main',
+      'GIT_WORK_TREE=/x git push origin main',
+      'env GIT_WORK_TREE=/x git push',
+      // Quoted, so the raw text has no word boundary before the name: the parsed words catch it.
+      "env 'GIT_DIR=/x' git push origin main",
+      'env "GIT_WORK_TREE=/x" git push origin main',
+      'export GIT_DIR=/x; git push origin main',
+      'export GIT_DIR=/x && git push origin main',
+      'GIT_INDEX_FILE=/x git push origin main',
+      'GIT_NAMESPACE=x git push origin main',
+      'git --namespace=x push origin main',
+      'git --namespace x push origin main',
+      'git -C /x push origin main',
+      'git push origin main; GIT_COMMON_DIR=/x git status',
+    ]) {
+      expect(gitSteps(command), command).toEqual([])
+      expect(rangeDiff(command, 'push'), command).toBeUndefined()
+    }
+    expect(gitSteps('GIT_DIR=/x git merge feature')).toEqual([])
+    expect(rangeDiff('GIT_DIR=/x git merge feature', 'merge')).toBeUndefined()
+    expect(gitSteps('GIT_DIR=/x git reset --hard HEAD~1')).toEqual([])
+    // Unrelated variables, and git in the root, are as before.
+    expect(gitSteps('GIT_TRACE=1 git push origin main')).toHaveLength(3)
+    expect(gitSteps('cd . && git push origin main')).toHaveLength(3)
+  })
+
+  test('a cd inside the root tags the git inspections with that folder; none leaves them untagged', () => {
+    const inside = gitSteps('cd sub && git push origin main')
+    expect(inside.map(step => (step.kind === 'git' ? step.argv[1] : ''))).toEqual(['rev-parse', 'remote', 'log'])
+    for (const step of inside) expect(step).toMatchObject({ cwd: `${ROOT}/sub` })
+    expect(gitSteps('cd sub && git merge feature').at(-1)).toMatchObject({ cwd: `${ROOT}/sub` })
+    expect(gitSteps('cd sub && git reset --hard HEAD~1').at(0)).toMatchObject({ cwd: `${ROOT}/sub` })
+    expect(rangeDiff('cd sub && git push origin main', 'push')).toMatchObject({ cwd: `${ROOT}/sub` })
+    for (const step of gitSteps('git push origin main')) expect(step).not.toHaveProperty('cwd')
+    expect(rangeDiff('git push origin main', 'push')).not.toHaveProperty('cwd')
+    // Back at the session's folder after a cd there and back: no tag.
+    for (const step of gitSteps('cd sub && cd .. && git push origin main')) expect(step).not.toHaveProperty('cwd')
+    // The same command in two folders is two inspections, not one.
+    const two = bash('cd a && git reset --hard HEAD~1 && cd ../b && git reset --hard HEAD~1')
+    expect(two.map(step => (step.kind === 'git' ? step.cwd : undefined))).toEqual([`${ROOT}/a`, `${ROOT}/a`, `${ROOT}/b`])
+    // Path inspections are unchanged by a cd.
+    expect(bash('cd sub && rm -rf build')).toEqual([{ kind: 'path', label: 'rm target build', path: `${ROOT}/sub/build` }])
+  })
+
+  test('the value of a push option is not the remote or the branch', () => {
+    for (const command of ['git push -o ci.skip origin main', 'git push --push-option x origin main', 'git push --receive-pack x origin main', 'git push origin main -o ci.skip']) {
+      expect(gitSteps(command).map(step => (step.kind === 'git' ? step.argv : [])), command).toEqual([
+        ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+        ['git', 'remote', 'get-url', 'origin'],
+        ['git', 'log', '--oneline', '-n', '30', 'origin/main..HEAD', '--'],
+      ])
+      expect(rangeDiff(command, 'push'), command).toMatchObject({ label: 'origin/main..HEAD' })
+    }
+  })
+
+  test('a quoted delete target is the same as an unquoted one', () => {
+    expect(bash('rm -r "build dir"')).toEqual([{ kind: 'path', label: 'rm target build dir', path: `${ROOT}/build dir` }])
+    expect(bash("rm -r 'x'")).toEqual(bash('rm -r x'))
+    expect(bash("rm -r 'x'")).toEqual([{ kind: 'path', label: 'rm target x', path: `${ROOT}/x` }])
+  })
+
+  test('no configured program starts: the write diff turns off external diff and textconv', () => {
+    const write = plan({ tool: 'Write', input: { file_path: `${ROOT}/src/app.ts`, content: 'x' } })
+    const diff = write[0]
+    expect(diff?.kind === 'git' ? diff.argv.slice(0, 5) : []).toEqual(['git', 'diff', '--stat', '--no-ext-diff', '--no-textconv'])
   })
 })
 

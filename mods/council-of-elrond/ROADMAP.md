@@ -33,7 +33,7 @@ the known limits. Then wait for the go-ahead.
 ### Commands
 
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (635 with C5)
+cd mods/council-of-elrond && claude plugin test .     # all tests (675 with H3)
 tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
@@ -326,7 +326,7 @@ are grouped below into three hardening briefs, H1 to H3.
    [Deluha/council-of-elrond#19](https://github.com/Deluha/council-of-elrond/pull/19).)*
 4. **C2**, which needs no cloud run and helps whatever C3 shows. Then **C3** once the maintainer
    can run the cloud probe, then **C4** if C3 calls for it, then **C5** and **C6**.
-5. **H3, review accuracy** (below).
+5. **H3, review accuracy** (below). *(Done, DESIGN §13.7; its two loosening side effects approved 2026-10-21.)*
 6. **Release.** 0.6.0 is H1 and H2 on top of what `[Unreleased]` holds now, after the terminal
    check on that build. C2 to C6 and H3 go to 0.7.0, so the terminal check is not redone for
    cloud-only work.
@@ -370,7 +370,7 @@ are grouped below into three hardening briefs, H1 to H3.
 | §2.10 DESIGN §4 rows | Rewrite "Esc during a council", "Writing the allowlist fails" and "Audit write fails", and add a row for `$.session.root`/`cwd` failing (denies every call, allow tier included: keep it, as it is fail-closed). |
 | §2.11 test gaps | Add a test with each fix above. Add the `.catch` replay after `next` ran, a prompt during an in-flight review, Esc mid-review and mid-council, `/council reload` clearing the cache, and a malformed session. Skip the `proceed()` budget-guard test unless the kit can set `remainingMs`. |
 
-**H3: review accuracy** (one implementer brief; behaviour changes under 0.7.0).
+**H3: review accuracy** (one implementer brief; behaviour changes under 0.7.0). *(Done, DESIGN §13.7.)*
 
 | Review item | Recommendation |
 | :- | :- |
@@ -410,7 +410,7 @@ it is committed; one that tightens it is decided, recorded and reported.
 - [ ] Cloud sessions: the setup-script install was tried and the mod loads and enforces (findings below, "Cloud sessions"); it is recorded in DESIGN.md §14 (C1); the `$.ui.ask` probe (C3) is done (DESIGN §14.1). Repository settings do not load plugins in the cloud (docs/INSTALL.md, "Cloud sessions").
 - [ ] A `/config` switch for the allow-rule offer, only if feedback says the offer is noisy.
 - [ ] The terminal-check item above resolved: the `AskUserQuestion` re-entry path. (The user-refusal wordings were settled against the 2.1.296 binary, DESIGN §12.4.)
-- [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), decided 2026-10-13: only the `register.ts` reducer refactor, which comes after 1.0. The performance notes, the concurrency model and the two-session audit race were done in H2 (DESIGN §13.4), the allowlist-oracle note in H1 (DESIGN §13.3). H3 is the review item still open in the code, under "Recommendations on the remaining open decisions" above.
+- [ ] Still open from the Stage 5 review (docs/REVIEW-2026-10.md §5 and §7 D), decided 2026-10-13: only the `register.ts` reducer refactor, which comes after 1.0. The performance notes, the concurrency model and the two-session audit race were done in H2 (DESIGN §13.4), the allowlist-oracle note in H1 (DESIGN §13.3). H3, the review item that was open in the code, is done (DESIGN §13.7; "Recommendations on the remaining open decisions" above).
 - [ ] The cloud-session work item C6 below (C1 to C5 are done), in the order given under "Recommendations on the remaining open decisions".
 
 ### Cloud sessions: findings and work items

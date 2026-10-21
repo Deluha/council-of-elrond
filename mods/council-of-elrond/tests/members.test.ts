@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { aragornDatabasePrompt, aragornDatabaseSystem, aragornGitPrompt, aragornGitSystem, productionHits, sqlOf } from '../hooks/members/aragorn.js'
-import { callDiff, legolasPrompt, legolasSystem, lineOps, textDiff } from '../hooks/members/legolas.js'
+import { callDiff, legolasPrompt, legolasSystem, lineOps, textDiff, unified } from '../hooks/members/legolas.js'
 import { classify } from '../hooks/rules/classify.js'
 import { APPROVE, CONTEXT, FAKE_GITHUB_TOKEN, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
 
@@ -31,7 +31,79 @@ describe('Legolas: the diff', () => {
     expect(write.diff).toContain('-export const one = 1\n+export const one = 2')
     expect(write.diff).not.toContain('-import')
     const fresh = callDiff({ tool: 'Write', input: { content: 'a\nb\n' } }, 'n.js', { state: 'missing' }, 200)
-    expect(fresh).toEqual({ diff: '--- /dev/null\n+++ b/n.js\n@@ -1,0 +1,2 @@\n+a\n+b', isNew: true })
+    expect(fresh).toEqual({ diff: '--- /dev/null\n+++ b/n.js\n@@ -0,0 +1,2 @@\n+a\n+b', isNew: true })
+  })
+
+  test('an Edit with an edits array diffs every edit in order, and one that does not apply gives the not-found outcome', () => {
+    const current = { state: 'text', text: FILE } as const
+    const run = (input: Record<string, unknown>) => callDiff({ tool: 'Edit', input }, 'a.js', current, 200)
+    // The second entry only applies to the first one's result.
+    const chained = run({
+      file_path: '/w/a.js',
+      edits: [
+        { old_string: 'return a + b', new_string: 'return a - b' },
+        { old_string: 'a - b', new_string: 'a * b' },
+        { old_string: 'one = 1', new_string: 'one = 2' },
+      ],
+    })
+    expect(chained.note).toBeUndefined()
+    expect(chained.diff).toContain('-  return a + b\n+  return a * b')
+    expect(chained.diff).toContain('-export const one = 1\n+export const one = 2')
+    // A step that is not found, empty, or not a string: no partial diff.
+    for (const bad of [{ old_string: 'zzz', new_string: 'y' }, { old_string: '', new_string: 'y' }, { old_string: 7, new_string: 'y' }, null]) {
+      const missing = run({ edits: [{ old_string: 'return a + b', new_string: 'return a - b' }, bad] })
+      expect(missing.note).toBe('not-found')
+      expect(missing.diff).not.toContain('return a - b')
+    }
+    // The top-level edit goes first, then the entries.
+    const both = run({ old_string: 'return a + b', new_string: 'return a - b', edits: [{ old_string: 'a - b', new_string: 'b - a' }] })
+    expect(both.diff).toContain('-  return a + b\n+  return b - a')
+    // An empty top-level old_string is not a step when there are entries.
+    expect(run({ old_string: '', new_string: '', edits: [{ old_string: 'one = 1', new_string: 'one = 2' }] }).diff).toContain('+export const one = 2')
+    // replace_all inside an entry.
+    const all = callDiff({ tool: 'Edit', input: { edits: [{ old_string: 'a', new_string: 'b', replace_all: true }] } }, 'x', { state: 'text', text: 'a\nc\na\n' }, 200)
+    expect(all.diff).toContain('-a\n+b\n c\n-a\n+b')
+    // No entries and no top-level edit: nothing to apply.
+    expect(run({ edits: [] }).note).toBe('not-found')
+  })
+
+  test('a hunk side with no lines starts at the line before, as git writes it', () => {
+    expect(textDiff('n', undefined, 'a\n', 50)).toContain('@@ -0,0 +1,1 @@')
+    expect(textDiff('n', '', 'a\n', 50)).toContain('@@ -0,0 +1,1 @@')
+    expect(textDiff('n', 'a\nb\n', '', 50)).toContain('@@ -1,2 +0,0 @@\n-a\n-b')
+    expect(unified([{ kind: '+', line: 'x' }])).toEqual(['@@ -0,0 +1,1 @@', '+x'])
+    expect(unified([{ kind: ' ', line: 'a' }, { kind: '-', line: 'x' }])).toEqual(['@@ -1,2 +1,1 @@', ' a', '-x'])
+    expect(textDiff('n', 'a\nb\nc\nd\ne\n', 'a\nb\nX\nc\nd\ne\n', 50)).toContain('@@ -1,5 +1,6 @@')
+  })
+
+  test('CRLF lines show without the carriage return, and a change of line endings alone is named', () => {
+    const body = (diff: string): string => diff.split('\n').slice(2).join('\n')
+    expect(body(textDiff('f', 'a\r\nb\r\nc\r\n', 'a\r\nb\r\nd\r\n', 50))).toBe('@@ -1,3 +1,3 @@\n a\n b\n-c\n+d')
+    expect(textDiff('f', 'a\r\nb\r\nc\r\n', 'a\r\nb\r\nd\r\n', 50)).not.toContain('\r')
+    expect(body(textDiff('f', 'a\r\nb\r\n', 'a\nb\n', 50))).toBe('(only line endings change, on 2 lines)')
+    expect(body(textDiff('f', 'a\r\n', 'a\n', 50))).toBe('(only line endings change, on 1 line)')
+    expect(body(textDiff('f', 'a\n', 'a\r\n', 50))).toBe('(only line endings change, on 1 line)')
+    expect(body(textDiff('f', 'a\nb\n', 'a\nb\n', 50))).toBe('(no change)')
+    // With hunks, the line endings that change elsewhere are counted last.
+    expect(body(textDiff('f', 'a\r\nb\r\nc\r\n', 'a\nb\nx\n', 50))).toBe('@@ -1,3 +1,3 @@\n a\n b\n-c\n+x\n(line endings also change on 2 lines)')
+    expect(body(textDiff('f', 'a\r\nb\nc\n', 'a\nb\nx\n', 50))).toBe('@@ -1,3 +1,3 @@\n a\n b\n-c\n+x\n(line endings also change on 1 line)')
+    // A carriage return inside a line is part of the line.
+    expect(body(textDiff('f', 'a\rb\n', 'a\rc\n', 50))).toBe('@@ -1,1 +1,1 @@\n-a\rb\n+a\rc')
+  })
+
+  test('a last line with no newline is marked, and differs from the same line with one', () => {
+    const body = (diff: string): string => diff.split('\n').slice(2).join('\n')
+    const marker = '\\ No newline at end of file'
+    expect(body(textDiff('f', 'a\n', 'a', 50))).toBe(`@@ -1,1 +1,1 @@\n-a\n+a\n${marker}`)
+    expect(body(textDiff('f', 'a', 'a\n', 50))).toBe(`@@ -1,1 +1,1 @@\n-a\n${marker}\n+a`)
+    expect(body(textDiff('f', 'a', 'a', 50))).toBe('(no change)')
+    // Neither side ends in a newline, and the last line is unchanged: it is context, still marked.
+    expect(body(textDiff('f', 'x\nb', 'y\nb', 50))).toBe(`@@ -1,2 +1,2 @@\n-x\n+y\n b\n${marker}`)
+    expect(body(textDiff('f', 'a\nb', 'a\nc', 50))).toBe(`@@ -1,2 +1,2 @@\n a\n-b\n${marker}\n+c\n${marker}`)
+    // A new file without a final newline.
+    expect(body(textDiff('f', undefined, 'a', 50))).toBe(`@@ -0,0 +1,1 @@\n+a\n${marker}`)
+    // An empty text has no lines.
+    expect(body(textDiff('f', 'a', '', 50))).toBe(`@@ -1,1 +0,0 @@\n-a\n${marker}`)
   })
 
   test('a NotebookEdit diffs the cell source', () => {
@@ -42,6 +114,16 @@ describe('Legolas: the diff', () => {
     expect(removed.diff).toContain('-print(x)')
     const broken = callDiff({ tool: 'NotebookEdit', input: { cell_id: 'c9', new_source: 'z' } }, 'n.ipynb', { state: 'text', text: 'not json' }, 200)
     expect(broken.note).toBe('notebook-unparsed')
+  })
+
+  test('a notebook cell is not a file: no "no newline" marker on its diff', () => {
+    const notebook = JSON.stringify({ cells: [{ id: 'c1', source: 'x = 1' }] })
+    const replaced = callDiff({ tool: 'NotebookEdit', input: { cell_id: 'c1', new_source: 'x = 2' } }, 'n.ipynb', { state: 'text', text: notebook }, 200)
+    expect(replaced.diff).toBe('--- a/n.ipynb (cell c1, replace)\n+++ b/n.ipynb (cell c1, replace)\n@@ -1,1 +1,1 @@\n-x = 1\n+x = 2')
+    const inserted = callDiff({ tool: 'NotebookEdit', input: { new_source: 'y = 1', edit_mode: 'insert' } }, 'n.ipynb', { state: 'text', text: notebook }, 200)
+    expect(inserted.diff).not.toContain('No newline')
+    const broken = callDiff({ tool: 'NotebookEdit', input: { cell_id: 'c1', new_source: 'z' } }, 'n.ipynb', { state: 'text', text: 'not json' }, 200)
+    expect(broken.diff).not.toContain('No newline')
   })
 
   test('the diff is cut to the line limit, and a huge middle is shown as one block', () => {
