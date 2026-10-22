@@ -123,6 +123,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **Types regenerated for Claude Code 2.1.304.** Drift: additive for every API the mod calls; the
   engine no longer asks a hook's `.catch` when it skips the hook for re-entry, which the mod never
   relied on. Nothing changes for users.
+- **Types regenerated for Claude Code 2.1.308.** Drift: additive for every API the mod calls; `decider` on a `tool.check` verdict is gone, which the mod never used. Nothing changes for users.
 - **`/council` no longer resets the review rounds.** A `/council` command you type keeps the
   current prompt's rounds, failed attempts and cached approvals, and the prompt the reviewers see,
   as they were. Other slash commands still start afresh.

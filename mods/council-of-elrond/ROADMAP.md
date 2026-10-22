@@ -38,7 +38,7 @@ tsc -p mods                                           # strict typecheck against
 claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
 ```
 
-- **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289** and checked on **2.1.291** from stage 5, **2.1.294** from stage 6, and **2.1.296**, **2.1.299** and **2.1.304** after it (types regenerated each time; the drift was additive, DESIGN.md header; 2.1.299's probes found two semantic changes, DESIGN §12.5; 2.1.304 removed the `re-entry` failure kind the mod never relied on, DESIGN §12.6). If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts` under the skill's folder and names the path; don't write a mod folder, which would ask to hot-reload it into your session), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
+- **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289** and checked on **2.1.291** from stage 5, **2.1.294** from stage 6, and **2.1.296**, **2.1.299**, **2.1.304** and **2.1.308** after it (types regenerated each time; the drift was additive, DESIGN.md header; 2.1.299's probes found two semantic changes, DESIGN §12.5; 2.1.304 removed the `re-entry` failure kind the mod never relied on, DESIGN §12.6; 2.1.308 dropped `decider` from `tool.check`, which the mod never used, DESIGN §12.7). If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts` under the skill's folder and names the path; don't write a mod folder, which would ask to hot-reload it into your session), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
 - **Keep the mod out of the session building it.** Don't load it into your own dev session (the skill's hot-reload folder, or `--plugin-dir` on the session you work in): it would gate your own tool calls.
 - **Live checks run headless.** Use `claude -p --plugin-dir ./mods/council-of-elrond "<prompt>"` with harmless commands, ideally in a throwaway `git init` folder, then clean it up along with the generated `.claude-plugin/types/` and `tsconfig.json` in the mod folder. `/council` output only shows with `--output-format stream-json --verbose` (as `system/ui_log`).
 
@@ -61,7 +61,7 @@ claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: l
    - It rejects on dismiss, on "Chat about this", and in `-p`. In `-p` on 2.1.299 the rejection says the session has no `AskUserQuestion` tool. Dismiss and "Chat about this" reject with the same text (the call's result, cut to 120 characters), so the mod cannot tell them apart (DESIGN §12.4).
    - Guard it with `$.session.surfaces()` (empty means nobody can be asked: refuse).
    - In a cloud session in Auto mode, the host answered it with the first option and the person saw nothing (DESIGN §14.1): an answer is not proof that a person chose it. Never ask where `$.session.surfaces()` is empty.
-   - The engine's own alternative is a `tool.check` hook's ask with `decider: 'person'`. No classifier, PermissionRequest hook, allow rule or `bypassPermissions` settles it, and in `-p` it is a deny. But a host program's allow does settle it: in a hosted session, the host is told only to suppress an "always allow" rule (DESIGN §14.2).
+   - The engine's own alternative is a `tool.check` hook's ask (`decider: 'person'` on 2.1.304; from 2.1.308 every hook's ask is a person's and `decider` is gone, DESIGN §14.2). On 2.1.304 no classifier, PermissionRequest hook, allow rule or `bypassPermissions` settled it (2.1.308's types name a PermissionRequest hook among what may answer it, not yet probed), and in `-p` it is a deny. But a host program's allow does settle it: in a hosted session, the host is told only to suppress an "always allow" rule (DESIGN §14.2).
 6. **Command output reaches Claude.** A command's `{ text }` is read by Claude (approved decision 1: don't put council internals there). *(Amended by C2: where nothing draws, a person's `/council` status, report, rules and test also go to Claude as the result's `context`, redacted and fenced; DESIGN §13.5.)*
 7. **`$.state` needs a contract.**
    - Every key must be declared in `types/index.d.ts` (`PluginState`).
@@ -72,7 +72,7 @@ claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: l
 9. **Tests:**
    - Stub every `$` noun the code touches with the test's `on(...)`; an unstubbed bottom throws.
    - The fixtures in `tests/fixtures.ts` already answer files, model, user, surfaces, logs and the tool itself.
-   - `$.tool.call` input types drop `agentId`, but it arrives at runtime (cast `as never`).
+   - `$.tool.call` input types drop `agentId`, but it arrives at runtime (cast `as never`). From 2.1.308 the test kit's `$.tool.call` takes `agentId`; the existing casts still compile.
    - Registering the same event twice in one test fails the load; use fixture switches instead.
 10. **`--plugin-dir` writes generated files into the mod folder.** It writes `.claude-plugin/types/` and `tsconfig.json`, both gitignored.
 11. **Drawing from register.ts without JSX:** call the global `h(Element, props, ...children)` with elements from `$.ui.resolve(e)` and cast the result to `RenderElement`; the file stays `.ts`.
@@ -295,7 +295,7 @@ ask → **Galadriel** → route → act → **after the tool runs**.
 | `isReadOnly` unused | Left unused: trusting it to skip work would let the tool's own claim lower the gate. |
 | `$.ui.ask` in SDK and cloud hosts | Left as is: the mod refuses where no surface is attached, which is the safe default. The terminal check covers the terminal only. |
 | Windows | Declared unsupported in `docs/INSTALL.md` (POSIX shells, `HOME` only). |
-| Versioning | Release as **0.6.0** once the terminal check passes: the default text changed, allowed calls are scanned, and a push's range changed, each a behaviour change under a minor bump. Move the `[Unreleased]` entries to `[0.6.0]` and bump `plugin.json` then, not before. Approved 2026-10-13: 0.6.0 also carries H1 and H2, and the terminal check runs on that build; C2 to C6 and H3 go to 0.7.0 ("Recommendations on the remaining open decisions" below). |
+| Versioning | Release as **0.6.0** once the terminal check passes: the default text changed, allowed calls are scanned, and a push's range changed, each a behaviour change under a minor bump. Move the `[Unreleased]` entries to `[0.6.0]` and bump `plugin.json` then, not before. Approved 2026-10-13: 0.6.0 also carries H1 and H2, and the terminal check runs on that build; C2 to C6 and H3 go to 0.7.0 ("Recommendations on the remaining open decisions" below). *Changed 2026-10-22 by the maintainer: C2 to C6 and H3 merged before the release, so `main` is released as one 0.6.0, after the terminal check on that build; 0.7.0 is what follows.* |
 
 Also decided after the final deliverables: the fake secrets in tests are built at run time from two halves (`tests/fixtures.ts`), so no committed line holds a well-formed token and `scripts/check-hygiene.sh` reports none; the audit appender's whole-file re-read stays (tens of milliseconds at 1 MiB; revisit only if latency shows).
 
@@ -329,7 +329,7 @@ are grouped below into three hardening briefs, H1 to H3.
 5. **H3, review accuracy** (below). *(Done, DESIGN §13.7; its two loosening side effects approved 2026-10-21.)*
 6. **Release.** 0.6.0 is H1 and H2 on top of what `[Unreleased]` holds now, after the terminal
    check on that build. C2 to C6 and H3 go to 0.7.0, so the terminal check is not redone for
-   cloud-only work.
+   cloud-only work. *(Changed 2026-10-22 by the maintainer: `main` is released as one 0.6.0, with the terminal check on that build; the Versioning row above.)*
 
 **The cloud work items' open choices.**
 
