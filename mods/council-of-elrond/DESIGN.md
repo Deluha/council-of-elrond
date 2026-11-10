@@ -2,8 +2,8 @@
 
 Status: **final deliverables** (SPEC §21–22, §12 below), after Stage 6 (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop).
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
-Targets Claude Code **2.1.308** (built on **2.1.289**, checked on **2.1.291** from Stage 5, **2.1.294** from
-Stage 6, and **2.1.296**, **2.1.299**, **2.1.304** and **2.1.308** after it). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.308's) and
+Targets Claude Code **2.1.322** (built on **2.1.289**, checked on **2.1.291** from Stage 5, **2.1.294** from
+Stage 6, and **2.1.296**, **2.1.299**, **2.1.304**, **2.1.308** and **2.1.322** after it). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.322's) and
 are the source of truth over docs, samples and the spec. The 2.1.289 → 2.1.291 drift was additive: a
 new `prompt.mention` event, a `Color` type (theme keys or raw colours) for paint props, a `ceiling`
 on tool-check inputs, teammate record fields, and doc wording. The 2.1.291 → 2.1.294 drift is
@@ -43,6 +43,8 @@ The 2.1.299 → 2.1.304 drift is additive for every signature the mod calls. The
 One removal: `HookFailure` no longer has the `re-entry` kind or its `cause`. A hook that the engine does not run, because the event was raised beneath its own frame, is now skipped without its `.catch` being asked; the C3 cloud log on 2.1.303 shows exactly that (§14.1). Elrond never relied on that path. The wording and the probes are in §12.6.
 
 The 2.1.304 → 2.1.308 drift is additive for every signature the mod calls. The additions: `part` on a keyed `Markdown` leaf; a ceiling on a docked pane's `columns` (at most 45% of the terminal's columns, at least 24); `approver` (`host` or `person`, set by the engine) on a `tool.check` input; `plugin` (the plugin whose hook made an ask, set by the engine) on a `tool.check` verdict; and, in the test kit, a `$.tool.call` typed to take `agentId`. One removal: `decider` on a `tool.check` verdict is gone. A hook's ask is now always a person's, and the types now name a PermissionRequest hook among what may answer it (§14.2). Elrond has no `tool.check` hook and reads neither field, so nothing changes for it. The wording re-read from the binary is in §12.7.
+
+The 2.1.308 → 2.1.322 drift is additive for every signature the mod calls. The additions: `$.theme.set` and `$.theme.clear` with a `Backdrop` component; `$.ui.place` with a `Placed` component; `$.prompt.paint`; `$.ui.cancelNotify` and scheduling fields on `$.ui.notify`; `backgroundColor` on `$.ui.open`; `isCollapsed` on `AbovePrompt`'s props; `isTextDisplayOnly` on a `command.run` result (read only for plugins bundled with Claude Code); `effort` on a `$.model.complete` result and on a fork; and new built-in tool fields. `TargetTier` now admits `user`, and an HTTP request's `body` takes an `HttpBody` and a `compress` option. One semantic change, in the doc of a call the mod does not make: `$.tool.call` now runs the permission check with no dialog and no classifier, so an ask beyond the rules is a deny, and a hook that re-issues the model's call this way answers for its input. Elrond only calls `next(e)`, so nothing changes for it. The wording re-read from the binary is in §12.7.
 
 ## 1. Step 0 findings
 
@@ -630,13 +632,14 @@ The `/upgrade-types` run for 2.1.304 read the binary with `grep -a` and made one
   - That is the guarantee the C3 probe found `$.ui.ask` lacks (§14.1).
   - Probed headless for C4 in §14.2: it holds against every machine inside the engine, but a host program's allow settles it. The cloud is still unchecked.
 
-### 12.7 Re-read on 2.1.308
+### 12.7 Re-read on 2.1.308 and 2.1.322
 
-The `/upgrade-types` run for 2.1.308 read the binary with `grep -a`. No headless probe ran: in this cloud session the auto-mode classifier refused a child `claude -p` run with the session's own wiring removed from its environment, so the behaviours below are carried over from §12.6 unprobed.
+The `/upgrade-types` runs for 2.1.308 and 2.1.322 read the binary with `grep -a`. No headless probe ran for either: in this cloud session the auto-mode classifier refused a child `claude -p` run with the session's own wiring removed from its environment, so the behaviours below are carried over from §12.6 unprobed.
 
-- **Refusal wordings: unchanged.** Both user-refusal wordings are in the binary and `USER_REFUSAL` matches them. Every automatic-denial wording the skill's searches find is matched by `AUTOMATIC_DENIAL`, among them "… needs approval in this session before it runs: …" and "… will be denied the same way for the rest of this session".
-- **A plugin's `tool.check` deny is still not matched.** "Permission to use <tool> denied by plugin <name>: <reason>", seen in §14.2 on 2.1.304, reads as an ordinary tool error, so it counts as a failed attempt when `toolErrorsAreWipes` is on. Matching it would count fewer failed attempts (a loosening), so it is left for the maintainer.
-- **Not probed on 2.1.308:** the own-time budget cut-off, `$.ui.ask` rejecting in `-p`, `$.process.spawn` ending on `return()`, and `/council` output as `ui_log` in stream-json. They were last probed on 2.1.304 (§12.6).
+- **Refusal wordings: unchanged.** Both user-refusal wordings are in the binary and `USER_REFUSAL` matches them. Every automatic-denial wording the skill's searches find is matched by `AUTOMATIC_DENIAL`, among them "… needs approval in this session before it runs: …" and "… will be denied the same way for the rest of this session". On 2.1.322 the searches also find "… has been denied" wordings that name a command, a clamp or a listing scope, all matched by the deny-rule pattern.
+- **A plugin's `tool.check` deny is still not matched.** "Permission to use <tool> denied by plugin <name>: <reason>", seen in §14.2 on 2.1.304 and still in the 2.1.322 binary, reads as an ordinary tool error, so it counts as a failed attempt when `toolErrorsAreWipes` is on. Matching it would count fewer failed attempts (a loosening), so it is left for the maintainer.
+- **A remote tool's refusal note is not matched.** 2.1.322 answers a refused remote-tool approval card with "The refusal was recorded on <target> — nothing ran." as the tool's content. It is not one of Claude Code's permission-prompt wordings, and no pattern matches it; it is left as is.
+- **Not probed on 2.1.308 or 2.1.322:** the own-time budget cut-off, `$.ui.ask` rejecting in `-p`, `$.process.spawn` ending on `return()`, and `/council` output as `ui_log` in stream-json. They were last probed on 2.1.304 (§12.6).
 
 ## 13. Decisions after the final deliverables
 
@@ -879,7 +882,7 @@ Conclusions:
    - The `-p` denial wording is not one that `isAutomaticDenial` matches.
 5. **Pending:** a cloud run of a probe build, and the maintainer's decision on what this changes in C4 (ROADMAP C4).
 
-*2.1.308 (§12.7, from the types; not probed): `decider` is gone. Every ask a `tool.check` hook makes is now a person's, and the verdict's `plugin` names the hook's plugin (set by the engine). The types now say such an ask is answered by "the dialog, the host's callback or a PermissionRequest hook", where on 2.1.304 a PermissionRequest hook's allow was ignored (the table above). Conclusion 1 is therefore established for 2.1.304 only, until it is probed again.*
+*2.1.308 (§12.7, from the types; not probed): `decider` is gone. Every ask a `tool.check` hook makes is now a person's, and the verdict's `plugin` names the hook's plugin (set by the engine). The types now say such an ask is answered by "the dialog, the host's callback or a PermissionRequest hook", where on 2.1.304 a PermissionRequest hook's allow was ignored (the table above). Conclusion 1 is therefore established for 2.1.304 only, until it is probed again. 2.1.322 changes none of this.*
 
 ### 14.3 `sdk` is not a person's
 
