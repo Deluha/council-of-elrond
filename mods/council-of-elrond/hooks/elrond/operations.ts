@@ -20,7 +20,21 @@ export type OperationContext = {
   realPath?: string
 }
 
-export type Operation = { key: string; verbKey: string }
+/**
+ * What a call attempts. `key` and `verbKey` name the whole call (as they always
+ * did); `partKeys` and `partVerbKeys` name each gated part of a shell call on
+ * its own, as a call made of that part alone would be named, so a part cannot
+ * be retried under a new key by appending another command to it. For a call of
+ * one part, a file tool or another tool they hold just `key` and `verbKey`.
+ */
+export type Operation = {
+  key: string
+  verbKey: string
+  /** Each gated part's own key, distinct, for at most the first MAX_PART_KEYS parts. */
+  partKeys: readonly string[]
+  /** Each gated part's own verb key, distinct, for at most the first MAX_PART_KEYS parts. */
+  partVerbKeys: readonly string[]
+}
 
 /** Programs whose first word after the name is a subcommand that names the verb. */
 const SUBCOMMAND_PROGRAMS: ReadonlySet<string> = new Set([
@@ -47,6 +61,8 @@ const SQL_TARGET_OPTIONS: ReadonlySet<string> = new Set(['-d', '--dbname', '-h',
 
 const MAX_TARGETS = 8
 const MAX_KEY_CHARS = 300
+/** Gated parts of one call that get a key of their own: a compound command cannot grow the session state past this. */
+export const MAX_PART_KEYS = 8
 
 const programOf = (part: ShellPart): string => {
   const first = part.coreWords[0] ?? ''
@@ -146,22 +162,32 @@ export function operationOf(call: Call, classification: Classification, context:
     const parts = classification.findings.filter(finding => finding.part !== undefined)
     if (parts.length === 0) {
       const text = typeof call.input.command === 'string' ? call.input.command.replace(/\s+/g, ' ').trim() : ''
-      return { key: cap(`shell:${redact(text)}`), verbKey: 'shell:(unparsed)' }
+      const key = cap(`shell:${redact(text)}`)
+      return { key, verbKey: 'shell:(unparsed)', partKeys: [key], partVerbKeys: ['shell:(unparsed)'] }
     }
     const ops = parts.map(finding => partOperation(finding.part as ShellPart, finding.cwd ?? context.cwd, context))
     const verbs = sortedUnique(ops.map(op => op.verb))
-    const key = sortedUnique(ops.map(op => `${op.verb} ${sortedUnique(op.targets).slice(0, MAX_TARGETS).join(' ')}`.trim()))
+    const lines = ops.map(op => `${op.verb} ${sortedUnique(op.targets).slice(0, MAX_TARGETS).join(' ')}`.trim())
+    const key = sortedUnique(lines)
     // The key can hold a target a command named verbatim (a push URL with a
     // token, a connection string); it is written to the audit log, so redact.
-    return { key: cap(redact(`shell:${key.join(' ; ')}`)), verbKey: cap(`shell:${verbs.join(' ; ')}`) }
+    // A part's own key is the key of a call made of that part alone.
+    return {
+      key: cap(redact(`shell:${key.join(' ; ')}`)),
+      verbKey: cap(`shell:${verbs.join(' ; ')}`),
+      partKeys: sortedUnique(lines.slice(0, MAX_PART_KEYS).map(line => cap(redact(`shell:${line}`)))),
+      partVerbKeys: sortedUnique(ops.slice(0, MAX_PART_KEYS).map(op => cap(`shell:${op.verb}`))),
+    }
   }
   const field = FILE_PATH_FIELDS[call.tool]
   const given = field === undefined ? undefined : call.input[field]
   if (typeof given === 'string') {
     const path = context.realPath !== undefined ? normalPath(context.realPath, '/', context) : normalPath(given, context.cwd, context)
-    return { key: cap(`file:${path}`), verbKey: `file:${call.tool}` }
+    const key = cap(`file:${path}`)
+    return { key, verbKey: `file:${call.tool}`, partKeys: [key], partVerbKeys: [`file:${call.tool}`] }
   }
-  return { key: cap(`tool:${call.tool}`), verbKey: cap(`tool:${call.tool}`) }
+  const key = cap(`tool:${call.tool}`)
+  return { key, verbKey: key, partKeys: [key], partVerbKeys: [key] }
 }
 
 // ── Rounds, failed attempts, lockout ────────────────────────────────────────
@@ -192,58 +218,105 @@ function withOp<T extends OpsState>(state: T, key: string, op: OpState): T {
 
 export type Lockout = { kind: 'key' | 'verb'; wipes: number } | undefined
 
-/** Whether the operation is locked out: 3 failed attempts on its key, or 5 on its verb. */
+/** The keys an operation's rounds and failed attempts are counted on: each part's own, then the whole call's. */
+const keysOf = (operation: Operation): string[] => [...new Set([...operation.partKeys, operation.key])]
+
+/**
+ * The verb keys a call is checked against: each part's own, and the joined
+ * verb key, which a version of the counters that counted it may have stored.
+ */
+const verbKeysChecked = (operation: Operation): string[] => [...new Set([...operation.partVerbKeys, operation.verbKey])]
+
+/** The most failed attempts on any verb of the call, and the verb key that holds them. */
+function worstVerb(state: OpsState, operation: Operation): { verbKey: string; wipes: number } | undefined {
+  let worst: { verbKey: string; wipes: number } | undefined
+  for (const verbKey of verbKeysChecked(operation)) {
+    const wipes = state.verbWipes[verbKey] ?? 0
+    if (wipes >= VERB_WIPE_CAP && (worst === undefined || wipes > worst.wipes)) worst = { verbKey, wipes }
+  }
+  return worst
+}
+
+/**
+ * Whether the operation is locked out: 3 failed attempts on its whole key or on
+ * any part's own key, or 5 on the verb of any part (or on its stored joined verb key).
+ */
 export function lockoutOf(state: OpsState, operation: Operation): Lockout {
-  const key = opOf(state, operation.key).wipes
+  const key = Math.max(...keysOf(operation).map(known => opOf(state, known).wipes))
   if (key >= KEY_WIPE_CAP) return { kind: 'key', wipes: key }
-  const verb = state.verbWipes[operation.verbKey] ?? 0
-  if (verb >= VERB_WIPE_CAP) return { kind: 'verb', wipes: verb }
-  return undefined
+  const verb = worstVerb(state, operation)
+  return verb === undefined ? undefined : { kind: 'verb', wipes: verb.wipes }
 }
 
-/** One review verdict on the operation: a non-approve verdict uses a round. */
-export function noteRound<T extends OpsState>(state: T, key: string, isApprove: boolean): T {
+/** The verb key that locks the operation out (for saying which kind is locked), when a verb does and no key does. */
+export const lockedVerbOf = (state: OpsState, operation: Operation): string | undefined => worstVerb(state, operation)?.verbKey
+
+/** One review verdict on the operation: a non-approve verdict uses a round, on its whole key and each part's own. */
+export function noteRound<T extends OpsState>(state: T, operation: Operation, isApprove: boolean): T {
   if (isApprove) return state
-  const op = opOf(state, key)
-  return withOp(state, key, { ...op, rounds: op.rounds + 1 })
+  return keysOf(operation).reduce((current, key) => {
+    const op = opOf(current, key)
+    return withOp(current, key, { ...op, rounds: op.rounds + 1 })
+  }, state)
 }
 
-export const roundsLeft = (state: OpsState, key: string): number => Math.max(0, ROUND_CAP - opOf(state, key).rounds)
+/** The rounds left on the operation: the fewest of its whole key and its parts' own. */
+export const roundsLeft = (state: OpsState, operation: Operation): number =>
+  Math.max(0, ROUND_CAP - Math.max(...keysOf(operation).map(key => opOf(state, key).rounds)))
 
 /**
  * Failed attempts since the user last wrote, for the status and the debate
- * pane: how many (the per-verb counter, which only a new prompt clears), over
- * how many operations, and how many of those are locked out.
+ * pane: how many (the per-verb counters, which only a new prompt clears; a call
+ * of several verbs counts once on each), over how many tracked keys, and how
+ * many of those are locked out: keys at their cap, and verbs at theirs.
  */
 export function attemptsOf(state: OpsState): { count: number; ops: number; locked: number } {
   const ops = Object.values(state.ops)
+  const verbs = Object.values(state.verbWipes)
   return {
-    count: Object.values(state.verbWipes).reduce((sum, n) => sum + n, 0),
+    count: verbs.reduce((sum, n) => sum + n, 0),
     ops: ops.length,
-    locked: ops.filter(op => op.wipes >= KEY_WIPE_CAP).length,
+    locked: ops.filter(op => op.wipes >= KEY_WIPE_CAP).length + verbs.filter(wipes => wipes >= VERB_WIPE_CAP).length,
   }
 }
 
-/** Out of rounds: the next attempt goes to the user, with no model call. */
-export const isOutOfRounds = (state: OpsState, key: string): boolean => opOf(state, key).rounds >= ROUND_CAP
+/** Out of rounds: the next attempt goes to the user, with no model call. Its whole key, or any part's own, is. */
+export const isOutOfRounds = (state: OpsState, operation: Operation): boolean => keysOf(operation).some(key => opOf(state, key).rounds >= ROUND_CAP)
 
-/** A failed attempt, counted on the key and on its verb. */
+/**
+ * A failed attempt, counted on the whole key, on each part's own key, and on
+ * each distinct part verb. The joined verb key is not counted: the per-verb
+ * counters replace it (a stored one is still read, by `lockoutOf`).
+ */
 export function noteWipe<T extends OpsState>(state: T, operation: Operation): T {
+  const counted = keysOf(operation).reduce((current, key) => {
+    const op = opOf(current, key)
+    return withOp(current, key, { ...op, wipes: op.wipes + 1 })
+  }, state)
+  const verbWipes = { ...counted.verbWipes }
+  for (const verbKey of new Set(operation.partVerbKeys)) verbWipes[verbKey] = (verbWipes[verbKey] ?? 0) + 1
+  return { ...counted, verbWipes }
+}
+
+/**
+ * The user typed an instruction: the call's own rounds start over, on its whole
+ * key only. A part's rounds stay: giving them back would lower a count a call of
+ * that part alone has used (DESIGN §15 item 20). For a call of one part, a file
+ * tool or another tool the whole key is the only key.
+ */
+export function resetRounds<T extends OpsState>(state: T, operation: Operation): T {
   const op = opOf(state, operation.key)
-  const counted = withOp(state, operation.key, { ...op, wipes: op.wipes + 1 })
-  return { ...counted, verbWipes: { ...counted.verbWipes, [operation.verbKey]: (counted.verbWipes[operation.verbKey] ?? 0) + 1 } }
+  return op.rounds === 0 ? state : withOp(state, operation.key, { ...op, rounds: 0 })
 }
 
-/** The user typed an instruction: the operation's rounds start over. */
-export function resetRounds<T extends OpsState>(state: T, key: string): T {
-  const op = opOf(state, key)
-  return op.rounds === 0 ? state : withOp(state, key, { ...op, rounds: 0 })
-}
-
-/** The call ran and succeeded: its own operation starts over (the verb counter stays). */
-export function resetOperation<T extends OpsState>(state: T, key: string): T {
-  if (state.ops[key] === undefined) return state
-  const { [key]: _done, ...rest } = state.ops
+/**
+ * The call ran and succeeded: its own whole key starts over. Part keys and the
+ * verb counters stay, so a success never lowers what a call of one part alone
+ * has counted (DESIGN §15 item 20).
+ */
+export function resetOperation<T extends OpsState>(state: T, operation: Operation): T {
+  if (state.ops[operation.key] === undefined) return state
+  const { [operation.key]: _done, ...rest } = state.ops
   return { ...state, ops: rest }
 }
 

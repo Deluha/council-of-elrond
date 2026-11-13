@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { rangeOf } from '../hooks/elrond/council.js'
-import { formatPreview, MAX_INSPECTIONS, planPreview, rangeDiffInspections, unseenPushNote } from '../hooks/members/galadriel.js'
+import { broadPushNote, formatPreview, MAX_INSPECTIONS, planPreview, rangeDiffInspections, unseenPushNote } from '../hooks/members/galadriel.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
 import { APPROVE, auditLines, CONTEXT, FAKE_GITHUB_TOKEN, KEEP_BLOCKED, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
@@ -242,6 +242,23 @@ describe('what a push shows is what it pushes (DESIGN §15)', () => {
     expect(bash('git push -u origin').filter(step => step.kind === 'note')).toEqual([])
   })
 
+  test('--all, --mirror and --tags with no refspec: the current branch is listed, and the preview says the push sends more', () => {
+    for (const command of ['git push --all origin', 'git push --mirror origin', 'git push --tags origin', 'git push origin --tags', 'git push --all', 'git push -u --tags']) {
+      expect(logRanges(command), command).toEqual(['@{upstream}..HEAD'])
+      expect(noteLabels(command), command).toEqual([broadPushNote])
+    }
+    // The council's diff of a push carries it too. (The shipped rules block `--all` and `--mirror`, so only `--tags` is a review.)
+    for (const command of ['git push --tags origin', 'git push origin --tags', 'git push -u --tags']) {
+      expect(diffRanges(command), command).toEqual(['@{upstream}..HEAD'])
+      expect(rangeDiffs(command, 'push')?.notes, command).toEqual([broadPushNote])
+    }
+    expect(broadPushNote).toBe('This push sends more branches or tags than the commits shown: only the current branch is listed, so what the others would send is unknown.')
+    // A note is not a step against the cap.
+    expect(bash('git push --tags origin')).toHaveLength(4)
+    // Named refspecs are each read, as before; and an ordinary push has no such note.
+    for (const command of ['git push --tags origin v1.0', 'git push origin main', 'git push origin', 'git push -u origin']) expect(noteLabels(command), command).toEqual([])
+  })
+
   test('a delete sends no commits: no range, and none of the current branch', () => {
     for (const command of ['git push origin :old', 'git push origin --delete old', 'git push -d origin old', 'git push origin +:old']) {
       expect(logRanges(command), command).toEqual([])
@@ -336,6 +353,18 @@ describe('in the pipeline', () => {
     const note = `Note: ${unseenPushNote(1)}`
     expect(prompt).toContain(note)
     // Said by the mod: after a closing tag, not inside a data block.
+    const before = prompt.slice(0, prompt.indexOf(`\n\n${note}`))
+    expect(before.match(/<data-\w+ /g)?.length).toBe(before.match(/<\/data-\w+>/g)?.length)
+  })
+
+  test('a push of every tag: the trusted note reaches the reviewer after the preview, outside any data block', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    w.processReply = argv => (argv[1] === 'log' ? { exitCode: 0, stdout: 'bbb222 The checked-out branch\n' } : { exitCode: 0, stdout: 'feature\n' })
+    await $.tool.call({ tool: 'Bash', command: 'git push --tags origin' })
+    const prompt = String(w.modelRequests.at(-1)?.prompt)
+    expect(prompt).toContain('bbb222 The checked-out branch')
+    const note = `Note: ${broadPushNote}`
+    expect(prompt).toContain(note)
     const before = prompt.slice(0, prompt.indexOf(`\n\n${note}`))
     expect(before.match(/<data-\w+ /g)?.length).toBe(before.match(/<\/data-\w+>/g)?.length)
   })

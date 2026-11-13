@@ -234,6 +234,23 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   is a plain name, or more than three refspecs is said in the preview and in a line the reviewers
   read outside the preview, so they never take the checked-out branch's commits for the push's.
   The operation key of a push is unchanged.
+- **Rounds, failed attempts and lockouts follow each part of a compound command.** A command made of
+  several gated parts used to be one operation as a whole, so the same part inside another
+  combination started again with no failed attempts and fresh review rounds. Each gated part now has
+  a key of its own (the key a call of that part alone has), and so does each part's verb. A failed
+  attempt counts on the whole call, on each part and on each verb of the call; a review round on the
+  whole call and each part. A call is locked out when its whole key or any part's key reached three
+  failed attempts, or any verb in it reached five; it goes to you without a model call when its
+  whole key or any part has used its two rounds. Your typed instruction gives the whole call its
+  rounds back, and a call that ran clears its whole key; neither touches a part's key or the verb
+  counters, so a part keeps what a call of that part alone has used. The status and the debate
+  pane count a locked verb as locked out. The first eight
+  gated parts of a call have part keys, so a long command cannot grow the session record. Existing
+  counts and lockouts are kept. A call of one part, a file tool or another tool counts as before.
+- **A push of every branch or tag says so in the preview.** `git push --all`, `--mirror` or `--tags`
+  with no refspec still lists the current branch's commits, and now adds a line, in the preview and
+  to every reviewer outside the preview, that the push sends more branches or tags than the commits
+  shown.
 
 ### Fixed
 - **The status line is cleared when its surface leaves.** A label set for a phone or VS Code

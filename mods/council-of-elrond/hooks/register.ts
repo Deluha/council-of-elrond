@@ -26,6 +26,7 @@ import {
   cacheApprove,
   isOutOfRounds,
   isWipeOutcome,
+  lockedVerbOf,
   lockoutOf,
   noteRound,
   noteWipe,
@@ -1695,7 +1696,7 @@ export const register: Register = (on, options) => {
         await update($, session, value => {
           const current = sessionOf(value)
           if (!thisPrompt(current)) return current // a new prompt already reset the counters
-          return counts ? noteWipe(current, operation) : resetOperation(current, operation.key)
+          return counts ? noteWipe(current, operation) : resetOperation(current, operation)
         })
       }
       // Cosmetic and themed only: a failure here never changes the result.
@@ -1708,7 +1709,7 @@ export const register: Register = (on, options) => {
 
     /** Refuses with the rounds left on the operation; `isWipe` counts it as a failed attempt. */
     const refuse = async (refusal: Refusal, isWipe: boolean): Promise<ToolCallResult> => {
-      const left = roundsLeft(sessionOf(await read($, session)), operation.key)
+      const left = roundsLeft(sessionOf(await read($, session)), operation)
       return finish({ deny: refusalText({ ...refusal, roundsLeft: left }) }, isWipe)
     }
 
@@ -1839,7 +1840,7 @@ export const register: Register = (on, options) => {
         return refuse({ who: 'who.user', verdict: 'keep blocked', reason: text('reason.userKeptBlocked'), alternative: text('alternative.ask') }, true)
       }
       decision = 'instruction'
-      await update($, session, value => resetRounds(sessionOf(value), operation.key))
+      await update($, session, value => resetRounds(sessionOf(value), operation))
       return refuse(
         { who: 'who.user', verdict: 'instruction', reason: text('reason.userKeptBlocked'), alternative: text('alternative.ask'), instruction: answer.text },
         false,
@@ -1870,14 +1871,15 @@ export const register: Register = (on, options) => {
 
     // 5. Lockout: too many failed attempts on this operation since the user last wrote.
     // Decided on a fresh read: a parallel call's failed attempts may have landed since the first.
-    const lockout = lockoutOf(sessionOf(await read($, session)), operation)
+    const lockState = sessionOf(await read($, session))
+    const lockout = lockoutOf(lockState, operation)
     if (lockout !== undefined) {
       member = null
       verdictText = 'locked out'
       const reason =
         lockout.kind === 'key'
           ? text('reason.lockoutKey', { count: lockout.wipes })
-          : text('reason.lockoutVerb', { count: lockout.wipes, verb: operation.verbKey.replace(/^\w+:/, '') })
+          : text('reason.lockoutVerb', { count: lockout.wipes, verb: (lockedVerbOf(lockState, operation) ?? operation.verbKey).replace(/^\w+:/, '') })
       reasonText = reason
       return refuse({ who: 'who.council', verdict: 'locked out', reason: `${text('refusal.lockout', { count: lockout.wipes })} ${reason}`, alternative: text('alternative.lockout') }, false)
     }
@@ -2047,7 +2049,7 @@ export const register: Register = (on, options) => {
         }
         if (runs.length > 0) counted = count(counted, 'gimli', runs.some(isGimliBlock) ? 'block' : 'approve')
         counted = count(counted, 'council', isVerdict ? combined.verdict : 'failed')
-        return isVerdict && !shadow && thisPrompt(value) ? noteRound(counted, operation.key, combined.verdict === 'approve') : counted
+        return isVerdict && !shadow && thisPrompt(value) ? noteRound(counted, operation, combined.verdict === 'approve') : counted
       })
 
       if (combined.reviewed === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', combined.opinions)
@@ -2072,7 +2074,7 @@ export const register: Register = (on, options) => {
     }
 
     // 9. Route: a big operation to the full council; anything else to the rule's member, else the fallback.
-    if (isOutOfRounds(state, operation.key) && !shadow) return askUser('escalate.rounds', [])
+    if (isOutOfRounds(state, operation) && !shadow) return askUser('escalate.rounds', [])
     if (settings.councilEnabled) {
       const compiled = ctx.loaded.compiled
       // A merge that would run elsewhere (-C, GIT_DIR, a folder outside the root) has an unknown branch, which counts as protected.
@@ -2116,7 +2118,7 @@ export const register: Register = (on, options) => {
       const spent = addReviewTime(addTokens(sessionOf(value), verdict.tokens), memberMs)
       const counted = count(spent, brief.member, verdict.ok ? verdict.verdict.verdict : 'failed')
       // A round is a verdict that enforces: in shadow, verdicts only log.
-      return verdict.ok && !shadow && thisPrompt(value) ? noteRound(counted, operation.key, verdict.verdict.verdict === 'approve') : counted
+      return verdict.ok && !shadow && thisPrompt(value) ? noteRound(counted, operation, verdict.verdict.verdict === 'approve') : counted
     })
 
     if (!verdict.ok) {

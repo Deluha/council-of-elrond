@@ -156,7 +156,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 ```
 
 - **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`: one file per member, `brief.ts` pairing each member and profile with its prompts, `gimli.ts` the checks' outcomes), routing, the full council's seats (`elrond/council.ts`) and its verdict (`elrond/combine.ts`), escalation, refusal, model choice, the allow rule offered after "allow once" (`elrond/suggest.ts`), the report (`elrond/report.ts`) and the rows the debate pane and the band draw (`elrond/view.ts`) (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
-- **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 4), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt a person sends (composer or bridge origin) except a `/council` command: it clears rounds, failed attempts, lockouts and the cache. Any other prompt, `sdk` included, clears only the cache (§14.3).
+- **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 5), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt a person sends (composer or bridge origin) except a `/council` command: it clears rounds, failed attempts, lockouts and the cache. Any other prompt, `sdk` included, clears only the cache (§14.3).
 - **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load, after the mod's own writes (an allowlist entry, an allow rule), and on `/council reload` (never by watching the file). Both writes go through `editOverrides` (`config/write.ts`). Where the session root is the parent of several repositories, each repository's own file is read the same way, once per repository, and a call is classified against the repositories it touches (§14.5).
 
 ## 4. Failure modes
@@ -1290,9 +1290,9 @@ decided; the live list of what still passes is the README's "Known gaps in shell
     - **Labels.** `commits it would send (<range>)` and the fallback's label name the range actually
       computed, per refspec, so the text of a push's labels changed (`origin/feature..feature`, where
       it read `origin/feature..HEAD`).
-    - **Not done (decision for the maintainer).** `--all`, `--mirror` and `--tags` with no refspec
-      still show the current branch's commits (`@{upstream}..HEAD`, labelled as such), though the
-      push sends more than that.
+    - **Broad pushes (done in item 21).** `--all`, `--mirror` and `--tags` with no refspec still show
+      the current branch's commits (`@{upstream}..HEAD`, labelled as such), though the push sends
+      more than that; item 21 adds a trusted note saying so.
     `rangeDiffInspection` became `rangeDiffInspections` (a list and the notes). Tests:
     `galadriel.test.ts` ("what a push shows is what it pushes", and the pipeline tests that follow
     it), `gitcwd.test.ts` and `council.test.ts` for the changed range text. Mutation: taking `HEAD`
@@ -1309,3 +1309,61 @@ decided; the live list of what still passes is the README's "Known gaps in shell
     force-push check (`keepEmpty`), as each always read it, so no call that was blocked is read
     differently. Differences that tighten, by design: a `+` after the colon (`a:+main`) is stripped
     before the protected-branch test; any `--force-` option counts as force (item 17).
+20. **The retry brake follows each part of a compound command** (a tightening). An operation's key
+    and verb key were built from every gated part of a shell call joined together, so a part that
+    was locked out or out of rounds came back under a new key, and a new verb key, once another
+    gated part was added to the command: fresh rounds, no lockout, and every new combination the
+    same. `Operation` (`elrond/operations.ts`) now also holds `partKeys` (each gated part's own key,
+    exactly what a call of that part alone gets, redacted and capped alike) and `partVerbKeys` (each
+    part's verb key). For a call of one part, a file tool or another tool they hold just `key` and
+    `verbKey`, so those are counted and reset as before. Every reader goes through a helper that
+    takes the `Operation`, so no caller checks a bare key (`roundsLeft`, `isOutOfRounds`,
+    `noteRound`, `resetRounds`, `resetOperation`, `noteWipe`, `lockoutOf`, `lockedVerbOf`).
+    - **Counting.** A failed attempt counts on the whole key, on each part key that differs from it,
+      and on each distinct part verb key; the joined verb key is not counted any more (the per-verb
+      counters replace it). A review round counts on the whole key and each part key.
+    - **Checking.** Locked out: the whole key or any part key has 3 failed attempts, or any part
+      verb key has 5. Out of rounds (the next attempt goes to the person, with no model call): the
+      whole key or any part key has used its 2 rounds. The refusal's "rounds left" is the fewest
+      across those keys. The lockout reason names the verb that reached its cap.
+    - **Resets stay narrow.** A call that ran clears its whole key only; its part keys and the verb
+      counters stay. The person's typed instruction gives the whole key its rounds back, not its part
+      keys', so a compound whose part is out of rounds still goes to the person after it (and so does
+      that part alone). For a call of one part, a file tool or another tool the whole key is the only
+      key, so these resets are what they were. A new person's prompt resets everything, as before.
+      The wider resets (a success or an instruction also clearing the part keys) were considered and
+      left to the maintainer: they could lower a count a call of that part alone had earned, which is
+      a loosening.
+    - **State.** The stored shape is unchanged (version 5): `ops` and `verbWipes` hold the extra keys,
+      so nothing is migrated and no lockout is lost. A joined verb key already stored (from a
+      version that counted it) is still read: a call whose joined verb key equals it is locked out
+      by it until the next prompt, so an upgrade drops no lockout. It is no longer written.
+    - **Bounded.** Only the first `MAX_PART_KEYS` (8) gated parts of a call get part keys and part
+      verb keys. A call with more is decided by its whole key plus those eight, and a failed attempt
+      records at most nine keys, so a huge compound command cannot grow the session record (`ops`
+      stays capped at 200 entries as before).
+    - **The status** (`attemptsOf`, the pane and `/council`) counts a verb at its cap as locked out,
+      so it cannot say "0 locked out" while a verb is locked. Side effects of the keys sharing one
+      map: "operations" counts every tracked key, part keys included; "attempts" is the sum of the
+      verb counters, so a command with two kinds counts once on each; "locked out" counts keys and
+      verbs, so one locked compound can show as more than one.
+    - **Left as it was.** The lockout text for a part's key still reads "the same operation" (a part
+      of this call is the same operation). A retry through another tool or verb is still another
+      operation.
+    Tests: `operations.test.ts` (keys, counting, checking, resets, the stored joined verb key, the
+    status, and single-part, file and tool operations pinned to explicit state), `rounds.test.ts`
+    (through `register`: a locked part refuses a compound with no model request or question; an
+    out-of-rounds part sends it to the person with no model request; the typed instruction). Mutations:
+    checking only the whole key fails the lockout tests, counting a failed attempt only on the whole
+    key fails the counting and pipeline tests, ignoring part keys in `isOutOfRounds` fails the rounds
+    tests, resetting the part keys too (on a success or an instruction) fails the reset tests, leaving
+    verb lockouts out of the status fails its test.
+21. **A push of every branch or tag says so** (a tightening). `git push` with `--all`, `--mirror` or
+    `--tags` and no refspec still previews the current branch's `@{upstream}..HEAD`, as item 18 left
+    it, and its plan now carries a trusted `note` step (`broadPushNote`, `members/galadriel.ts`) saying the
+    push sends more branches or tags than the commits shown. It is in the preview the person reads
+    and in the `Note:` line every reviewer's prompt carries outside any data block, and in the notes
+    of the council's diff. A note is not counted against the preview's cap. A push that names a
+    refspec is read per refspec, as before, and has no such note. The shipped rules block `--all` and
+    `--mirror` (`force-push-protected-branch`), so in practice the note shows for `--tags`; the
+    plan and its tests cover all three. Test: `galadriel.test.ts`.

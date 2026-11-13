@@ -111,6 +111,8 @@ type PushPlan = {
   past: number
   /** How many refspecs the push names. */
   total: number
+  /** `--all`, `--mirror` or `--tags` with no refspec: the push sends more than the current branch's commits shown. */
+  isBroad: boolean
 }
 
 /** The line said, trusted, when what some refspecs would send could not be shown. */
@@ -120,11 +122,18 @@ export const unseenPushNote = (count: number): string =>
 const pastPushNote = (total: number): string =>
   `This push names ${total} refspecs and commits are shown for the first ${MAX_PUSH_REFSPECS} only, so what the others would send is unknown.`
 
+/** The line said, trusted, when a push of every branch or tag is shown as the current branch's commits only. */
+export const broadPushNote = 'This push sends more branches or tags than the commits shown: only the current branch is listed, so what the others would send is unknown.'
+
 /** The notes a push plan calls for, one line each. */
 const pushNotes = (plan: PushPlan): string[] => [
   ...(plan.unseen > 0 ? [unseenPushNote(plan.unseen)] : []),
   ...(plan.past > 0 ? [pastPushNote(plan.total)] : []),
+  ...(plan.isBroad ? [broadPushNote] : []),
 ]
+
+/** Flags that send more than the refspecs name (or, with none, more than the current branch). */
+const BROAD_PUSH_FLAGS: ReadonlySet<string> = new Set(['--all', '--mirror', '--tags'])
 
 /**
  * What a push would send, per refspec: its own source against the remote's
@@ -138,7 +147,14 @@ function pushPlan(rest: readonly string[]): PushPlan {
   const fallback = remote === undefined ? undefined : `${remote}/HEAD`
   const base = { ...(remote !== undefined && { remote }) }
   if (push.refspecs.length === 0) {
-    return { ...base, ranges: [{ range: '@{upstream}..HEAD', source: 'HEAD', ...(fallback !== undefined && { fallback }) }], unseen: 0, past: 0, total: 0 }
+    return {
+      ...base,
+      ranges: [{ range: '@{upstream}..HEAD', source: 'HEAD', ...(fallback !== undefined && { fallback }) }],
+      unseen: 0,
+      past: 0,
+      total: 0,
+      isBroad: rest.some(word => BROAD_PUSH_FLAGS.has(word)),
+    }
   }
   const ranges = new Map<string, PushRange>()
   let unseen = 0
@@ -151,7 +167,7 @@ function pushPlan(rest: readonly string[]): PushPlan {
     const range = `${remote}/${spec.destination}..${spec.source}`
     ranges.set(range, { range, source: spec.source, ...(fallback !== undefined && { fallback }) })
   }
-  return { ...base, ranges: [...ranges.values()], unseen, past: Math.max(0, push.refspecs.length - MAX_PUSH_REFSPECS), total: push.refspecs.length }
+  return { ...base, ranges: [...ranges.values()], unseen, past: Math.max(0, push.refspecs.length - MAX_PUSH_REFSPECS), total: push.refspecs.length, isBroad: false }
 }
 
 /** The ref a merge names, past the options that take a value. */
