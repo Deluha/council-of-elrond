@@ -2,13 +2,13 @@
 
 <!-- One paragraph. Link the issue or the roadmap item. -->
 
-Type: <!-- fix / rules / reviewer / pipeline / ui / docs / ci --> · Stage: <!-- 6, hardening, n/a -->
+Type: <!-- fix / rules / reviewer / pipeline / ui / docs / ci --> · Milestone or brief: <!-- M0 to M7, hardening, n/a -->
 
 ## Checks
 
 - [ ] `claude plugin test mods/council-of-elrond` passes
 - [ ] `tsc -p mods` passes
-- [ ] `claude plugin validate mods/council-of-elrond` passes, and `DESIGN.md` §2 carries its `hooks:`/`calls:` lines if they changed
+- [ ] `claude plugin validate --strict mods/council-of-elrond` passes, and `DESIGN.md` §2 carries its `hooks:`/`calls:` lines if they changed
 - [ ] New or changed behaviour has a test that fails without the change
 - [ ] User-visible changes are in `mods/council-of-elrond/README.md` and `CHANGELOG.md` ("Unreleased")
 - [ ] Any decision the spec or roadmap didn't cover is recorded in `DESIGN.md`

@@ -14,8 +14,9 @@ The mod sits on three things that move without it:
 
 ## When Claude Code updates
 
-Run this whenever `claude --version` differs from the version at the top of DESIGN.md. The
-`/upgrade-types` skill in this repository walks through it.
+Run this monthly and before each release (ROADMAP decision D10), not at every new build: CI is
+pinned to the version at the top of DESIGN.md, and a scheduled job on the latest build reports
+drift. The `/upgrade-types` skill in this repository walks through it.
 
 1. **Regenerate the types.** Load the `plugin-authoring` skill in a Claude Code session; it writes
    `types/claude-code.d.ts` under the skill's folder and prints the path. Do not point it at a mod
@@ -36,14 +37,17 @@ Run this whenever `claude --version` differs from the version at the top of DESI
    ```
    If the wording changed, update `hooks/elrond/operations.ts` (`outcomeOf`) and its tests.
 5. **Re-probe what the tests can't.** The behaviours established by live probes (DESIGN.md §1,
-   §4): the own-time budget cutting a hook off (from 2.1.299, a `timeout` `.catch`), `$.ui.ask`
-   rejecting in `-p`, `$.process.spawn` ending on `return()`, `ui_log` lines in stream-json. One
-   headless run per behaviour, in a throwaway repo.
+   §4): the own-time budget cutting a hook off (from 2.1.299 the hook is cut off, its `.catch` is
+   asked with `kind` `timeout`, and a later `next(e)` is refused, so the call is refused),
+   `$.ui.ask` rejecting in `-p`, `$.process.spawn` ending on `return()`, `ui_log` lines in
+   stream-json. One headless run per behaviour, in a throwaway repo; ROADMAP M0.4 turns this into
+   a script.
 6. **Record it.** The version line at the top of DESIGN.md, the drift in one sentence, and any
    changed decision. Mention the version in CHANGELOG.
-7. **Pin CI if needed.** `.github/workflows/ci.yml` installs the latest `@anthropic-ai/claude-code`.
-   If a newer release breaks the vendored types before you have time to upgrade, pin the version
-   there (`npm install -g @anthropic-ai/claude-code@2.1.294`) and open an issue.
+7. **Move the pin.** Both `.github/workflows/ci.yml` and `.github/workflows/release.yml` install a
+   pinned `@anthropic-ai/claude-code`. Move the pin in both to the new version, the same one the
+   types are from (ROADMAP decision D10). A newer release that breaks the vendored types before
+   you have time to upgrade changes nothing for CI, which stays on the pin; open an issue.
 
 ## Releasing
 
@@ -52,7 +56,7 @@ Versions are the `version` field in `mods/council-of-elrond/.claude-plugin/plugi
 
 1. Move CHANGELOG's "Unreleased" under the new version with the date. Credit security reporters.
 2. Bump `version` in `plugin.json`. The marketplace manifest reads it from there.
-3. Update the README's status line and the token-cost figures if a stage changed them.
+3. Update the README's status line and the token-cost figures if a milestone changed them.
 4. Run the three checks, commit, then tag with Claude Code's own tool, which checks that
    `plugin.json` and the marketplace entry agree:
    ```sh
@@ -65,11 +69,11 @@ Versions are the `version` field in `mods/council-of-elrond/.claude-plugin/plugi
 5. Users on the marketplace get it with `claude plugin marketplace update` and
    `claude plugin update`.
 
-**When is it 1.0.0?** When the maintainer's terminal check has passed (ROADMAP "Final
-deliverables"), the ~40-case live eval has run and its results are in DESIGN.md (ROADMAP "Before
-1.0"), and the shipped rules have had a few weeks of shadow-mode reports from real projects
-without a change. Stage 6 and the final deliverables are done; the definition of done (SPEC §22)
-is checked off (DESIGN.md §12.2).
+**When is it 1.0.0?** When every condition in ROADMAP M7 holds: among them the eval results
+against the thresholds written before they were measured (M2), the support matrix (M5), the canary
+and its probe suite on schedule for four weeks, a stated minimum version and a deprecation rule.
+The release itself (M1) also needs the maintainer's shortened terminal check. Stage 6 and the final
+deliverables are done; the definition of done (SPEC §22) is checked off (DESIGN.md §12.2).
 
 ## Reviewing a pull request
 
@@ -111,13 +115,13 @@ Tested: `claude -p` (headless, in the live checks), and a cloud session (Claude 
 with the mod installed by the environment's setup script. In the cloud it loads at session start
 and enforces (rules, reviews, previews, the audit log) but draws nothing, since the web client is
 not a render surface (`$.session.surfaces()` is empty), and every call that would come to the
-user is refused as "nobody can be asked" (DESIGN.md §14; work items C3 to C6 in the ROADMAP). Since C2
+user is refused as "nobody can be asked" (DESIGN.md §14; the cloud work items C3 to C6 are in docs/history/ROADMAP-v1.md, and the checks still pending are ROADMAP M5.2). Since C2
 the model is the channel to the person there: a start notice, four `/council` outputs for a person's
 own command and the refusal's details go through it (DESIGN.md §13.5). A
 repository's settings do not load plugins there; the setup script or organization managed
 settings do (docs/INSTALL.md, "Cloud sessions"). The terminal's interactive screens await the
-maintainer's check (ROADMAP "Final deliverables"). Expected to work with no drawing: the desktop
+maintainer's shortened check (ROADMAP M1.4). Expected to work with no drawing: the desktop
 app, VS Code and JetBrains panels and the Agent SDK. Where `$.ui.ask` can't be shown it rejects,
 which refuses the call; where no surface is attached, as in the cloud, the mod refuses without
-trying it (ROADMAP C3 probes it). Windows shells are not parsed (POSIX only). Say so in issues
+trying it (DESIGN.md §14.1 probed it). Windows shells are not parsed (POSIX only). Say so in issues
 rather than guessing.

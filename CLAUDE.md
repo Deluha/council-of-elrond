@@ -12,13 +12,14 @@ Public, MIT-licensed, open-source repository.
 - **User manual:** `mods/council-of-elrond/README.md`.
 - **Developer guide (layout, conventions, tests, live checks, recipes):** `docs/DEVELOPMENT.md`.
 - **Maintainer guide (Claude Code updates, releases):** `docs/MAINTENANCE.md`.
-- **Open findings and proposed amendments:** `docs/REVIEW-2026-10.md`.
+- **The October review (mostly closed; what remains open is listed in its banner):** `docs/REVIEW-2026-10.md`.
 - **The review behind ROADMAP v2 (findings, ideas, evidence):** `docs/REVIEW-2026-11.md`.
+- **The independent review of it, and the amendments it led to:** `docs/REVIEW-2026-11-INDEPENDENT.md`.
 - **What was built before v2 (Stages 0 to 6, H1 to H3, C1 to C6):** `docs/history/ROADMAP-v1.md`.
 
 ## Rules
 
-- `mods/types/claude-code.d.ts` (Claude Code 2.1.299) is the API's source of truth, ahead of docs
+- `mods/types/claude-code.d.ts` (the version named at the top of DESIGN.md) is the API's source of truth, ahead of docs
   and the spec. Don't invent APIs. Don't edit that file; regenerate it (`/upgrade-types`).
 - Only `hooks/register.ts` touches `$`; everything else is pure and tested directly.
 - Every user-facing string lives in `hooks/strings.ts`. No text in logic.
@@ -27,15 +28,15 @@ Public, MIT-licensed, open-source repository.
   checkpoint, give the summary SPEC §20 asks for (`/checkpoint` drafts it), and wait for the user.
   Don't start the next milestone unasked.
 - Decisions the spec doesn't cover: one that tightens (more calls ask or are refused, more text
-  is redacted) is decided by picking the safer option, recorded in the current stage's section
-  of DESIGN.md, and reported at the checkpoint. One that loosens (fewer findings, less
+  is redacted) is decided by picking the safer option, recorded in DESIGN.md, in the section
+  for the current milestone or hardening pass, and reported at the checkpoint. One that loosens (fewer findings, less
   redaction, a call that used to ask now passing), even as a side effect of an approved change,
   goes to the user before it is committed. Decisions listed in ROADMAP.md are binding unless
   the user changes them.
 - Never load the mod into the session that is developing it. Test with `claude plugin test`, and
   run live checks headless in a throwaway repository with `claude -p --plugin-dir` (`/live-check`).
 - Before every commit: `claude plugin test mods/council-of-elrond`, `tsc -p mods` and
-  `claude plugin validate mods/council-of-elrond` all pass.
+  `claude plugin validate mods/council-of-elrond` all pass, run with the Claude Code build CI pins.
 - A behaviour change needs a test that fails without it. For a path that decides whether a call
   runs, break the code on purpose and confirm the test fails.
 - Keep user-visible changes in the user manual and `CHANGELOG.md` ("Unreleased").

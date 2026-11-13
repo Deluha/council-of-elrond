@@ -44,6 +44,7 @@ that reproduces the bypass; the report is credited in `CHANGELOG.md` unless you 
 
 ## Supported versions
 
-Only the latest release on `main` is supported. The mod targets the Claude Code version named at
-the top of [`DESIGN.md`](mods/council-of-elrond/DESIGN.md); behaviour on other versions is
-untested.
+No version has been tagged yet: 0.5.0 and 0.6.0 are headings in the changelog on `main`, and the
+first tag will be 0.6.0. Until then only `main` is supported, and afterwards only the latest
+release. The mod targets the Claude Code version named at the top of
+[`DESIGN.md`](mods/council-of-elrond/DESIGN.md); behaviour on other versions is untested.

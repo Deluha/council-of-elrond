@@ -8,16 +8,16 @@ taken, and [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for how it works and
 
 ```sh
 cd council-of-elrond
-claude plugin test mods/council-of-elrond       # 675 tests, about 40 s
+claude plugin test mods/council-of-elrond       # all tests
 tsc -p mods                                    # strict, against mods/types/claude-code.d.ts
-claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
+claude plugin validate --strict mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
 ```
 
-- All three pass before every commit.
-- Only `hooks/register.ts` touches `$`. Everything else is pure and tested directly.
+- All three pass before every commit, on the Claude Code build CI pins (DESIGN.md's header names it).
+- Only `hooks/register.ts` touches `$` (re-probed in M0). Everything else is pure and tested directly.
 - Never load the mod into the session developing it. Live checks run headless (below).
 - `mods/types/claude-code.d.ts` is the API. Don't invent methods; don't edit the file.
-- Stop at every stage checkpoint (SPEC §20) with the summary it asks for, and wait for the
+- Stop at every milestone checkpoint (SPEC §20) with the summary it asks for, and wait for the
   maintainer.
 
 ## Layout
@@ -25,7 +25,7 @@ claude plugin validate mods/council-of-elrond  # manifest, hooks, and every $ ca
 ```
 mods/
   tsconfig.json              strict typecheck for every mod under mods/
-  types/claude-code.d.ts     Claude Code's generated API types (2.1.299), vendored
+  types/claude-code.d.ts     Claude Code's generated API types (the version in DESIGN.md's header), vendored
   council-of-elrond/
     .claude-plugin/plugin.json   manifest: name, version, userConfig (the /config rows)
     hooks/hooks.json             "modules": ["./register.ts"]
@@ -52,7 +52,8 @@ What each pure module decides, and the order they run in, is the data-flow diagr
 ## How register.ts is built
 
 `register.ts` is long because the engine requires it: a helper that takes `$` must be a top-level
-function in that file (passing `$` to an imported function fails validation). Keep it to wiring:
+function in that file (passing `$` to an imported function fails validation; re-probed in M0, since
+the November review found the rule no longer holds at validation time). Keep it to wiring:
 
 - `tool.call` runs Elrond's pipeline. Every pass-through goes through `proceed()`, which refuses
   when the hook's remaining own-time budget is under one second. The `.catch` replays the real
@@ -95,7 +96,7 @@ no timeout, state rules) are the numbered list under "Hard-won API facts" in
   never holds file contents, diffs, check output or secrets.
 - **Redaction** happens before anything reaches a model, a dialog, the pane or the log.
 - **Comments** say why, never what. Short.
-- **Decisions the spec didn't cover** go in the current stage's section of DESIGN.md, numbered,
+- **Decisions the spec didn't cover** go in DESIGN.md, in the section for the current milestone or hardening pass, numbered,
   and are summarised at the checkpoint.
 
 ## Tests
@@ -235,16 +236,15 @@ from a `ui.render` hook.
 
 ## Working with Claude Code on this repo
 
-The root `CLAUDE.md` holds the rules a session must follow, and its "Orchestration" section the
-three lanes a session delegates in: Opus orchestrates and reviews, Sonnet implements, Haiku reads,
-verifies and transcribes. `.claude/agents/scribe.md` is the Haiku agent for dictated edits and
-verify runs; sweeps and the diff pre-check go to the built-in `Explore` agent called with
-`model: "haiku"`. Three project skills help:
+The root `CLAUDE.md` holds the rules a session must follow, and its "Orchestration" section says who
+does what: the implementer edits and runs tests, the reader reads across files, the scribe writes
+internal notes and never edits tracked files or runs checks, and `Explore` is denied. Three project
+skills help:
 
-- `/checkpoint`: runs the three checks and drafts the stage summary SPEC §20 asks for.
+- `/checkpoint`: runs the three checks and drafts the checkpoint summary SPEC §20 asks for.
 - `/live-check`: the headless probe procedure above, step by step.
 - `/upgrade-types`: regenerating `mods/types/claude-code.d.ts` after a Claude Code update and
   recording the drift.
 
-Keep the stage discipline: finish the stage, pass the checks, write the summary, wait. The
-maintainer decides scope; the roadmap's "Known follow-ups" is where ideas wait for a decision.
+Keep the checkpoint discipline: finish the milestone, pass the checks, write the summary, wait. The
+maintainer decides scope; ROADMAP's "Later" is where ideas wait for a decision.
