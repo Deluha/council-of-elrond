@@ -5,14 +5,16 @@ Public, MIT-licensed, open-source repository.
 
 ## Start here
 
-- **Status, next tasks, approved decisions, hard-won API facts:** `mods/council-of-elrond/ROADMAP.md`.
+- **Status, the next brief, decisions, hard-won API facts:** `mods/council-of-elrond/ROADMAP.md`
+  (v2: milestones M0 to M7). Start every session at its "How a dev session works".
 - **How it works and why, per-stage decisions, failure modes:** `mods/council-of-elrond/DESIGN.md`.
 - **The original spec:** `mods/council-of-elrond/SPEC.md`. ROADMAP.md and DESIGN.md win over it.
 - **User manual:** `mods/council-of-elrond/README.md`.
 - **Developer guide (layout, conventions, tests, live checks, recipes):** `docs/DEVELOPMENT.md`.
 - **Maintainer guide (Claude Code updates, releases):** `docs/MAINTENANCE.md`.
 - **Open findings and proposed amendments:** `docs/REVIEW-2026-10.md`.
-- **ROADMAP v2 (proposal, decisions pending):** `docs/REVIEW-2026-11.md`.
+- **The review behind ROADMAP v2 (findings, ideas, evidence):** `docs/REVIEW-2026-11.md`.
+- **What was built before v2 (Stages 0 to 6, H1 to H3, C1 to C6):** `docs/history/ROADMAP-v1.md`.
 
 ## Rules
 
@@ -21,8 +23,9 @@ Public, MIT-licensed, open-source repository.
 - Only `hooks/register.ts` touches `$`; everything else is pure and tested directly.
 - Every user-facing string lives in `hooks/strings.ts`. No text in logic.
 - Session state is the one `$.state` value, changed only through `hooks/state.ts`.
-- Work in stages (SPEC §20). Stop at each stage checkpoint, give the summary SPEC §20 asks for
-  (`/checkpoint` drafts it), and wait for the user. Don't start the next stage unasked.
+- Work in milestones (ROADMAP.md), one brief per pull request. Stop at each milestone's
+  checkpoint, give the summary SPEC §20 asks for (`/checkpoint` drafts it), and wait for the user.
+  Don't start the next milestone unasked.
 - Decisions the spec doesn't cover: one that tightens (more calls ask or are refused, more text
   is redacted) is decided by picking the safer option, recorded in the current stage's section
   of DESIGN.md, and reported at the checkpoint. One that loosens (fewer findings, less
