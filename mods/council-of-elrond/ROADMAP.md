@@ -81,12 +81,18 @@ join the approved decisions further down, and win where the two differ.
 | D10 | Vendored types | Kept in the repository. CI is pinned to the version DESIGN.md names; a scheduled job runs the latest build and reports. Upgrades run on a schedule (monthly, and before each release), not at every build. |
 | D11 | The ideas (review §7) | All accepted, placed as in the milestones below. Four are accepted in the limited form the review recommended: the model-callable check (7.1 c) only after the briefing section has shipped and been measured, and off by default; the snapshot member (7.4 d) writes only under the mod's own folder, size-capped, and is opt-in; the triage model (7.3 d) is opt-in and built only if M2 shows cost is the problem; across sessions (7.6 b) only a never-offer list and a suggestion to add a rule are remembered, never an approval. |
 
-**Still open** (not covered by the acceptance; each loosens, so each waits for the maintainer):
+On the same day the maintainer also accepted the additions made after the review (its §8) and the
+recommendation on the item that was still open:
 
-- Recognising a plugin's own `tool.check` denial wording, so it is not counted as a failed attempt
-  (DESIGN §12.7).
+| # | Decision | Settled as |
+| :- | :- | :- |
+| D12 | Another plugin's `tool.check` denial | Recognised as an automatic denial, like a deny rule: nobody was asked and the tool did not fail, so it is not a failed attempt (approved decision 12 already treats automatic denials this way). Brief M3.4. **Loosens.** |
+| D13 | The additions in the review's §8 | All in the briefs below: the re-probe of the API facts (M0.4), the borrowed process in full (M0.5 to M0.9), the new API to look at (M0.2, M5.4, M6.3) and the cleanups (M4.2). |
+
+**Still open**, because it cannot be decided before its evidence exists:
+
 - What follows the M5.2 probe: keep the chat approval route, replace it with the engine's dialog,
-  or both.
+  or both. The probe's brief ends by bringing this to the maintainer.
 
 Also settled by the same acceptance: the development process borrowed from another, private project of the maintainer
 (M0.5 to M0.9). That project is proprietary; its **designs** are borrowed and every
@@ -112,14 +118,16 @@ rules a reviewer has been checking by hand are checked by scripts. No behaviour 
 - [ ] **M0.2 The band on the new contract** (S, neutral; R1). From 2.1.323 the band above the prompt
   stacks one row per plugin (`AbovePromptList`, `AbovePromptRow`) where a hook used to replace it.
   Read both components' docs in the types, then re-decide and test three cases: a row while a full
-  council sits, no row when idle, and the survey case. Files: `hooks/register.ts` (the
+  council sits, no row when idle, and the survey case; honour `isCollapsed`, new on the band's
+  props in 2.1.322. Files: `hooks/register.ts` (the
   `AbovePrompt` hook), `hooks/elrond/view.ts`, `tests/debate.test.ts`, `tests/view.test.ts`,
   `tests/fixtures.ts`. Never weaken an assertion to get green: if the engine's row now always
   shows, the tests say so. Accepted when all tests pass on the pinned build and DESIGN §11 records
   the new behaviour.
 - [ ] **M0.3 Pin Claude Code in CI** (S, neutral; R3, D10). Both workflows install
   `@anthropic-ai/claude-code@<the version DESIGN.md names>`; `/upgrade-types` gains a step that
-  bumps the pin. Needs A1 (workflow files are protected paths where the mod is loaded).
+  bumps the pin, and one that re-checks whether `$.fs` has gained an append (the audit writer
+  rewrites the whole file for each line until it does: finding A7). Needs A1 (workflow files are protected paths where the mod is loaded).
 - [ ] **M0.4 Re-probe the hard-won facts** (M, neutral; finding A1). The review found fact 1 no
   longer holds at validation time: a sibling module may take `$`, and so may a closure inside a
   hook. Confirm it at run time under the test kit and headless (`/live-check`), then walk the other
@@ -137,7 +145,8 @@ rules a reviewer has been checking by hand are checked by scripts. No behaviour 
     hard rules in full, each under a stable anchor), `references/api-facts.md` (the hard-won facts,
     their single home from now on), `references/qa-and-ci.md` (every check, hook and workflow, and
     the verify list), `references/recipes.md` (orchestration, the brief format, grep-before-coding,
-    the Implementation Decision format with a confidence label).
+    the Implementation Decision format with a confidence label, and the rule that every
+    non-trivial diff is reviewed by an agent that did not write it).
   - `references/workflows/`: one checklist per recurring task, each with Preconditions, Steps,
     Verification, Docs to update and Ask first. To write now: `adding-a-member.md`,
     `adding-a-shipped-rule.md`, `adding-a-secret-pattern.md`, `adding-a-subcommand.md`,
@@ -176,8 +185,10 @@ rules a reviewer has been checking by hand are checked by scripts. No behaviour 
   exemption list (rule reasons in `config/defaults.ts`, validation messages); `atom(` only in the
   state owner and `update($, session, ...)` only with an updater from `state.ts`; imports follow
   the layer order; no exported name is unused; no function is longer than a stated cap, with the
-  existing long ones listed as debt that may shrink but not grow. Accepted when it passes with the
-  debt list and the pre-check row is removed from CLAUDE.md.
+  existing long ones listed as debt that may shrink but not grow. It also holds test fixtures to the documented set of paths and hosts
+  (`/work`, `/home/me`, `example.com`), with the system paths the tests really need on a written
+  list (finding T4). Accepted when it passes with the debt list and the pre-check row is removed
+  from CLAUDE.md.
 - [ ] **M0.8 Hooks by stage, CI by concern** (M, neutral; R3, P1). Needs A1 and A2.
   - Git hooks (`.githooks/`): pre-commit runs only the fast checks (hygiene, conventions,
     guidance, facts, `tsc`); commit-msg checks the summary and runs docs-sync; a new pre-push runs
@@ -198,7 +209,9 @@ rules a reviewer has been checking by hand are checked by scripts. No behaviour 
   document for references to sections of the v1 roadmap ("Final deliverables", "Before 1.0",
   "Known follow-ups", the C and H items, "the stage table") and point them at this file or at
   docs/history/ROADMAP-v1.md: `docs/MAINTENANCE.md`, the October review's banner and the
-  `checkpoint` skill are known to have them.
+  `checkpoint` skill are known to have them. Add a dev container definition that installs the
+  pinned Claude Code and TypeScript and runs `scripts/setup.sh`, so a new contributor or a
+  Codespace starts with the hooks wired.
 
 Done when: every gate, hook and workflow above passes on the pinned build, and a session can find
 any rule from the routing table. Checkpoint, then wait.
@@ -283,7 +296,10 @@ the policy table and declares them. Findings F1 to F5 and §2.5; decisions D2 to
   under the system temp directory asks instead of blocking. The production DROP and TRUNCATE rule
   judges parts that run a database client and what is piped or redirected into one, not text
   being written to a file.
-- [ ] **M3.4 Nobody to ask is not a failed attempt** (S, **loosens**; F5, D3).
+- [ ] **M3.4 What does not count as a failed attempt** (S, **loosens**; F5, D3, D12). A refusal
+  because nobody can be asked, and another plugin's `tool.check` denial (the wording recorded in
+  DESIGN §12.7), stop counting toward the lockout. Both are still audited as refused. A test for
+  each wording, and the three-attempt lockout re-proved for real refusals.
 - [ ] **M3.5 Presets** (L, **loosens** as a default; D2, ideas 7.1 b, 7.2 c, 7.3 c). One option,
   `preset`, with `observe`, `balanced` and `strict`; every existing option stays as an override.
   `balanced`: an ordinary edit inside the repository passes; edits to sensitive files (CI,
@@ -324,7 +340,9 @@ week meet M2.4's targets. Checkpoint, then wait. The feature freeze (D1) ends he
 
 Goal: `register.ts` is wiring. Follow `references/workflows/modularizing-a-module.md` (M0.5):
 moves are verbatim, no behaviour change rides along, and a difference found on the way is reported,
-not patched. Findings A1 to A6; decision D6.
+not patched. Findings A1 to A6; decision D6. Before M4.2 starts, the orchestrator writes all of
+its briefs in one plan and shows it at a checkpoint: the moves depend on each other, which is the
+kind of work the delegation loop handles worst (finding P2).
 
 - [ ] **M4.1 The layer rule** (S). Depends on M0.4's result. If sibling modules may take `$`:
   an effects layer, `hooks/effects/`, is the only place besides `register.ts` that touches `$`;
@@ -335,7 +353,10 @@ not patched. Findings A1 to A6; decision D6.
   scopes; files and real paths; git inspections and previews; the model review and probe; the
   check runner and `convene`; the audit writer and its queue; dialogs, panes and the indicator;
   `/council` output. Each move keeps its tests green unchanged and gives the module state it
-  uses one owner (A4).
+  uses one owner (A4). Along the way: drop the `as never` casts the tests use for `agentId` (the
+  test kit's `$.tool.call` takes it from 2.1.308), and give the five pure modules that are tested
+  only through their callers (`escalation`, `brief`, `checks`, `globs`, `paths`) a test file each
+  (finding T2).
 - [ ] **M4.3 The decision pipeline as a reducer** (L). A pure function from session state,
   classification and what the effects returned to one step: pass, refuse, ask, review, convene,
   finish. `register.ts` executes steps. The sixteen mutable locals of the `tool.call` hook become
@@ -369,7 +390,8 @@ Findings H1 to H3; decisions D7, D8.
   (C6), and drawing on desktop, mobile and VS Code.
 - [ ] **M5.4 Visibility on every surface** (M, neutral; ideas 7.5 a, b). One quiet line under a
   reviewed call's own row (`ui.render` on `ToolUse`; a card on mobile), and a notification
-  (`$.ui.notify`) when a call is waiting for an answer.
+  (`$.ui.notify`) when a call is waiting for an answer, cancelled when it is answered
+  (`$.ui.cancelNotify`, new in 2.1.322).
 - [ ] **M5.5 The support matrix and a CI recipe** (S; H3, idea 7.5 c). One table in the manual:
   host, what draws, how you are asked, what is tested. A documented `claude -p` setup for CI:
   enforcing, never asks, the report as an artifact. A clear statement for Windows.
@@ -384,7 +406,9 @@ every host. Findings D2 to D4, S1; decision D9.
 - [ ] **M6.1 DESIGN as the system is** (L). DESIGN.md is split into a description of the current
   system (data flow, failure modes, concurrency, performance, hosts) and a numbered decision log
   in `docs/decisions/`, one entry per decision with its date and what it replaced. The version
-  history at the top of DESIGN.md becomes a table.
+  history at the top of DESIGN.md becomes a table. Each folder under `hooks/` gets a short README
+  in one shape (purpose, files, how it works, contracts, extending), which the docs-sync check
+  then keeps in step with the code.
 - [ ] **M6.2 A quickstart** (S). The first screen of the manual: install, shadow mode, the first
   rule, the first report.
 - [ ] **M6.3 The theme pass** (M, neutral; idea 7.7, D9). Themed preset names (Rivendell, the
