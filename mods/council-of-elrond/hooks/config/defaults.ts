@@ -53,6 +53,13 @@ const ASK: readonly Rule[] = [
     check: 'privileged',
     reason: 'Runs with elevated privileges (sudo, doas, su).',
   },
+  {
+    id: 'plugin-manage',
+    tier: 'ask',
+    tools: SHELL,
+    command: String.raw`^((\S*/)?claude|@anthropic-ai/claude-code)\s(-\S+\s)*plugins?\s((disable|uninstall|remove|rm|update|install|enable)|marketplace\s(add|remove|rm|update))(\s|$)`,
+    reason: 'Installs, updates, enables, disables or removes a Claude Code plugin or marketplace, which can switch off this protection.',
+  },
 ]
 
 const REVIEW: readonly Rule[] = [
@@ -226,8 +233,24 @@ const REVIEW: readonly Rule[] = [
     id: 'script-inline',
     tier: 'review',
     tools: SHELL,
-    command: String.raw`^(python\d*(\.\d+)?|node|nodejs|deno|bun|ruby|perl|php|lua|Rscript|osascript|pwsh|powershell)\s(.*\s)?(-c|-e|--eval|-p|--print|-r|-|-Command)(\s|$)`,
+    // The first branch is a code flag anywhere in the arguments; the others
+    // are the attached and clustered forms (`-c'code'`, `-Bc`, `-ne`, `-pe`,
+    // `--eval=code`), read only among the options before the script.
+    command:
+      String.raw`^(python\d*(\.\d+)?|node|nodejs|deno|bun|ruby|perl|php|lua|Rscript|osascript|pwsh|powershell)\s(.*\s)?(-c|-e|--eval|-p|--print|-r|-|-Command)(\s|$)` +
+      String.raw`|^python\d*(\.\d+)?\s(-[WX]\s\S+\s|-\S+\s)*-[A-Za-z]*c\S*(\s|$)` +
+      String.raw`|^(node|nodejs)\s(-\S+\s)*(-[chiv]*[ep]\S*|--(eval|print)=\S*)(\s|$)` +
+      String.raw`|^perl\s(-I\s\S+\s|-\S+\s)*-[acdfhilnpsStTuUwWxX0-9]*[eE]\S*(\s|$)` +
+      String.raw`|^ruby\s(-I\s\S+\s|-\S+\s)*-[acdFhilnpsSvwWx0-9]*e\S*(\s|$)` +
+      String.raw`|^php\s(-\S+\s)*-[aehilmnqsvwBEHR]*r\S*(\s|$)`,
     reason: 'Runs inline code.',
+  },
+  {
+    id: 'script-stdin',
+    tier: 'review',
+    tools: SHELL,
+    check: 'interpreter-stdin',
+    reason: 'Runs code piped or redirected into an interpreter.',
   },
   {
     id: 'script-file',
@@ -249,6 +272,23 @@ const REVIEW: readonly Rule[] = [
     tools: SHELL,
     command: String.raw`^(eval|source|\.|xargs|parallel)(\s|$)|^psql\s(.*\s)?(-f|--file)(\s|=|$)`,
     reason: 'Evaluates code built at run time or from a file (eval, source, xargs, parallel).',
+  },
+  {
+    id: 'shell-dynamic-program',
+    tier: 'review',
+    tools: SHELL,
+    command: String.raw`^\S*\$`,
+    reason: 'The program to run is only known at run time (a variable or a command substitution).',
+  },
+  {
+    // A runner whose own options the parser does not know: it reads them as it
+    // can, and this sends the whole call to review. Keep in step with the
+    // runner tables in rules/shell.ts.
+    id: 'shell-runner-unresolved',
+    tier: 'review',
+    tools: SHELL,
+    command: String.raw`^(npm|pnpm|yarn)\s(exec|x|dlx)(\s|$)|^(poetry|pipenv|pdm|rye|hatch|uv|conda|mamba|micromamba|op|doppler)\srun(\s|$)|^(bundle|composer)\sexec(\s|$)|^mise\s(exec|x)(\s|$)|^(systemd-run|fakeroot)(\s|$)`,
+    reason: 'Runs a command through a runner whose options this tool cannot read with certainty, so the command is not known.',
   },
   {
     id: 'remote-exec',
@@ -290,6 +330,7 @@ export const SHIPPED: Config = {
     '**/.claude/council-of-elrond/**',
     '**/.claude/settings.json',
     '**/.claude/settings.local.json',
+    '**/.claude/plugins/**',
   ],
   protectedBranches: ['main', 'master', 'production', 'prod', 'release/*', 'trunk'],
   productionPatterns: [

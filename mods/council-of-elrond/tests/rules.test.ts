@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { loadConfig } from '../hooks/config/schema.js'
+import type { Tier } from '../hooks/config/types.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { ClassifyContext } from '../hooks/rules/classify.js'
 import { splitShell } from '../hooks/rules/shell.js'
@@ -478,5 +479,426 @@ describe('project overrides', () => {
   test('disabling a shipped review rule takes effect', () => {
     const loaded = withRules({ disableRules: ['shell-move'] })
     expect(classify({ tool: 'Bash', input: { command: 'mv a b' } }, loaded.compiled, CONTEXT).tier).toBe('allow')
+  })
+})
+
+// Hardening after the November review: forms that used to pass as plain allow.
+type Case = [command: string, tier: Tier, ruleId?: string]
+
+const expectCases = (cases: readonly Case[]) => {
+  for (const [command, tier, ruleId] of cases) {
+    const result = bash(command)
+    expect(result.tier, command).toBe(tier)
+    expect(result.decided?.ruleId, command).toBe(tier === 'allow' ? undefined : ruleId)
+  }
+}
+
+const RM = 'rm-recursive-outside-repo'
+
+describe('an unquoted heredoc body is expanded by the shell', () => {
+  test('$(...) and backticks in the body are commands of the call', () => {
+    expectCases([
+      ['cat <<EOF\n$(rm -rf /home/me)\nEOF', 'block', RM],
+      ['cat <<-EOF\n\t$(rm -rf /home/me)\n\tEOF', 'block', RM],
+      ['cat <<EOF\n`rm -rf /home/me`\nEOF', 'block', RM],
+      ['cat <<EOF\nline one\nsum is $(( $(rm -rf /home/me) + 1 ))\nEOF', 'block', RM],
+      ['cat > notes.txt <<EOF\n$(rm -rf /home/me)\nEOF', 'block', RM],
+      ['cat <<EOF\n$(rm -rf build)\nEOF', 'review', 'shell-delete'],
+    ])
+  })
+
+  test('a quoted or escaped delimiter keeps the body as data', () => {
+    expectCases([
+      ["cat <<'EOF'\n$(rm -rf /home/me)\nEOF", 'allow'],
+      ['cat <<"EOF"\n$(rm -rf /home/me)\nEOF', 'allow'],
+      ['cat <<\\EOF\n$(rm -rf /home/me)\nEOF', 'allow'],
+      ["cat <<E'O'F\n$(rm -rf /home/me)\nEOF", 'allow'],
+    ])
+  })
+
+  test('an escaped substitution and an ordinary body stay data', () => {
+    expectCases([
+      ['cat <<EOF\n\\$(rm -rf /home/me)\nEOF', 'allow'],
+      ['cat <<EOF\njust text, a price of $5 and a path /home/me\nEOF', 'allow'],
+      ['cat <<EOF\ntoday is $(date)\nEOF', 'allow'],
+    ])
+  })
+
+  test('the substituted command is a part of its own, nested; the heredoc owner keeps the body', () => {
+    const split = splitShell('cat <<EOF\nhi $(echo a)\nEOF')
+    expect(split.parts.map(part => part.core)).toEqual(['cat', 'echo a'])
+    expect(split.parts[1]?.isNested).toBe(true)
+    expect(split.parts[0]?.input).toBe('hi $(echo a)\n')
+  })
+})
+
+describe('wrappers that carry a positional or a split string still show their command', () => {
+  test('chrt, taskset and setarch', () => {
+    expectCases([
+      ['chrt -f 10 rm -rf /home/me', 'block', RM],
+      ['chrt --fifo 10 rm -rf /home/me', 'block', RM],
+      ['chrt -d --sched-runtime 5000 --sched-deadline 10000 --sched-period 16666 0 rm -rf /home/me', 'block', RM],
+      ['taskset 0x1 rm -rf /home/me', 'block', RM],
+      ['taskset -c 0,1 rm -rf /home/me', 'block', RM],
+      ['taskset --cpu-list 0-3 rm -rf /home/me', 'block', RM],
+      ['setarch x86_64 rm -rf /home/me', 'block', RM],
+      ['setarch x86_64 -R rm -rf /home/me', 'block', RM],
+      ['setarch -R rm -rf /home/me', 'block', RM],
+    ])
+  })
+
+  test('the pid forms run no command, and a harmless wrapped command stays allowed', () => {
+    expectCases([
+      ['chrt -p 123', 'allow'],
+      ['chrt -p 10 123', 'allow'],
+      ['taskset -p 123', 'allow'],
+      ['taskset -cp 0-3 123', 'allow'],
+      ['chrt -f 10 ls', 'allow'],
+      ['taskset -c 0 ls', 'allow'],
+      ['setarch x86_64 ls', 'allow'],
+      ['timeout 5 rm -rf /home/me', 'block', RM],
+      ['timeout 5 ls', 'allow'],
+    ])
+    expect(splitShell('chrt -p 123').parts[0]?.core).toBe('123')
+  })
+
+  test('exec with -a, and its option clusters', () => {
+    expectCases([
+      ['exec -a name rm -rf /home/me', 'block', RM],
+      ['exec -la name rm -rf /home/me', 'block', RM],
+      ['exec -cla name rm -rf /home/me', 'block', RM],
+      ['exec -l rm -rf /home/me', 'block', RM],
+      ['exec -c rm -rf /home/me', 'block', RM],
+      ['exec -a name ls', 'allow'],
+    ])
+  })
+
+  test('env -S in every spelling, with the arguments that follow', () => {
+    expectCases([
+      ["env -S'rm -rf /home/me'", 'block', RM],
+      ["env -vS'rm -rf /home/me'", 'block', RM],
+      ["env -iS 'rm -rf /home/me'", 'block', RM],
+      ["env -S 'rm -rf /home/me'", 'block', RM],
+      ["env --split-string='rm -rf /home/me'", 'block', RM],
+      ["env --split-string 'rm -rf /home/me'", 'block', RM],
+      ["env -S 'rm -rf' /home/me", 'block', RM],
+      ["env -S'ls -la'", 'allow'],
+    ])
+  })
+})
+
+describe('multi-call binaries and runners show their command', () => {
+  test('busybox and toybox classify as the applet', () => {
+    expectCases([
+      ['busybox rm -rf /home/me', 'block', RM],
+      ['toybox rm -rf /home/me', 'block', RM],
+      ["busybox sh -c 'rm -rf /home/me'", 'block', RM],
+      ['busybox sh script.sh', 'review', 'script-shell'],
+      ['busybox ls', 'allow'],
+      ['toybox ls', 'allow'],
+    ])
+  })
+
+  test('sandbox and environment runners', () => {
+    expectCases([
+      ['fakeroot rm -rf /home/me', 'block', RM],
+      ['fakeroot -l lib -- rm -rf /home/me', 'block', RM],
+      ['firejail rm -rf /home/me', 'block', RM],
+      ['firejail --noprofile --net=none rm -rf /home/me', 'block', RM],
+      ['systemd-run rm -rf /home/me', 'block', RM],
+      ['systemd-run --user --scope -p MemoryMax=1G rm -rf /home/me', 'block', RM],
+      ['systemd-run --user --unit x -- rm -rf /home/me', 'block', RM],
+      ['op run -- rm -rf /home/me', 'block', RM],
+      ['op run --no-masking --env-file=.env.x -- rm -rf /home/me', 'block', RM],
+      ['doppler run -- rm -rf /home/me', 'block', RM],
+      ['doppler run -p app -c dev -- rm -rf /home/me', 'block', RM],
+      ["doppler run --command 'rm -rf /home/me'", 'block', RM],
+      ['mise exec -- rm -rf /home/me', 'block', RM],
+      ['mise x -- rm -rf /home/me', 'block', RM],
+      ['mise x node@20 python@3.12 -- rm -rf /home/me', 'block', RM],
+      ["mise x -c 'rm -rf /home/me'", 'block', RM],
+      ['fakeroot ls', 'allow'],
+      ['firejail ls', 'allow'],
+      ['systemd-run --user ls', 'allow'],
+      ['op run -- ls', 'allow'],
+      ['doppler run -- ls', 'allow'],
+      ['mise x node@20 -- node -v', 'allow'],
+    ])
+  })
+
+  test('script -c, nix-shell --run and tmux run a shell command', () => {
+    expectCases([
+      ["script -c 'rm -rf /home/me'", 'block', RM],
+      ["script -qc 'rm -rf /home/me' /dev/null", 'block', RM],
+      ["script --command='rm -rf /home/me' out.log", 'block', RM],
+      ['script -q /dev/null rm -rf /home/me', 'block', RM],
+      ["nix-shell --run 'rm -rf /home/me'", 'block', RM],
+      ["nix-shell -p jq --command 'rm -rf /home/me'", 'block', RM],
+      ["nix-shell --run='rm -rf /home/me'", 'block', RM],
+      ["tmux new-session -d 'rm -rf /home/me'", 'block', RM],
+      ["tmux new -d -s work 'rm -rf /home/me'", 'block', RM],
+      ["tmux new-window -n w 'rm -rf /home/me'", 'block', RM],
+      ["tmux split-window -h -c /work 'rm -rf /home/me'", 'block', RM],
+      ["tmux respawn-pane -k -t 1 'rm -rf /home/me'", 'block', RM],
+      ["tmux -L sock new -d 'rm -rf /home/me'", 'block', RM],
+      ['tmux new-window rm -rf /home/me', 'block', RM],
+      ["script -c 'ls' out.log", 'allow'],
+      ['script out.log', 'allow'],
+      ["nix-shell --run 'ls'", 'allow'],
+      ['nix-shell -p jq', 'allow'],
+      ['tmux ls', 'allow'],
+      ['tmux new-session -d -s work', 'allow'],
+      ["tmux new-window -n w 'ls'", 'allow'],
+      ["tmux send-keys 'ls' Enter", 'allow'],
+    ])
+  })
+
+  test('package runners with flags and valued options', () => {
+    expectCases([
+      ['npm exec --yes rm -rf /home/me', 'block', RM],
+      ['npm exec -y rm -rf /home/me', 'block', RM],
+      ['npm exec -p cowsay -- rm -rf /home/me', 'block', RM],
+      ["npm exec -c 'rm -rf /home/me'", 'block', RM],
+      ['pnpm exec -r rm -rf /home/me', 'block', RM],
+      ['uv run --no-sync rm -rf /home/me', 'block', RM],
+      ['uv run --python 3.12 --with rich rm -rf /home/me', 'block', RM],
+      ['uv run --frozen --no-project rm -rf /home/me', 'block', RM],
+      ['conda run --no-capture-output rm -rf /home/me', 'block', RM],
+      ['conda run -n env rm -rf /home/me', 'block', RM],
+      ['conda run -n env --no-capture-output rm -rf /home/me', 'block', RM],
+      ['micromamba run -n env rm -rf /home/me', 'block', RM],
+      ['poetry run rm -rf /home/me', 'block', RM],
+      ['npm exec --yes tsc', 'allow'],
+      ['uv run --no-sync pytest', 'allow'],
+      ['uv run --python 3.12 pytest', 'allow'],
+      ['conda run --no-capture-output python x.py', 'review', 'script-file'],
+      ['conda run -n env ls', 'allow'],
+    ])
+  })
+
+  test('an option the tables do not know sends the call to review, and never lowers the inner command', () => {
+    expectCases([
+      ['systemd-run --newoption value ls', 'review', 'shell-runner-unresolved'],
+      ['systemd-run --newoption value rm -rf /home/me', 'review', 'shell-runner-unresolved'],
+      ['fakeroot --newoption ls', 'review', 'shell-runner-unresolved'],
+      ['npm exec --newoption value ls', 'review', 'shell-runner-unresolved'],
+      ['npm exec --newoption value rm -rf /home/me', 'block', RM],
+      ['uv run --newoption value pytest', 'review', 'shell-runner-unresolved'],
+      ['conda run --newoption value ls', 'review', 'shell-runner-unresolved'],
+      ['mise x node@20 node -v', 'review', 'shell-runner-unresolved'],
+      ['sudo systemd-run --newoption ls', 'ask', 'privileged'],
+    ])
+  })
+})
+
+describe('a program name computed at run time is reviewed', () => {
+  test('a variable or a substitution as the program', () => {
+    expectCases([
+      ['X=rm; $X -rf /home/me', 'review', 'shell-dynamic-program'],
+      ['X=rm; ${X} -rf /home/me', 'review', 'shell-dynamic-program'],
+      ['$(echo rm) -rf /home/me', 'review', 'shell-dynamic-program'],
+      ['`echo rm` -rf /home/me', 'review', 'shell-dynamic-program'],
+      ['r$X -rf /home/me', 'review', 'shell-dynamic-program'],
+      ['FOO=1 $X', 'review', 'shell-dynamic-program'],
+      ['env FOO=1 "$CMD" --help', 'review', 'shell-dynamic-program'],
+      ['sudo $X', 'ask', 'privileged'],
+    ])
+  })
+
+  test('a variable among the arguments is not a computed program', () => {
+    expectCases([
+      ['echo $X', 'allow'],
+      ['ls $DIR', 'allow'],
+      ['FOO=$(pwd) make', 'allow'],
+      ['cd $(git rev-parse --show-toplevel)', 'allow'],
+      ['for f in *.ts; do echo $f; done', 'allow'],
+    ])
+  })
+
+  test('an unquoted $IFS is a word separator, so the real program is seen', () => {
+    expectCases([
+      ['rm${IFS}-rf${IFS}~', 'block', RM],
+      ['rm$IFS-rf$IFS~', 'block', RM],
+      ['rm$IFS$9-rf$IFS$9~', 'block', RM],
+      ['rm${IFS}-rf${IFS}/home/me', 'block', RM],
+      ['echo a${IFS}b', 'allow'],
+    ])
+    expect(splitShell('rm${IFS}-rf${IFS}~').parts[0]?.coreWords).toEqual(['rm', '-rf', '~'])
+    // Quoted, or another variable that starts with IFS: not a separator.
+    expect(splitShell('echo "a${IFS}b"').parts[0]?.coreWords).toEqual(['echo', 'a${IFS}b'])
+    expect(splitShell('echo a$IFSX').parts[0]?.coreWords).toEqual(['echo', 'a$IFSX'])
+  })
+})
+
+describe('an interpreter fed code without a flag is reviewed', () => {
+  test('stdin from a pipe, a heredoc, a here-string or a redirect', () => {
+    expectCases([
+      ["echo 'print(1)' | python3", 'review', 'script-stdin'],
+      ['cat x.py | python3.11', 'review', 'script-stdin'],
+      ['python3 <<EOF\nprint(1)\nEOF', 'review', 'script-stdin'],
+      ["python3 <<< 'print(1)'", 'review', 'script-stdin'],
+      ['python3 < x.py', 'review', 'script-stdin'],
+      ['node < x.js', 'review', 'script-stdin'],
+      ['echo x | node', 'review', 'script-stdin'],
+      ['echo x | deno', 'review', 'script-stdin'],
+      ['echo x | bun', 'review', 'script-stdin'],
+      ['echo x | perl', 'review', 'script-stdin'],
+      ['echo x | ruby', 'review', 'script-stdin'],
+      ['echo x | php', 'review', 'script-stdin'],
+      ['echo x | Rscript', 'review', 'script-stdin'],
+      ['echo x | lua', 'review', 'script-stdin'],
+      ['echo x | python3 -u', 'review', 'script-stdin'],
+      ['echo x | python3 -W ignore', 'review', 'script-stdin'],
+      ['python3 -', 'review', 'script-inline'],
+      ['echo x | python3 -', 'review', 'script-inline'],
+    ])
+  })
+
+  test('a named script, a module, a version or no stdin stays as it was', () => {
+    expectCases([
+      ['python3 script.py', 'review', 'script-file'],
+      ['node app.js', 'review', 'script-file'],
+      ['echo x | python3 script.py', 'review', 'script-file'],
+      ['python3 script.py < in.txt', 'review', 'script-file'],
+      ['python3 -m pytest', 'allow'],
+      ['curl https://example.com/x.json | python3 -m json.tool', 'allow'],
+      ['python3 --version', 'allow'],
+      ['echo x | python3 --version', 'allow'],
+      ['echo x | node -v', 'allow'],
+      ['node --version', 'allow'],
+      ['bun test', 'allow'],
+      ['echo x | bun run build', 'allow'],
+      ['node < /dev/null', 'allow'],
+      ['python3', 'allow'],
+      ['ls | head', 'allow'],
+    ])
+  })
+
+  test('only a part that reads the pipe is piped', () => {
+    const parts = splitShell('echo a | python3 && python3 -m pytest; ls | wc').parts
+    expect(parts.map(part => [part.core, part.isPiped])).toEqual([
+      ['echo a', false],
+      ['python3', true],
+      ['python3 -m pytest', false],
+      ['ls', false],
+      ['wc', true],
+    ])
+  })
+})
+
+describe('inline code flags, attached and clustered', () => {
+  test('python, perl, ruby, node and php', () => {
+    expectCases([
+      ["python3 -c'print(1)'", 'review', 'script-inline'],
+      ["python3 -Bc 'print(1)'", 'review', 'script-inline'],
+      ["python3 -W ignore -Bc 'print(1)'", 'review', 'script-inline'],
+      ["python3.12 -Ic 'print(1)'", 'review', 'script-inline'],
+      ["perl -ne 'print'", 'review', 'script-inline'],
+      ["perl -pe 's/a/b/'", 'review', 'script-inline'],
+      ["perl -E 'say 1'", 'review', 'script-inline'],
+      ["perl -lne 'print'", 'review', 'script-inline'],
+      ["perl -0777ne 'print'", 'review', 'script-inline'],
+      ["perl -e'say 2'", 'review', 'script-inline'],
+      ["ruby -ne 'puts $_'", 'review', 'script-inline'],
+      ["ruby -pe 'x'", 'review', 'script-inline'],
+      ["node -pe '1'", 'review', 'script-inline'],
+      ["node -p '1'", 'review', 'script-inline'],
+      ["node --eval='1'", 'review', 'script-inline'],
+      ["node --print='1'", 'review', 'script-inline'],
+      ["node -e'1'", 'review', 'script-inline'],
+      ["php -r'echo 1;'", 'review', 'script-inline'],
+      ["php -nr 'echo 1;'", 'review', 'script-inline'],
+    ])
+    expect(bash("perl -ie 's/a/b/' f").tier).toBe('review')
+  })
+
+  test('options after the script, a module or a file are not code flags', () => {
+    expectCases([
+      ['python3 -m pytest -rA', 'allow'],
+      ['python3 -m pytest --color=yes -x', 'allow'],
+      ['python3 x.py -cfoo', 'review', 'script-file'],
+      ['perl script.pl -ne', 'review', 'script-file'],
+      ['perl -Mfeature=say script.pl', 'review', 'script-file'],
+      ['perl -v', 'allow'],
+      ['ruby -v', 'allow'],
+      ['node app.js --print=x', 'review', 'script-file'],
+    ])
+  })
+})
+
+describe('the mod protects itself', () => {
+  test('claude plugin management asks, through wrappers too', () => {
+    expectCases([
+      ['claude plugin disable council-of-elrond', 'ask', 'plugin-manage'],
+      ['claude plugins disable council-of-elrond', 'ask', 'plugin-manage'],
+      ['claude plugin uninstall x', 'ask', 'plugin-manage'],
+      ['claude plugin remove x', 'ask', 'plugin-manage'],
+      ['claude plugin rm x', 'ask', 'plugin-manage'],
+      ['claude plugin update x', 'ask', 'plugin-manage'],
+      ['claude plugin install x@market', 'ask', 'plugin-manage'],
+      ['claude plugin enable x', 'ask', 'plugin-manage'],
+      ['claude plugin marketplace add example.com/m', 'ask', 'plugin-manage'],
+      ['claude plugin marketplace remove m', 'ask', 'plugin-manage'],
+      ['claude plugin marketplace rm m', 'ask', 'plugin-manage'],
+      ['claude plugin marketplace update', 'ask', 'plugin-manage'],
+      ['env FOO=1 claude plugin disable x', 'ask', 'plugin-manage'],
+      ['timeout 5 claude plugin disable x', 'ask', 'plugin-manage'],
+      ['/usr/local/bin/claude plugin disable x', 'ask', 'plugin-manage'],
+      ['~/.local/bin/claude plugin disable x', 'ask', 'plugin-manage'],
+      ['claude --debug plugin disable x', 'ask', 'plugin-manage'],
+      ['npx @anthropic-ai/claude-code plugin disable x', 'ask', 'plugin-manage'],
+      ['sudo claude plugin disable x', 'ask', 'privileged'],
+    ])
+  })
+
+  test('claude plugin test, validate, list and eval stay allowed', () => {
+    expectCases([
+      ['claude plugin test mods/council-of-elrond', 'allow'],
+      ['claude plugin validate --strict mods/council-of-elrond', 'allow'],
+      ['claude plugin list', 'allow'],
+      ['claude plugin eval x', 'allow'],
+      ['claude plugin marketplace list', 'allow'],
+      ['claude --version', 'allow'],
+      ['echo claude plugin disable x', 'allow'],
+    ])
+  })
+
+  test('the user plugin folders and user settings are protected paths', () => {
+    const protectedAsk = (result: ReturnType<typeof bash>, label: string) => {
+      expect(result.tier, label).toBe('ask')
+      expect(result.isProtected, label).toBe(true)
+      expect(result.findings.some(finding => finding.ruleId === 'protected-path'), label).toBe(true)
+    }
+    for (const path of [
+      '/home/me/.claude/plugins/cache/x/hooks/register.ts',
+      '/home/me/.claude/plugins/installed_plugins.json',
+      '/home/me/.claude/settings.json',
+      '/home/me/.claude/settings.local.json',
+    ]) {
+      for (const tool of ['Write', 'Edit']) {
+        const input = tool === 'Write' ? { file_path: path, content: 'x' } : { file_path: path, old_string: 'a', new_string: 'b' }
+        protectedAsk(classify({ tool, input }, SHIPPED_COMPILED, CONTEXT), `${tool} ${path}`)
+      }
+    }
+    for (const command of [
+      'cp x ~/.claude/plugins/cache/x/a.ts',
+      'mv a ~/.claude/plugins/installed_plugins.json',
+      'echo {} > ~/.claude/plugins/known_marketplaces.json',
+      'cp x $HOME/.claude/plugins/p',
+      'cp x ~/.claude/settings.json',
+      'echo {} > ~/.claude/settings.local.json',
+      'sed -i s/a/b/ /home/me/.claude/settings.json',
+      'tee ~/.claude/plugins/p/x < in.txt',
+    ]) {
+      protectedAsk(bash(command), command)
+    }
+  })
+
+  test('other files under the user folder are not protected', () => {
+    for (const command of ['cat ~/.claude/projects/x/log.jsonl', 'ls ~/.claude/skills', 'cat ~/.claude/CLAUDE.md']) {
+      expect(tierOf(command), command).toBe('allow')
+    }
+    const result = classify({ tool: 'Write', input: { file_path: '/home/me/.claude/CLAUDE.md', content: 'x' } }, SHIPPED_COMPILED, CONTEXT)
+    expect(result.isProtected).toBe(false)
   })
 })

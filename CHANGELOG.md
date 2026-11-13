@@ -144,6 +144,36 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 
 
 ### Security
+- **A reformatted command is reviewed again.** An approval used to be reused for a later command that differed only in whitespace. Whitespace can change what a shell command does, so the verdict cache and chat approvals now match a command exactly.
+- **A heredoc body is read when the shell expands it.** With an unquoted delimiter (`<<EOF`,
+  `<<-EOF`) the shell runs the `$(...)` and backticks in the body; those commands are now classified
+  like any other part, so a delete or force push inside one is blocked or reviewed as usual. A quoted
+  delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) keeps the body as plain data, as before.
+- **More wrappers show the command they run.** `chrt`, `taskset` and `setarch` (their priority, mask
+  or architecture is skipped), `exec -a name` and `exec -la name`, `env -S'...'` and `env -vS ...`,
+  `busybox` and `toybox` (the applet is the command), `fakeroot`, `firejail`, `systemd-run`,
+  `op run`, `doppler run` and `mise exec`. The command strings of `script -c`, `nix-shell --run`,
+  `--command` and the `tmux` subcommands that start a command (`new-session`, `new-window`,
+  `split-window`, `respawn-pane`) are classified like `sh -c`. The package runners (`npm exec`,
+  `uv run`, `conda run` and the rest) now skip their own flags correctly (`npm exec --yes <cmd>`,
+  `conda run --no-capture-output <cmd>`), so the command after them is still seen. When a runner's
+  options cannot be read with certainty, the call is reviewed (`shell-runner-unresolved`) and the
+  inner command keeps its own tier if that is stricter.
+- **A program name computed at run time is reviewed** (`shell-dynamic-program`): a variable, `${...}`
+  or a substitution in the program position means the program is not known. An unquoted `$IFS` or
+  `${IFS}` is now read as a space, so a command written with it reaches its rule.
+- **Code fed to an interpreter without a flag is reviewed** (`script-stdin`): `python3`, `node`,
+  `deno`, `bun`, `perl`, `ruby`, `php`, `Rscript` or `lua` given no script and reading a pipe, a
+  heredoc, a here-string or a `<` redirect. A named script, `python3 -m module`, and a version or help
+  flag are unchanged.
+- **Inline code flags are matched attached and in clusters** (`script-inline`): `python3 -c'...'`,
+  `python3 -Bc '...'`, `perl -ne`, `-pe`, `-E`, `ruby -ne`, `-pe`, `node -pe`, `--eval=...`,
+  `--print=...`, `-e'...'` and `php -r'...'`.
+- **The mod protects itself.** `claude plugin disable|uninstall|remove|rm|update|install|enable` and
+  `claude plugin marketplace add|remove|rm|update` now ask (`plugin-manage`); `claude plugin test`,
+  `validate`, `list` and `eval` do not. Your plugin folders (`**/.claude/plugins/**`) are protected
+  paths like `.claude/settings.json`, which already covered `~/.claude/settings.json` and
+  `~/.claude/settings.local.json`.
 - **Allowed calls are scanned for high-confidence secrets.** A literal key in an allowed `curl` or
   `echo` used to reach the network or the transcript unscanned; it is now refused, as on a gated
   call, and logged with tier `allow` so `/council report` counts it. Low-confidence findings on an

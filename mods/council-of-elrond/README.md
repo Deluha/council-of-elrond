@@ -49,8 +49,10 @@ lists its hooks.
 | ask | Comes straight to you. |
 | block | Refused, with the rule's reason. No model call, no question. |
 
-Compound commands (`&&`, `;`, `|`, `$(...)`, backticks, subshells, `sh -c '...'`, `eval`, and
-heredocs fed to a shell) are split, and the strictest part decides.
+Compound commands (`&&`, `;`, `|`, `$(...)`, backticks, subshells, `sh -c '...'`, `eval`, heredocs
+fed to a shell, and the `$(...)` and backticks in the body of a heredoc with an unquoted delimiter,
+which the shell expands) are split, and the strictest part decides. A heredoc with a quoted delimiter
+(`<<'EOF'`, `<<"EOF"`, `<<\EOF`) is plain data.
 
 Shipped defaults:
 
@@ -61,18 +63,30 @@ Shipped defaults:
   - raw disk writes.
 - **Ask:**
   - `sudo`, `doas`, `su`;
+  - installing, updating, enabling, disabling or removing a Claude Code plugin or marketplace
+    (`claude plugin disable|uninstall|remove|rm|update|install|enable`, `claude plugin marketplace
+    add|remove|rm|update`; rule `plugin-manage`). `claude plugin test`, `validate`, `list` and `eval`
+    are not asked about;
   - anything touching a protected path: `.env*`, `Jenkinsfile`, migrations folders, and the entries below. The entries written with a leading `**/` hold in every repository below the session root, at any depth, the rules file included (`app/.claude/council-of-elrond/rules.json`), and so does the directory itself (`rm -rf app/.git` asks). A path outside the session root is matched by its absolute form, so another repository's `.git/` or your user `~/.claude/settings.json` (which holds hooks and permissions) asks too:
     - `**/.github/workflows/**`, `**/.gitlab-ci.yml`, `**/.circleci/**`, `**/.buildkite/**`;
     - `**/db/migrate/**`;
     - `**/.git/**`;
-    - `**/.claude/council-of-elrond/**`, `**/.claude/settings.json`, `**/.claude/settings.local.json`.
+    - `**/.claude/council-of-elrond/**`, `**/.claude/settings.json`, `**/.claude/settings.local.json`;
+    - `**/.claude/plugins/**`, which covers your user plugin folders (`~/.claude/plugins/`) and, because it is written with `**/`, a `.claude/plugins/` folder in any repository.
 - **Review:**
   - file writes and edits;
   - deletes, moves, in-place edits, writes through a redirect;
   - git operations that change a remote or history, or discard work;
   - database clients and migrations;
   - infrastructure changes, network writes, publishing;
-  - running scripts or inline code;
+  - running scripts or inline code, including code fed to an interpreter on its standard input (a
+    pipe, a heredoc, a here-string or a `<` redirect into `python3`, `node`, `perl`, `ruby`, `php`,
+    `deno`, `bun`, `Rscript` or `lua` with no script named; rule `script-stdin`), and a code flag
+    written attached or in a cluster (`python3 -Bc`, `perl -ne`, `node -pe`, `php -r'...'`);
+  - a program that is only known at run time, such as a variable or a substitution in the program
+    position (`shell-dynamic-program`; an unquoted `$IFS` or `${IFS}` is read as a space first);
+  - a command run through a runner whose options the mod cannot read with certainty
+    (`shell-runner-unresolved`);
   - Bash with the sandbox disabled;
   - MCP tools whose names say they change something.
 
@@ -621,15 +635,19 @@ current prices for the models you choose.
 
 Parsing is best effort, by pattern, and not a shell. The parser does unwrap function and `case`
 bodies, package and process wrappers, `$'…'` escapes and empty substitutions, so the command they
-hold is classified (0.5.0); the gaps that remain:
+hold is classified (0.5.0). Since then it also reads the wrappers that take a positional before the
+command (`chrt`, `taskset`, `setarch`), multi-call binaries (`busybox`, `toybox`), the runners
+`fakeroot`, `firejail`, `systemd-run`, `op run`, `doppler run` and `mise exec`, the command strings of
+`script -c`, `nix-shell --run`, `env -S` and the `tmux` subcommands that start a command, and the
+substitutions in an unquoted heredoc body. The gaps that remain:
 
-- **Variables and runtime expansions aren't resolved.** `rm -rf $DIR` has an unknown target, so review decides. `cd $X` followed by a relative recursive delete is treated as if `$X` were `/`. A protected file named only through a variable (`X=.env; cat $X`) is not recognised as protected.
+- **Variables and runtime expansions aren't resolved.** `rm -rf $DIR` has an unknown target, so review decides. A variable or substitution as the program itself is reviewed, but what it expands to is not known, so the command it would run is not classified. `cd $X` followed by a relative recursive delete is treated as if `$X` were `/`. A protected file named only through a variable (`X=.env; cat $X`) is not recognised as protected.
 - **A `cd` inside a subshell or an inline script isn't tracked.** `(cd / && rm -rf *)` and `bash -c 'cd / && rm -rf *'` resolve the target against the project root, so they are review rather than block. A `cd` in the top-level command is tracked.
-- **Code inside interpreters isn't parsed.** `python -c "shutil.rmtree('/')"` is review (script execution); the reviewer sees the code, but no rule reads it.
+- **Code inside interpreters isn't parsed.** `python -c "shutil.rmtree('/')"` is review (script execution); the reviewer sees the code, but no rule reads it. The same holds for code fed on standard input and for a script file's contents.
 - **Encoded or downloaded payloads** (`base64 -d | sh`, `curl | sh`) are caught only as "piped into a shell" (review).
 - **Shell symbolic links aren't resolved.** File-tool paths are resolved to their real path; paths in shell commands are not.
 - **Two-sided glob intersection isn't computed.** A glob that names a protected file directly (`cat .en*`) is caught, but a glob with a wildcard in a middle segment against a protected `**` glob (`cat .github/*/ci.yml`) may not be.
-- **Not every program that changes things is named.** The shipped rules cover the common ones; a cloud or database CLI, an HTTP write or an interpreter route they don't list may pass. Add a project rule, or propose a default.
+- **Not every program that changes things is named.** The shipped rules cover the common ones; a cloud or database CLI, an HTTP write, an interpreter route or a command runner they don't list may pass. A listed runner is read through a table of its options: an option the table does not know is read as taking a value, and the call is reviewed (`shell-runner-unresolved`). Add a project rule, or propose a default.
 - **Alternating verbs on one target are separate operations.** `rm build`, `trash build`, `find build -delete` and a script that deletes it each get their own rounds and their own failed attempts, since the key starts with the verb. Three refusals of `rm` do not lock out the fourth try with `trash`; the per-kind counter catches only retries of the same verb.
 - **A `.sql` file's content isn't read by the block rules.** The database reviewer reads a `.sql` file a command names inside the project (`psql -h prod-db -f drop.sql`), but the rules classify the command without opening any file, so a destructive file run against production is reviewed, not blocked. Put a project rule on the command if a file must never run against a database.
 - **POSIX only:** no Windows paths or PowerShell parsing. Windows is unsupported ([docs/INSTALL.md](../../docs/INSTALL.md)).

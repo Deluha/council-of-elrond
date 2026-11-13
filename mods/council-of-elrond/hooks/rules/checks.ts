@@ -178,6 +178,33 @@ function dangerousEnvAssignment(part: ShellPart): boolean {
   return part.words.some(word => DANGEROUS_ENV.test(word))
 }
 
+const STDIN_INTERPRETER = /^(python\d*(\.\d+)?|node(js)?|deno|bun|perl|ruby|php|Rscript|lua)$/
+// Options of these interpreters that take the next word, which is not a script.
+const INTERPRETER_VALUE_OPTIONS = new Set(['-W', '-X', '-I', '-r', '-R', '-C', '-l', '--require', '--import', '--loader', '--experimental-loader', '--conditions'])
+// Options after which stdin is data or nothing is run: a module, a version, help.
+const INTERPRETER_NO_STDIN_CODE = new Set(['-m', '-V', '--version', '-h', '--help', '-?'])
+
+/**
+ * An interpreter given no script, module or code flag while its standard input
+ * is a pipe, a heredoc, a here-string or a redirect: it runs what it is fed.
+ * (`-c`, `-e` and an explicit `-` are the inline-code rule's.)
+ */
+function interpreterStdin(part: ShellPart): boolean {
+  const [program, ...args] = part.coreWords
+  if (program === undefined || !STDIN_INTERPRETER.test(program)) return false
+  const hasStdin =
+    part.isPiped || part.input !== '' || part.redirects.some(({ op, target }) => op === '<' && target !== '/dev/null')
+  if (!hasStdin) return false
+  for (let i = 0; i < args.length; i++) {
+    const word = args[i] as string
+    if (word === '--') return args[i + 1] === undefined
+    if (!word.startsWith('-') || word === '-') return false // a script, a module, a subcommand
+    if (INTERPRETER_NO_STDIN_CODE.has(word) || (word === '-v' && !program.startsWith('python'))) return false
+    if (INTERPRETER_VALUE_OPTIONS.has(word)) i++
+  }
+  return true
+}
+
 export function runCheck(check: CheckName, part: ShellPart, context: CheckContext): boolean {
   switch (check) {
     case 'rm-outside-repo':
@@ -198,5 +225,7 @@ export function runCheck(check: CheckName, part: ShellPart, context: CheckContex
       return dangerousEnvAssignment(part)
     case 'raw-disk-write':
       return rawDiskWrite(part)
+    case 'interpreter-stdin':
+      return interpreterStdin(part)
   }
 }

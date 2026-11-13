@@ -341,7 +341,7 @@ fixed before Stage 6. The decisions:
    a key can hold a target a command named verbatim (a push URL with a token).
 6. **The approve-cache fingerprint** (`audit.ts`) collapses whitespace only for fields where it
    has no meaning (a shell `command`); a file's content is hashed exactly, so a re-indented write
-   is not reused unreviewed.
+   is not reused unreviewed. *A shell command is hashed exactly too since §15 item 8.*
 7. **The allow rule offered after "allow once"** (`elrond/suggest.ts`) forbids the
    sandbox-disabled variant of the command, and the offer is withheld if the rule cannot be made
    safe.
@@ -1068,3 +1068,89 @@ ROADMAP C6.
 6. Record the result here and tick C6 in ROADMAP.md.
 
 **Passing the message on** *(approved 2026-10-20)*. `runCheck` keeps the rejection's message and returns it as `GimliRun.problem`, only when the final status is `error`: a run the clock or the council ended never carries one. Where the council's runs are redacted, the message is redacted too, with the call's patterns, and only then cut to one line of `PROBLEM_CHARS` (400) characters, so a cut cannot split a secret. `withTail` puts it after the status line and before the tail, in the reason Claude reads (`The error: …`); the audit `summary`, the `opinions` and the debate record are built from `runLine` and carry none of it, like the tail. Tests: "a check that cannot start blocks" (error in the refusal, none in the audit line), the redaction and cap test (a project's own pattern, which the refusal's own shipped-pattern redaction would miss), and a `combine` test. Mutations: dropping the problem from `withTail` fails those three; dropping `redact` on it fails the redaction test alone. Checked live headless on 2.1.304 with the same probe (one council, three reviews): Claude read `"bare" could not be started. The error: council-of-elrond: $.process.spawn(c6-no-such-binary) failed to start: ENOENT: Executable not found in $PATH: "c6-no-such-binary"`, and the audit line held no `ENOENT`.
+
+## 15. Hardening after the November review
+
+An independent audit of the rules tier found forms that reached a weaker tier than intended: a
+command the parser did not see, or a program it did not know. The rules tier is the safety
+boundary, so each was closed the same way as in §10. Every decision below is a **tightening**: more
+calls are reviewed, asked about or blocked, and none moves down a tier. They are recorded here as
+decided; the live list of what still passes is the README's "Known gaps in shell parsing".
+
+1. **Unquoted heredoc bodies are scanned for substitutions.** A heredoc whose delimiter has no
+   quote or backslash (`<<EOF`, `<<-EOF`) is expanded by the shell, so `$(...)` and backticks in the
+   body run. `takeHeredocs` (`rules/shell.ts`) now records, per heredoc, whether the delimiter was
+   quoted, and for an expanding one passes each substitution found in the body (`substitutionsIn`:
+   a backslash escapes the next character, `$((...))` is searched inside) to the nested scan, so it
+   becomes a part like any other. A body fed to a shell was already scanned whole; a quoted
+   delimiter keeps the body as data. Decided: a substitution in an expanding body counts even when
+   the heredoc feeds a program that only prints it, because the shell runs it first.
+2. **Wrappers that carry a positional or a split string.**
+   - `chrt` (priority), `taskset` (mask or list) and `setarch` (architecture) skip that word
+     before the command. For `chrt` and `taskset`, a pid form (`-p`, `--pid`, in a cluster too)
+     runs no command, so nothing is skipped and nothing is invented: the words parse as they always
+     did, which is why `taskset` keeps `-p` as a value option. `setarch` skips its first word only
+     when it is a known architecture name, so a command is never taken for one.
+   - `exec` reads a cluster ending in `-a` (`-la name`, `-cla name`) as taking the next word.
+   - `env -S` is read attached (`-S'cmd'`), in a cluster of `i`, `v` and `0` (`-vS`), and as
+     `--split-string=`; the words after the string are appended to it as its arguments before it is
+     classified.
+3. **Multi-call binaries and runners.**
+   - `busybox` and `toybox` are wrappers, so the applet is the command (`busybox sh -c` still reads
+     its script).
+   - `fakeroot`, `firejail` and `systemd-run` are wrappers. `fakeroot` and `systemd-run` have every
+     option listed, so an option they do not know cannot be skipped by guesswork.
+   - `op run`, `doppler run` and `mise exec`/`x` are runners, with `mise`'s `tool@version`
+     words read before its `--`.
+   - `script -c`, `nix-shell --run|--command` and `tmux new-session|new-window|split-window|
+     respawn-pane` (and their short names) are not stripped: their command string is classified
+     as `sh -c` is, from `inlineScriptOf`, so the program's own arguments stay visible to the
+     protected-path check. `script FILE COMMAND` (the BSD form) reads what follows the file.
+   - The two-word runners' option skipping assumed every option took a value, so a flag
+     (`npm exec --yes`) swallowed the command. Each runner now has the options it takes a value
+     for, a shared list of flags, and optional script options (`npm exec -c`, `doppler run
+     --command`, `mise exec -c`). **An option in neither list is read as taking a value, as every
+     option was before**, so no command that was seen is lost, and the call is also classified as
+     it stands: `coreOf` returns the words from the runner on as `unresolved`, `endPart` adds them as
+     a part, and the review rule `shell-runner-unresolved` matches it. The inner command keeps its
+     own tier when that is stricter (a block still blocks). This is the "cannot reliably find the
+     inner command: review" decision; the cost is a review for a rare valued option the tables lack,
+     and the fix is to add it to the table.
+   - The rule's pattern repeats the runner names in `rules/shell.ts`; the two are kept in step by
+     hand, and the rule's comment says so.
+4. **A program name computed at run time.** After assignments and wrappers are stripped, a first
+   word that contains `$` (a variable, `${...}`, a substitution; backticks and `$(...)` leave a
+   placeholder) is a program nobody can name: the review rule `shell-dynamic-program`. It is a
+   review, not an ask or a block, because a script that runs `"$@"` is ordinary, and a stricter rule
+   (block, ask, or another review that matched) still decides. A quoted `'$X'` is indistinguishable
+   after parsing and is reviewed too. Separately, an unquoted `$IFS` or `${IFS}` (with the empty `$9`
+   trick that follows it) ends the word, as whitespace, before classification, so `rm${IFS}-rf${IFS}~`
+   reaches the `rm` rule; inside double quotes it is data, as in the shell. The review rule is the
+   floor if a form of `IFS` slips past the separator.
+5. **Interpreters fed code without a flag.** The review rule `script-stdin` uses a new code check,
+   `interpreter-stdin` (`rules/checks.ts`; a name in `CHECKS`, so a project rule can name it too).
+   It holds for `python`, `python3`, `pythonX.Y`, `node`, `nodejs`, `deno`, `bun`, `perl`, `ruby`,
+   `php`, `Rscript` and `lua` when standard input is a pipe (`ShellPart.isPiped`, set by the scanner
+   for the part after `|` or `|&`), a heredoc, a here-string or a `<` redirect (not to
+   `/dev/null`), and no word names a script, module or subcommand, and none is a module (`-m`),
+   version or help flag. Decided: a pipe into a named script, `python3 -m json.tool` and
+   `bun run build` stay as they were. An explicit `-` and `-c` are the inline-code rule's.
+6. **Attached and clustered inline-code flags.** `script-inline` keeps its pattern for a code flag
+   anywhere in the arguments and gains branches for the attached and clustered forms, matched only
+   among the options before the script, so `python3 -m pytest -rA` and `node app.js --print=x` are
+   not read as inline code. The perl and ruby clusters name the switches that take no value
+   (`-ne`, `-pe`, `-0777ne`); `-Mfeature=say` is not one.
+7. **The mod protects itself.** `plugin-manage` (ask) covers `claude plugin|plugins`
+   `disable|uninstall|remove|rm|update|install|enable` and `plugin marketplace add|remove|rm|update`,
+   through wrappers and a path to the binary. Ask, not block, because the user may do it on purpose.
+   `claude plugin test|validate|list|eval` are not matched. The protected paths gain
+   `**/.claude/plugins/**`; the user-level `~/.claude/settings.json` and `settings.local.json` were
+   already covered by the existing `**/` entries, which match a path outside the root by its absolute
+   form. A glob cannot name a home folder, so the entry is not limited to `~/.claude/plugins/`: a
+   `.claude/plugins/` folder in a repository is protected too, the same breadth the settings
+   entries have. A read of a plugin file asks as well, as a read of `.env` does.
+8. **Commands are hashed exactly.** The verdict cache and chat approvals match a command exactly,
+   not after collapsing whitespace (this supersedes the shell-command half of §10 item 6).
+   A newline separates commands, and whitespace inside quotes is data, so no normalisation is safe
+   without parsing the command, and the parse cannot be the cache key's. A reformatted command is
+   reviewed again; the cost is one more review for a command retyped with different spacing.

@@ -23,6 +23,8 @@ export type ShellPart = {
   input: string
   /** True when the part came from `$(...)`, backticks, a subshell, `sh -c` or `eval`. */
   isNested: boolean
+  /** Its standard input comes from the pipe of the part before it. */
+  isPiped: boolean
 }
 
 export type Split = {
@@ -81,10 +83,24 @@ const WRAPPERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   // listing them would swallow the command that follows.
   ['unshare', new Set(['--map-user', '--map-group'])],
   ['nsenter', new Set(['-t', '--target', '-S', '--setuid', '-G', '--setgid'])],
-  ['chrt', new Set([])],
-  ['taskset', new Set(['-c', '-p'])],
+  // chrt and taskset take one positional (priority, mask or list) before the
+  // command; coreOf skips it, except in the pid forms (`-p`), which run nothing.
+  // taskset keeps `-p` as a value option so a pid form is read as it always was.
+  ['chrt', new Set(['-T', '-P', '-D', '--sched-runtime', '--sched-period', '--sched-deadline'])],
+  ['taskset', new Set(['-p'])],
   ['numactl', new Set(['-N', '--cpunodebind', '-m', '--membind', '-C', '--physcpubind'])],
   ['setarch', new Set([])],
+  // Multi-call binaries and sandbox runners: the command that follows is what runs.
+  ['busybox', new Set()],
+  ['toybox', new Set()],
+  ['fakeroot', new Set(['-l', '--lib', '-f', '--faked', '-i', '-s', '-b'])],
+  ['firejail', new Set()],
+  ['systemd-run', new Set([
+    '-u', '--unit', '-p', '--property', '-E', '--setenv', '-M', '--machine', '-H', '--host', '-D', '--working-directory',
+    '--description', '--slice', '--uid', '--gid', '--nice', '--service-type', '--timer-property', '--on-active',
+    '--on-boot', '--on-startup', '--on-unit-active', '--on-unit-inactive', '--on-calendar', '--on-clock-change',
+    '--on-timezone-change', '--root-directory', '--job-mode',
+  ])],
   ['eatmydata', new Set()],
   ['proxychains', new Set(['-f'])],
   ['proxychains4', new Set(['-f'])],
@@ -99,27 +115,67 @@ const WRAPPERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['pkexec', new Set(['--user'])],
 ])
 
+type Runner = {
+  /** The subcommands that run the command that follows. */
+  subs: ReadonlySet<string>
+  /** Options that take the next word as their value. */
+  values?: ReadonlySet<string>
+  /** Options of this runner that take no value. */
+  flags?: ReadonlySet<string>
+  /** Options whose value is a script a shell runs (`npm exec -c "..."`). */
+  scripts?: ReadonlySet<string>
+  /** Tool specs (`node@20`) come before the `--` that starts the command. */
+  hasToolSpecs?: boolean
+}
+
+const setOf = (...list: string[]): ReadonlySet<string> => new Set(list)
+
+/** Options that take no value in every runner below (a runner's own `values` win). */
+const RUNNER_FLAGS = setOf(
+  '--yes', '-y', '--no', '--quiet', '-q', '--verbose', '-v', '-vv', '--silent', '--offline', '--frozen', '--locked',
+  '--no-sync', '--no-project', '--isolated', '--no-cache', '--no-capture-output', '--live-stream', '--no-install',
+  '--no-progress', '--dev', '--no-dev', '--no-env-file', '--active', '--refresh', '--reinstall', '--no-build',
+  '--no-binary', '--debug-wrapper-scripts', '--change-ps1', '--no-change-ps1', '--include-workspace-root',
+  '--workspaces', '-ws', '--no-masking', '--no-color', '--no-interaction', '-n', '--no-ansi', '--ansi',
+)
+
+/** A tool written `name@version`, as `mise exec node@20 -- cmd` takes them. */
+const TOOL_SPEC = /^[^\s@-][^\s@]*@\S+$/
+
 /**
- * Package-manager runners whose given subcommands run an arbitrary command
- * that follows (`poetry run rm ...`, `npm exec rm ...`). The prefix is
- * stripped so the rules see the command. A runner that fetches and runs an
- * arbitrary package by name (`npx`, `bunx`) is a wrapper below.
+ * Runners whose given subcommands run an arbitrary command that follows
+ * (`poetry run rm ...`, `npm exec rm ...`). The prefix is stripped so the rules
+ * see the command. A runner that fetches and runs an arbitrary package by name
+ * (`npx`, `bunx`) is a wrapper below. An option the tables do not know is read
+ * as taking a value (as every option once was) and the call is also reviewed.
  */
-const TWO_WORD_RUNNERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ['npm', new Set(['exec', 'x'])],
-  ['pnpm', new Set(['exec', 'dlx'])],
-  ['yarn', new Set(['exec', 'dlx'])],
-  ['poetry', new Set(['run'])],
-  ['pipenv', new Set(['run'])],
-  ['pdm', new Set(['run'])],
-  ['rye', new Set(['run'])],
-  ['hatch', new Set(['run'])],
-  ['uv', new Set(['run'])],
-  ['bundle', new Set(['exec'])],
-  ['composer', new Set(['exec'])],
-  ['conda', new Set(['run'])],
-  ['mamba', new Set(['run'])],
-  ['micromamba', new Set(['run'])],
+const TWO_WORD_RUNNERS: ReadonlyMap<string, Runner> = new Map([
+  ['npm', { subs: setOf('exec', 'x'), values: setOf('-p', '--package', '-w', '--workspace', '--prefix', '--registry', '--userconfig', '--cache', '--loglevel'), scripts: setOf('-c', '--call') }],
+  ['pnpm', { subs: setOf('exec', 'dlx'), values: setOf('-C', '--dir', '--filter', '-F', '--reporter', '--workspace-concurrency'), flags: setOf('-c', '--shell-mode', '-r', '--recursive') }],
+  ['yarn', { subs: setOf('exec', 'dlx'), values: setOf('-p', '--package') }],
+  ['poetry', { subs: setOf('run'), values: setOf('-C', '--directory', '-P', '--project') }],
+  ['pipenv', { subs: setOf('run'), values: setOf('--python', '--pypi-mirror') }],
+  ['pdm', { subs: setOf('run'), values: setOf('-p', '--project') }],
+  ['rye', { subs: setOf('run') }],
+  ['hatch', { subs: setOf('run'), values: setOf('-e', '--env', '-i', '--include', '-x', '--exclude') }],
+  ['uv', { subs: setOf('run'), values: setOf(
+    '-p', '--python', '--with', '--with-editable', '--with-requirements', '--extra', '--group', '--no-group', '--only-group',
+    '--package', '--project', '--directory', '--env-file', '--index', '--default-index', '--index-url', '--extra-index-url',
+    '-f', '--find-links', '--config-file', '--cache-dir', '--python-preference', '--resolution', '--prerelease', '--link-mode',
+    '--exclude-newer', '--index-strategy', '--keyring-provider', '--color', '-P', '--upgrade-package', '--refresh-package',
+    '--reinstall-package', '-C', '--config-setting', '--no-binary-package', '--no-build-package', '--python-platform',
+  ) }],
+  ['bundle', { subs: setOf('exec'), flags: setOf('--keep-file-descriptors') }],
+  ['composer', { subs: setOf('exec'), values: setOf('-d', '--working-dir') }],
+  ['conda', { subs: setOf('run'), values: setOf('-n', '--name', '-p', '--prefix', '--cwd') }],
+  ['mamba', { subs: setOf('run'), values: setOf('-n', '--name', '-p', '--prefix', '--cwd') }],
+  ['micromamba', { subs: setOf('run'), values: setOf('-n', '--name', '-p', '--prefix', '--cwd', '-r', '--root-prefix', '-a', '--attach') }],
+  ['op', { subs: setOf('run'), values: setOf('--env-file', '--account', '--cache', '--config', '--session', '--format', '--iso-timestamps') }],
+  ['doppler', { subs: setOf('run'), values: setOf(
+    '-p', '--project', '-c', '--config', '-t', '--token', '--mount', '--mount-format', '--mount-max-reads', '--mount-template',
+    '--name-transformer', '--fallback', '--only-secrets', '--preserve-env', '--api-host', '--scope',
+  ), scripts: setOf('--command') }],
+  ['mise', { subs: setOf('exec', 'x'), values: setOf('-C', '--cd', '-E', '--env', '-j', '--jobs'), scripts: setOf('-c', '--command'), hasToolSpecs: true }],
 ])
 
 /** One-word runners that fetch and run a command; stripped like a wrapper. */
@@ -181,11 +237,47 @@ type Builder = {
   isCut: boolean
 }
 
+type Core = {
+  wrappers: string[]
+  coreWords: string[]
+  nestedScripts: string[]
+  /**
+   * The words from a runner whose inner command could not be found for sure
+   * (an option the tables do not know): they are classified again as they
+   * stand, so a rule can send the call to review.
+   */
+  unresolved?: string[]
+}
+
+/** `setarch` architecture names (the first positional); a command is never read as one. */
+const ARCH = /^(linux(32|64)|uname26|i[3-6]86|x86|x86_64|ia64|alpha|arm|armv\d\w*|aarch64(_be)?|mips(64)?(el)?|ppc(64)?(le)?|powerpc(64)?|s390x?|sparc(32bash|64)?|sparc32|parisc(64)?|hppa(64)?|riscv(32|64)|loongarch64|sh[234]|m68k)$/
+
+/** Wrappers with a pid form (`chrt -p 10 123`, `taskset -p 123`) that runs no command. */
+const PID_WRAPPERS: ReadonlySet<string> = new Set(['chrt', 'taskset'])
+const PID_OPTION = /^-[A-Za-z]*p[A-Za-z]*$|^--pid$/
+
+/** Wrappers whose every option is known: an unknown one is not guessed at. */
+const KNOWN_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['fakeroot', setOf('-u', '--unknown-is-real', '-h', '--help', '-v', '--version')],
+  ['systemd-run', setOf(
+    '--user', '--system', '--scope', '--no-block', '--wait', '--pty', '-t', '--pipe', '-P', '--shell', '-S',
+    '--no-ask-password', '--collect', '-q', '--quiet', '--remain-after-exit', '-r', '--same-dir', '-d', '--send-sighup',
+    '--ignore-failure', '--no-pager', '--no-wall', '-h', '--help', '--version', '--slice-inherit', '--expand-environment',
+  )],
+])
+
+/** A word as a shell would read it back: quoted unless it is plainly safe. */
+const quoted = (word: string): string => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`)
+
 /** Strips assignments, keywords, wrappers and git's global options. */
-function coreOf(words: readonly string[]): { wrappers: string[]; coreWords: string[]; nestedScripts: string[] } {
+function coreOf(words: readonly string[]): Core {
   let k = 0
   const wrappers: string[] = []
   const nestedScripts: string[] = []
+  let unresolved: string[] | undefined
+  const markUnresolved = (from: number) => {
+    unresolved ??= words.slice(from)
+  }
   // Skip leading assignments, plain keywords, function-definition headers and
   // a `case SUBJECT in PATTERN)` arm, so the command they wrap is what the
   // rules see. Without this a definition body or a case arm hides its command.
@@ -219,19 +311,45 @@ function coreOf(words: readonly string[]): { wrappers: string[]; coreWords: stri
     const word = words[k]
     if (word === undefined) break
     const name = word.includes('/') && SYSTEM_BIN.test(word) ? word.slice(word.lastIndexOf('/') + 1) : word
+    const start = k
 
     // A two-word runner: `poetry run <cmd>`, `npm exec <cmd>`.
-    const runnerSubs = TWO_WORD_RUNNERS.get(name)
-    if (runnerSubs !== undefined && runnerSubs.has(words[k + 1] ?? '')) {
+    const runner = TWO_WORD_RUNNERS.get(name)
+    if (runner !== undefined && runner.subs.has(words[k + 1] ?? '')) {
       wrappers.push(`${name} ${words[k + 1]}`)
       k += 2
+      let hasSeparator = false
+      let hasSpec = false
       // Skip this runner's own options and their values until the command.
       while (k < words.length) {
         const option = words[k] as string
-        if (option === '--') { k++; break }
+        if (option === '--') {
+          k++
+          hasSeparator = true
+          break
+        }
+        if (runner.hasToolSpecs === true && TOOL_SPEC.test(option)) {
+          hasSpec = true
+          k++
+          continue
+        }
         if (!option.startsWith('-')) break
-        k += option.includes('=') ? 1 : 2 // `-n env`, `--no-capture-output`
+        const eq = option.indexOf('=')
+        if (runner.scripts?.has(eq < 0 ? option : option.slice(0, eq)) === true) {
+          nestedScripts.push(eq < 0 ? (words[k + 1] ?? '') : option.slice(eq + 1))
+          k += eq < 0 ? 2 : 1
+        } else if (eq >= 0) {
+          k++ // `--opt=value`
+        } else if (runner.values?.has(option) === true) {
+          k += 2 // `-n env`
+        } else if (runner.flags?.has(option) === true || RUNNER_FLAGS.has(option)) {
+          k++ // `--no-capture-output`
+        } else {
+          markUnresolved(start)
+          k += 2 // not known: read as taking a value, as every option once was
+        }
       }
+      if (hasSpec && !hasSeparator) markUnresolved(start)
       continue
     }
 
@@ -257,29 +375,55 @@ function coreOf(words: readonly string[]): { wrappers: string[]; coreWords: stri
     if (takesArg === undefined) break
     wrappers.push(name)
     k++
-    while (k < words.length) {
-      const option = words[k] as string
-      if (option === '--') {
-        k++
-        break
+    const known = KNOWN_FLAGS.get(name)
+    let isPidForm = false
+    let splitString: string | undefined
+    const skipOptions = () => {
+      while (k < words.length) {
+        const option = words[k] as string
+        if (option === '--') {
+          k++
+          break
+        }
+        if (name === 'env' && (isAssignment(option) || option === '-' || option === '-i' || option === '--ignore-environment')) {
+          k++
+          continue
+        }
+        // `env -S "cmd ..."`, `-S'cmd'`, `-vS ...`, `--split-string=...`: the
+        // value is a command line (the words after it are its arguments).
+        if (name === 'env') {
+          const attached = /^-[iv0]*S/.exec(option)
+          if (attached !== null || option === '--split-string' || option.startsWith('--split-string=')) {
+            const inline = attached !== null ? option.slice(attached[0].length) : option.includes('=') ? option.slice(option.indexOf('=') + 1) : ''
+            const isInline = inline !== '' || option.startsWith('--split-string=')
+            splitString = isInline ? inline : (words[k + 1] ?? '')
+            k += isInline ? 1 : 2
+            continue
+          }
+        }
+        if (!option.startsWith('-') || option === '-') break
+        if (PID_WRAPPERS.has(name) && PID_OPTION.test(option)) isPidForm = true
+        // `exec -la name cmd`: `-a` last in a cluster takes the next word.
+        if (name === 'exec' && /^-[cl]+a$/.test(option)) {
+          k += 2
+          continue
+        }
+        if (known !== undefined && !takesArg.has(option) && !known.has(option) && !option.includes('=')) markUnresolved(start)
+        k += takesArg.has(option) ? 2 : 1
       }
-      if (name === 'env' && (isAssignment(option) || option === '-' || option === '-i' || option === '--ignore-environment')) {
-        k++
-        continue
-      }
-      // `env -S "cmd ..."` / `--split-string=...`: the value is a command line.
-      if (name === 'env' && (option === '-S' || option === '--split-string' || option.startsWith('--split-string='))) {
-        const value = option.includes('=') ? option.slice(option.indexOf('=') + 1) : (words[k + 1] ?? '')
-        nestedScripts.push(value)
-        k += option.includes('=') ? 1 : 2
-        continue
-      }
-      if (!option.startsWith('-') || option === '-') break
-      k += takesArg.has(option) ? 2 : 1
+    }
+    skipOptions()
+    // setarch ARCH [options] CMD: the architecture is not the command.
+    if (name === 'setarch' && ARCH.test(words[k] ?? '')) {
+      k++
+      skipOptions()
     }
     if (name === 'timeout' && k < words.length) k++ // the duration
     // chroot NEWROOT CMD, flock LOCKFILE CMD: one positional before the command.
     if ((name === 'chroot' || name === 'flock') && k < words.length && !(words[k] as string).startsWith('-')) k++
+    // chrt PRIORITY CMD, taskset MASK CMD: the same, unless it is a pid form.
+    if (PID_WRAPPERS.has(name) && !isPidForm && k < words.length) k++
+    if (splitString !== undefined) nestedScripts.push([splitString, ...words.slice(k).map(quoted)].join(' '))
   }
   const coreWords = words.slice(k).map((word, index) =>
     index === 0 && word.includes('/') && SYSTEM_BIN.test(word) ? word.slice(word.lastIndexOf('/') + 1) : word,
@@ -301,7 +445,73 @@ function coreOf(words: readonly string[]): { wrappers: string[]; coreWords: stri
     }
     coreWords.splice(1, g - 1)
   }
-  return { wrappers, coreWords, nestedScripts }
+  return { wrappers, coreWords, nestedScripts, ...(unresolved !== undefined && { unresolved }) }
+}
+
+/** `script` options that take the next word. */
+const SCRIPT_VALUE_OPTIONS = new Set(['-c', '-E', '-I', '-O', '-B', '-T', '-m'])
+
+/**
+ * The command of `script FILE COMMAND...` (the BSD form): what follows the
+ * typescript file, the first word after the options.
+ */
+function scriptCommandOf(coreWords: readonly string[]): string | undefined {
+  let i = 1
+  for (; i < coreWords.length; i++) {
+    const word = coreWords[i] as string
+    if (word === '--') {
+      i++
+      break
+    }
+    if (!word.startsWith('-')) break
+    // BSD `-t time` takes a number; util-linux `-t` takes none.
+    if (SCRIPT_VALUE_OPTIONS.has(word) || (word === '-t' && /^\d+$/.test(coreWords[i + 1] ?? ''))) i++
+  }
+  // The word at `i` is the typescript file; everything after it is the command.
+  const command = coreWords.slice(i + 1)
+  return command.length > 0 ? command.map(quoted).join(' ') : undefined
+}
+
+/** `tmux` subcommands that start a command in a pane or window, with their options that take a value. */
+const TMUX_SUBCOMMANDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['new-session', setOf('-c', '-e', '-f', '-F', '-n', '-s', '-t', '-x', '-y')],
+  ['new', setOf('-c', '-e', '-f', '-F', '-n', '-s', '-t', '-x', '-y')],
+  ['new-window', setOf('-c', '-e', '-F', '-n', '-t')],
+  ['neww', setOf('-c', '-e', '-F', '-n', '-t')],
+  ['split-window', setOf('-c', '-e', '-F', '-l', '-p', '-t')],
+  ['splitw', setOf('-c', '-e', '-F', '-l', '-p', '-t')],
+  ['respawn-pane', setOf('-c', '-e', '-t')],
+  ['respawnp', setOf('-c', '-e', '-t')],
+])
+
+/** The shell command a `tmux new-session|new-window|split-window|respawn-pane` runs, from its trailing arguments. */
+function tmuxScriptOf(coreWords: readonly string[]): string | undefined {
+  let i = 1
+  // tmux's own options come first; `-c` there is a shell command too.
+  for (; i < coreWords.length && (coreWords[i] as string).startsWith('-'); i++) {
+    const option = coreWords[i] as string
+    if (option === '-c') return coreWords[i + 1]
+    if (['-L', '-S', '-f', '-T'].includes(option)) i++
+  }
+  const valued = TMUX_SUBCOMMANDS.get(coreWords[i] ?? '')
+  if (valued === undefined) return undefined
+  for (i++; i < coreWords.length; i++) {
+    const option = coreWords[i] as string
+    if (option === '--') {
+      i++
+      break
+    }
+    if (!option.startsWith('-') || option === '-') break
+    // getopt: the first letter that takes a value ends the cluster; the value
+    // is the rest of the word, or the next word when it was the last letter.
+    for (let c = 1; c < option.length; c++) {
+      if (!valued.has(`-${option[c]}`)) continue
+      if (c === option.length - 1) i++
+      break
+    }
+  }
+  const rest = coreWords.slice(i)
+  return rest.length === 0 ? undefined : rest.map((word, index) => (index === 0 && rest.length === 1 ? word : quoted(word))).join(' ')
 }
 
 /** The script a shell runs with `-c` (any short-option cluster holding `c`). */
@@ -309,15 +519,57 @@ function inlineScriptOf(coreWords: readonly string[]): string | undefined {
   const program = coreWords[0]
   if (program === undefined) return undefined
   if (program === 'eval') return coreWords.slice(1).join(' ')
-  if (!SHELLS.has(program) && program !== 'su') return undefined
+  if (program === 'tmux') return tmuxScriptOf(coreWords)
+  if (program === 'nix-shell') {
+    for (let i = 1; i < coreWords.length; i++) {
+      const word = coreWords[i] as string
+      if (word === '--run' || word === '--command') return coreWords[i + 1]
+      const eq = /^--(run|command)=([\s\S]*)$/.exec(word)
+      if (eq !== null) return eq[2]
+    }
+    return undefined
+  }
+  // `script -c CMD` runs CMD in a shell, as `sh -c` does.
+  if (!SHELLS.has(program) && program !== 'su' && program !== 'script') return undefined
   for (let i = 1; i < coreWords.length; i++) {
     const word = coreWords[i] as string
+    if (word.startsWith('--command=')) return word.slice('--command='.length)
     if (word === '-c' || /^-[a-zA-Z]*c[a-zA-Z]*$/.test(word) || word === '--command') {
       // `--` ends option parsing: `sh -c -- 'cmd'` runs `cmd`, not `--`.
       return coreWords[i + 1] === '--' ? coreWords[i + 2] : coreWords[i + 1]
     }
   }
-  return undefined
+  return program === 'script' ? scriptCommandOf(coreWords) : undefined
+}
+
+/**
+ * The command substitutions (`$(...)`, backticks) in text a shell expands but
+ * does not run as a script, such as an unquoted heredoc body. A backslash
+ * escapes the next character; the inside of `$((...))` is searched too.
+ */
+function substitutionsIn(text: string, depth = 0): string[] {
+  const found: string[] = []
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (c === '\\') {
+      i++
+    } else if (c === '$' && text[i + 1] === '(') {
+      const isArithmetic = text[i + 2] === '('
+      const from = i + (isArithmetic ? 3 : 2)
+      const close = findClose(text, from, '(', ')')
+      const stop = close < 0 ? text.length : close
+      const inner = text.slice(from, stop)
+      if (!isArithmetic) found.push(inner)
+      else if (depth < MAX_DEPTH) found.push(...substitutionsIn(inner, depth + 1))
+      i = stop
+    } else if (c === '`') {
+      let j = i + 1
+      for (; j < text.length && text[j] !== '`'; j++) if (text[j] === '\\') j++
+      found.push(text.slice(i + 1, Math.min(j, text.length)))
+      i = j
+    }
+  }
+  return found
 }
 
 function scan(command: string, depth: number, isNested: boolean, out: Builder): void {
@@ -331,11 +583,14 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
   let word = ''
   let hasWord = false
   let isWordQuoted = false
+  let isWordEscaped = false
   let redirects: Redirect[] = []
   let pendingTarget: string | undefined
-  let pendingHeredocs: { tag: string; owner: number }[] = []
-  let heredocTags: string[] = []
+  let pendingHeredocs: { tag: string; owner: number; isExpanded: boolean }[] = []
+  let heredocTags: { tag: string; isExpanded: boolean }[] = []
   let input = ''
+  // The next part reads the pipe of the one before it.
+  let isPipeNext = false
 
   const nested = (text: string) => scan(text, depth + 1, true, out)
 
@@ -351,7 +606,8 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
   const endWord = () => {
     if (!hasWord) return
     if (pendingTarget === '<<' || pendingTarget === '<<-') {
-      heredocTags.push(word)
+      // Any quote or backslash in the delimiter makes the body plain data.
+      heredocTags.push({ tag: word, isExpanded: !isWordQuoted && !isWordEscaped })
     } else if (pendingTarget === '<<<') {
       input += `${word}\n`
     } else if (pendingTarget !== undefined) {
@@ -363,17 +619,20 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
     word = ''
     hasWord = false
     isWordQuoted = false
+    isWordEscaped = false
   }
 
   const endPart = (end: number) => {
     endWord()
     const text = command.slice(partStart, end).trim()
     const owner = out.parts.length
+    const isPiped = isPipeNext
+    isPipeNext = false
     if (words.length > 0 || redirects.length > 0) {
       if (out.parts.length >= MAX_PARTS) {
         out.isCut = true
       } else {
-        const { wrappers, coreWords, nestedScripts } = coreOf(words)
+        const { wrappers, coreWords, nestedScripts, unresolved } = coreOf(words)
         const part: ShellPart = {
           text,
           words,
@@ -383,15 +642,21 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
           redirects,
           input,
           isNested,
+          isPiped,
         }
         out.parts.push(part)
+        // A runner whose inner command was not found for sure: the words as
+        // they stand are a part of their own, so a rule can review the call.
+        if (unresolved !== undefined && out.parts.length < MAX_PARTS) {
+          out.parts.push({ ...part, wrappers: [], coreWords: unresolved, core: unresolved.join(' '), redirects: [], input: '' })
+        }
         const script = inlineScriptOf(coreWords)
         if (script !== undefined && script !== '') nested(script)
         for (const nestedScript of nestedScripts) if (nestedScript !== '') nested(nestedScript)
       }
     }
     if (out.parts.length > owner) {
-      pendingHeredocs.push(...heredocTags.map(tag => ({ tag, owner })))
+      pendingHeredocs.push(...heredocTags.map(({ tag, isExpanded }) => ({ tag, owner, isExpanded })))
     }
     heredocTags = []
     words = []
@@ -402,7 +667,7 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
   /** Consumes heredoc bodies after a newline at `i`; returns the new index. */
   const takeHeredocs = (i: number): number => {
     let at = i + 1
-    for (const { tag, owner } of pendingHeredocs) {
+    for (const { tag, owner, isExpanded } of pendingHeredocs) {
       let body = ''
       while (at <= command.length) {
         const lineEnd = command.indexOf('\n', at)
@@ -418,6 +683,9 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
         .slice(owner)
         .some(later => later.isNested === isNested && SHELLS.has(later.coreWords[0] ?? ''))
       if (isFedToShell) nested(body)
+      // An unquoted delimiter: the shell expands `$(...)` and backticks in the
+      // body, so the commands they run are parts of this call.
+      else if (isExpanded) for (const inner of substitutionsIn(body)) if (inner.trim() !== '') nested(inner)
     }
     pendingHeredocs = []
     return at - 1
@@ -434,6 +702,7 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
       }
       if (next !== undefined) word += next
       hasWord = true
+      isWordEscaped = true
       i++
       continue
     }
@@ -508,6 +777,16 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
       i = j
       continue
     }
+    // An unquoted $IFS or ${IFS} (and the empty $9 that follows it as a trick)
+    // is whitespace: `rm${IFS}-rf${IFS}~` is `rm -rf ~`.
+    if (c === '$') {
+      const separator = /^\$(?:\{IFS\}|IFS(?![A-Za-z0-9_]))(?:\$\d|\$\{\d\})?/.exec(command.slice(i, i + 16))
+      if (separator !== null) {
+        endWord()
+        i += separator[0].length - 1
+        continue
+      }
+    }
     if (c === '$' && next === '(') {
       if (command[i + 2] === '(') {
         const close = findClose(command, i + 3, '(', ')')
@@ -566,6 +845,7 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder): 
     }
     if (c === ';' || c === '|' || (c === '&' && next !== '>')) {
       endPart(i)
+      if (c === '|' && next !== '|') isPipeNext = true
       if ((c === '&' && next === '&') || (c === '|' && (next === '|' || next === '&')) || (c === ';' && next === ';')) i++
       partStart = i + 1
       continue
