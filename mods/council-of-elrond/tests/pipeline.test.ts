@@ -250,20 +250,22 @@ describe('audit log', () => {
     expect(w.files.get(`${ROOT}/.claude/council-of-elrond/audit/.gitignore`)).toContain('*')
   })
 
-  test('the same call reformatted has the same fingerprint', async ($, on) => {
+  test('the same call reformatted has a different fingerprint, and an identical one the same', async ($, on) => {
     const w = world(on, { replies: [BLOCK] })
     await $.tool.call({ tool: 'Bash', command: 'rm  -rf   build' })
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
-    const [a, b] = await auditLines(w)
-    expect(a?.fingerprint).toBe(b?.fingerprint)
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+    const [a, b, c] = await auditLines(w)
+    expect(a?.fingerprint).not.toBe(b?.fingerprint)
+    expect(b?.fingerprint).toBe(c?.fingerprint)
   })
 
   test('a file write reindented is a different fingerprint, so it is not cached unreviewed', () => {
     const a = fingerprintText('Write', { file_path: '/work/x.yml', content: 'a:\n  b: 1\n' })
     const b = fingerprintText('Write', { file_path: '/work/x.yml', content: 'a:\n    b: 1\n' })
     expect(a).not.toBe(b)
-    // A shell command's insignificant spacing still collapses to one fingerprint.
-    expect(fingerprintText('Bash', { command: 'rm  -rf build' })).toBe(fingerprintText('Bash', { command: 'rm -rf build' }))
+    // A shell command is hashed exactly too: its spacing is not collapsed.
+    expect(fingerprintText('Bash', { command: 'rm  -rf build' })).not.toBe(fingerprintText('Bash', { command: 'rm -rf build' }))
   })
 
   test('rotates by size', { options: { auditMaxKb: 16 } }, async ($, on) => {

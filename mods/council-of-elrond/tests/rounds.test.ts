@@ -130,13 +130,24 @@ describe('cache', () => {
     const w = world(on, { replies: [APPROVE] })
     on('prompt.submit', ($$, e) => ({ text: e.text }))
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
-    await $.tool.call({ tool: 'Bash', command: 'rm  -rf   build' })
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(w.modelRequests).toHaveLength(1)
     expect(w.ran).toHaveLength(2)
     expect((await auditLines(w))[1]).toMatchObject({ cached: true, verdict: 'approve', outcome: 'ran' })
     await submit($ as never, 'again')
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(w.modelRequests).toHaveLength(2)
+  })
+
+  test('a command differing only by a newline in place of a space is reviewed again, not a cached approve', async ($, on) => {
+    const w = world(on, { replies: [APPROVE, APPROVE] })
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf\nbuild' })
+    expect(w.modelRequests).toHaveLength(2)
+    expect((await auditLines(w))[1]?.cached).not.toBe(true)
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf\nbuild' })
+    expect(w.modelRequests).toHaveLength(2)
+    expect((await auditLines(w))[2]).toMatchObject({ cached: true, verdict: 'approve' })
   })
 
   test('a block or revise is never reused', async ($, on) => {
