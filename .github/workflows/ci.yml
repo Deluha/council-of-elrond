@@ -40,7 +40,7 @@ jobs:
       # every process. Pin the version DESIGN.md names when a newer one breaks
       # the generated types (see docs/MAINTENANCE.md).
       - name: Install Claude Code and TypeScript
-        run: npm install -g @anthropic-ai/claude-code typescript
+        run: npm install -g @anthropic-ai/claude-code@2.1.322 typescript
 
       - name: Versions
         run: |
