@@ -5,6 +5,9 @@ How to finish the mod from where it stands, written so a new dev session can pic
 - **The spec:** [SPEC.md](./SPEC.md) (§ numbers below refer to it).
 - **What exists and why:** [DESIGN.md](./DESIGN.md).
 - **Decisions approved after the spec:** listed below; they win over the spec where they differ.
+- **ROADMAP v2 (proposal):** [docs/REVIEW-2026-11.md](../../docs/REVIEW-2026-11.md) holds the
+  November review, the next milestones (M0 to M7), suggested new functionality and the decisions
+  they need. Until the maintainer takes those decisions, everything below stays binding.
 
 | Stage | Scope (SPEC §20) | Status |
 | :- | :- | :- |

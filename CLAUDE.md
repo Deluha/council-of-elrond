@@ -12,6 +12,7 @@ Public, MIT-licensed, open-source repository.
 - **Developer guide (layout, conventions, tests, live checks, recipes):** `docs/DEVELOPMENT.md`.
 - **Maintainer guide (Claude Code updates, releases):** `docs/MAINTENANCE.md`.
 - **Open findings and proposed amendments:** `docs/REVIEW-2026-10.md`.
+- **ROADMAP v2 (proposal, decisions pending):** `docs/REVIEW-2026-11.md`.
 
 ## Rules
 
