@@ -25,7 +25,7 @@ jobs:
           node-version: 22
 
       - name: Install Claude Code and TypeScript
-        run: npm install -g @anthropic-ai/claude-code typescript
+        run: npm install -g @anthropic-ai/claude-code@2.1.322 typescript
 
       - name: Check the tag against plugin.json and CHANGELOG.md
         id: version
