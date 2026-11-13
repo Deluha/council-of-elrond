@@ -14,9 +14,9 @@ the mod never takes part in Claude Code's own permission decision.
 > security product. The limits are stated plainly in the
 > [user manual](mods/council-of-elrond/README.md#what-it-does-not-protect-against).
 
-**Status:** all six stages and the final deliverables are done (version 0.5.0; 0.6.0 follows the
-maintainer's terminal check). See [ROADMAP.md](mods/council-of-elrond/ROADMAP.md) for what is
-decided, deferred and declined.
+**Status:** pre-release. The original build stages are done; no version has been tagged yet. The
+road to the first release (0.6.0) and to 1.0 is in
+[ROADMAP.md](mods/council-of-elrond/ROADMAP.md), milestones M0 to M7.
 
 ## Quick start
 
