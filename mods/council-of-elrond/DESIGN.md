@@ -173,7 +173,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | Model error, timeout (`timeoutMs`), empty reply, malformed verdict, request refused | Escalate to you; "keep blocked" refuses. |
 | Token budget spent / no enabled member can take the call (the named one and Gandalf off) | Escalate without a model call. |
 | The file a diff needs can't be read (over 4 MiB, permissions) | The diff shows the call's own text and the prompt says so; the review goes on. |
-| A `.sql` file the call names is missing, unreadable, or lands outside the project (by name or real path) | Left out of the database reviewer's context; the review goes on. |
+| A `.sql` file the call names is missing, unreadable, or lands outside the project (by name or real path) | Left out of the database reviewer's context, with a one-line note in its prompt saying so (§15.13); the review goes on. |
 | Nobody can be asked (no surface) | Refuse, naming the operation, the rule and the reviewers' names (never their reasons) and the way to let it run; a failed attempt (§13.5 e). |
 | The start notice can't be appended (`$.session.append` rejects, or resolves `{ deny }`) | A debug line (`notice.appendFailed`); `session.start` goes on and returns `next(e)`. Nothing is retried; the refusal still tells Claude why (§13.5 d). |
 | The status sync after a roster change fails (`session.attach`, `session.detach`) | Caught where it is made; the hook returns what `next(e)` gave. The status line keeps its last value until the next sync (§13.5 f). |
@@ -1154,3 +1154,64 @@ decided; the live list of what still passes is the README's "Known gaps in shell
    A newline separates commands, and whitespace inside quotes is data, so no normalisation is safe
    without parsing the command, and the parse cannot be the cache key's. A reformatted command is
    reviewed again; the cost is one more review for a command retyped with different spacing.
+9. **Cut input keeps both ends** (a tightening). `truncate` kept the start and dropped the end, so
+   the end of a command, a script or a diff was never seen. `cut` (`members/shared.ts`) keeps about
+   two thirds of each limit from the start and one third from the end, on line boundaries (a line
+   longer than its share is cut inside), with one marker line, `[... N lines, M characters omitted
+   ...]`. Every place a reviewer's input, or the dialog's call text, was cut now uses it, and the
+   call's own redaction runs first. Where a text is cut twice (the preview: by the `previewLines`
+   setting, then by the reviewer's own limit; a diff cut while it is built) the amounts add up in
+   the note. Decided: a script and a `.sql` file are no longer cut in `register.ts` but redacted
+   whole and cut by the prompt, so one limit decides and the note can say how much; the production
+   patterns therefore match against the whole SQL, not its cut (more matches, never fewer). The
+   range diff is no longer pre-sliced to four times its limit before redaction: the engine already
+   caps a process's output at 4 MiB, and slicing first would drop the true end of the diff without
+   a word.
+10. **Reviewers are told what a cut means** (a tightening). The marker sits inside the data block,
+    where the call's own text can write the same line, so it proves nothing. Every system prompt
+    (`OMISSION_RULES`) says: content that was left out has not been seen and is not to be assumed
+    safe; approve only if what is visible and the nature of the call make the rest low-risk,
+    otherwise revise and ask for smaller pieces; a marker-like line with no cut notice after its
+    block is just content. The prompt builder writes that notice (`fenced`, `Cut notice: ...`)
+    outside the fence, after a block that was really cut, with the amount; text inside the fence can
+    imitate it, but not outside it, so the one place that is trusted is the one the call cannot
+    reach. Notes for context left out of a brief (item 13) are written the same way.
+11. **A cut shell command is never approved by a model alone** (a tightening). A command that is cut
+    hides code that will run, unlike a file or a diff, whose reviewer judges what it sees and is
+    told the rest is missing. When the command text of a shell call (`isCommandCut`, `members/
+    brief.ts`: the call limits of the general and the git and database reviewers; the range
+    command's own 40 lines and 4,000 characters for the diff reviewer) is past its reviewer's limit
+    and the verdict is an approve, the call is treated as one with no verdict: `askUser` with
+    `escalate.commandCut`, so it comes to the person where one can be asked and is refused where not
+    (`nobodyToAsk`, a failed attempt). A revise or a block stands. Nothing is cached, counts as no
+    round, and the audit line keeps the reviewer's `approve` with the reason. In shadow mode a
+    verdict never enforces, so the call runs and is not remembered. In the full council the rule
+    applies to a combined approve when any seat's command was cut; an objection from any seat
+    decides as before. A file tool's call text (its content) is never this: only a shell tool's
+    command.
+12. **Redact before cutting** (a tightening). A script, a `.sql` file, the changes a push would
+    send, the read-only preview and a file's diff were redacted after the cut, so a secret across
+    the cut no longer matched its pattern and a piece of it was shown. Each is redacted whole, then
+    cut, as the full council's check tail already is and the dialog's call and preview are. `callDiff` and
+    `formatPreviewCut` take the redaction as a function, so the order is theirs to keep.
+13. **Context left out is said so** (a tightening). A `.sql` file outside the project, missing or
+    unreadable (or past the three read) and a script not written through a file tool this session or
+    unreadable were dropped without a word; the reviewer now gets a one-line note, as the diff
+    reviewer already did for a file it could not read. The note counts; it names no path, so it
+    carries nothing the call wrote.
+14. **The dialog renders call text behind a gutter** (a tightening). The call and the preview came
+    out as lines of the question, so a command could contain a line that looked like the dialog's own
+    (a reviewer's verdict, a heading). Every line of the call and the preview now starts with the
+    gutter (`ask.gutter`) and has its control characters, C1 controls and Unicode line separators
+    replaced by a space; the dialog's own omission marker starts with two spaces and no bar, which a
+    line of the call never does. A reviewer's reason, a failure's problem and a secret's label and
+    snippet are put on one line the same way. `questionText` is still the one builder, and the
+    excerpt keeps its 12 lines and 600 characters (15 and 900 for the preview), now from both ends.
+15. **A malformed verdict echoes less** (a tightening). `parseVerdict` printed every unexpected key
+    the reviewer chose, uncapped, into a dialog, a refusal and the log. It names at most three, each
+    cut to 40 characters with control characters removed (`label`), and counts the rest.
+16. **More secrets are redacted** (a tightening). A value counts as a placeholder only when all of it
+    is one; a literal that merely starts with such a character is redacted and reported. Quoted
+    passwords with spaces, shorter values, `curl -u user:password`, `--password` for the known
+    database clients, and the `Authorization: Token`, `X-Api-Key` and `X-Auth-Token` headers are
+    covered, and text past the scan limit has its end scanned.

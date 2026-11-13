@@ -1,4 +1,5 @@
-import { ANSWER_FORMAT, label, truncate, untrusted, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, cut, fenced, label, OMISSION_RULES, untrustedRules } from './shared.js'
+import type { Omitted, Shown } from './shared.js'
 import type { Call } from '../rules/classify.js'
 
 /**
@@ -13,6 +14,8 @@ export type Current = { state: 'text'; text: string } | { state: 'missing' } | {
 export type CallDiff = {
   /** A unified diff of what the call would change, cut to the line limit. */
   diff: string
+  /** What that cut left out, when it cut. */
+  omitted?: Omitted
   /** Why the diff lacks the file's own lines, when it does. */
   note?: 'unreadable' | 'not-found' | 'notebook-unparsed'
   /** The file does not exist yet. */
@@ -33,6 +36,8 @@ export type LegolasContext = {
   ruleReasons: readonly string[]
   /** The read-only preview: the file's diff stat and whether git tracks it. */
   preview?: string
+  /** What the preview's own cut left out, when it was cut before it got here. */
+  previewOmitted?: Omitted
   /** The user's latest prompt, redacted already. */
   latestPrompt: string
 }
@@ -42,6 +47,9 @@ export const LEGOLAS_LIMITS = {
   previewLines: 20,
   previewChars: 2_000,
   promptChars: 4_000,
+  /** The push or merge command a range review quotes. */
+  rangeCallLines: 40,
+  rangeCallChars: 4_000,
 } as const
 
 /** Lines of unchanged context around each change. */
@@ -161,8 +169,11 @@ export function unified(ops: readonly Op[]): string[] {
   return out
 }
 
-/** A unified diff of `before` to `after` under a `---`/`+++` header, cut to `maxLines`. */
-export function textDiff(path: string, before: string | undefined, after: string, maxLines: number): string {
+/** What makes the diff text before it is cut: the caller's redaction of the whole text, so a cut never splits a secret. */
+export type RedactText = (text: string) => string
+
+/** A unified diff of `before` to `after` under a `---`/`+++` header, cut to `maxLines`, with what the cut left out. */
+export function diffOf(path: string, before: string | undefined, after: string, maxLines: number, redactText: RedactText = value => value): Shown {
   const header = [`--- ${before === undefined ? '/dev/null' : `a/${path}`}`, `+++ b/${path}`]
   const from = linesOf(before ?? '')
   const to = linesOf(after)
@@ -182,8 +193,19 @@ export function textDiff(path: string, before: string | undefined, after: string
     hunks.length > 0
       ? [...hunks, ...(endings > 0 ? [`(line endings also change on ${lines(endings)})`] : [])]
       : [endings > 0 ? `(only line endings change, on ${lines(endings)})` : '(no change)']
-  return truncate([...header, ...body].join('\n'), maxLines + header.length, LEGOLAS_LIMITS.diffChars)
+  const { text, omitted } = cut(redactText([...header, ...body].join('\n')), maxLines + header.length, LEGOLAS_LIMITS.diffChars)
+  return { text, ...(omitted !== undefined && { omitted }) }
 }
+
+/** `diffOf`'s text. */
+export const textDiff = (path: string, before: string | undefined, after: string, maxLines: number): string => diffOf(path, before, after, maxLines).text
+
+const asDiff = (shown: Shown, isNew: boolean, note?: CallDiff['note']): CallDiff => ({
+  diff: shown.text,
+  ...(shown.omitted !== undefined && { omitted: shown.omitted }),
+  ...(note !== undefined && { note }),
+  isNew,
+})
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -216,7 +238,8 @@ function applyEdit(text: string, step: unknown): string | undefined {
  * file as it stands. An Edit whose text is not found, or a file that can't
  * be read, shows the call's own text only, and says so.
  */
-export function callDiff(call: Call, path: string, current: Current, maxLines: number): CallDiff {
+export function callDiff(call: Call, path: string, current: Current, maxLines: number, redactText?: RedactText): CallDiff {
+  const diffText = (at: string, from: string | undefined, to: string): Shown => diffOf(at, from, to, maxLines, redactText)
   const before = current.state === 'text' ? current.text : undefined
   const isNew = current.state === 'missing'
   if (call.tool === 'Edit') {
@@ -232,13 +255,9 @@ export function callDiff(call: Call, path: string, current: Current, maxLines: n
         after = after === undefined ? undefined : applyEdit(after, step)
       }
       // One step that does not apply means no partial diff.
-      if (after !== undefined) return { diff: textDiff(path, before, after, maxLines), isNew: false }
+      if (after !== undefined) return asDiff(diffText(path, before, after), false)
     }
-    return {
-      diff: textDiff(path, whole(oldText), whole(newText), maxLines),
-      note: before === undefined ? 'unreadable' : 'not-found',
-      isNew,
-    }
+    return asDiff(diffText(path, whole(oldText), whole(newText)), isNew, before === undefined ? 'unreadable' : 'not-found')
   }
   if (call.tool === 'NotebookEdit') {
     const mode = str(call.input.edit_mode) || 'replace'
@@ -246,19 +265,15 @@ export function callDiff(call: Call, path: string, current: Current, maxLines: n
     const cellId = typeof call.input.cell_id === 'string' ? call.input.cell_id : undefined
     const cell = before === undefined || mode === 'insert' ? undefined : cellSource(before, cellId)
     const label = `${path} (cell ${cellId ?? 'first'}, ${mode})`
-    if (mode === 'insert') return { diff: textDiff(label, undefined, newSource, maxLines), isNew }
+    if (mode === 'insert') return asDiff(diffText(label, undefined, newSource), isNew)
     if (cell === undefined) {
-      return { diff: textDiff(label, undefined, mode === 'delete' ? '' : newSource, maxLines), note: before === undefined ? 'unreadable' : 'notebook-unparsed', isNew }
+      return asDiff(diffText(label, undefined, mode === 'delete' ? '' : newSource), isNew, before === undefined ? 'unreadable' : 'notebook-unparsed')
     }
-    return { diff: textDiff(label, whole(cell.text), mode === 'delete' ? '' : newSource, maxLines), isNew: false }
+    return asDiff(diffText(label, whole(cell.text), mode === 'delete' ? '' : newSource), false)
   }
   // Write: the whole new content against the file as it stands.
   const content = str(call.input.content)
-  return {
-    diff: textDiff(path, before, content, maxLines),
-    ...(current.state === 'unreadable' && { note: 'unreadable' as const }),
-    isNew,
-  }
+  return asDiff(diffText(path, before, content), isNew, current.state === 'unreadable' ? 'unreadable' : undefined)
 }
 
 const NOTES: Readonly<Record<NonNullable<CallDiff['note']>, string>> = {
@@ -279,6 +294,7 @@ export function legolasSystem(nonce: string): string {
     '6. Breakage: is anything obviously broken (code removed that is still used, a file replaced by a placeholder or cut short, syntax that cannot parse)?',
     'Do not review style, naming, formatting or taste. A rule already flagged this change; that alone is not a reason to block. Block what is clearly harmful or unrequested, revise what should change before it is written, approve what is proportionate.',
     untrustedRules(nonce),
+    OMISSION_RULES,
     ANSWER_FORMAT,
   ].join('\n')
 }
@@ -288,17 +304,17 @@ export function legolasPrompt(context: LegolasContext, nonce: string): string {
   const sections = [
     `Tool: ${context.tool}`,
     ...(context.range !== undefined
-      ? [`Command:\n${untrusted('call', truncate(context.range.call, 40, 4_000), nonce)}`, `The changes the ${context.range.kind} would ${context.range.kind === "push" ? "send" : "bring in"}: ${label(context.path)}`]
+      ? [`Command:\n${fenced('call', context.range.call, nonce, { limits: { lines: limits.rangeCallLines, chars: limits.rangeCallChars } })}`, `The changes the ${context.range.kind} would ${context.range.kind === "push" ? "send" : "bring in"}: ${label(context.path)}`]
       : [`File: ${label(context.path)}${context.diff.isNew ? ' (new file)' : ''}`]),
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
     ...(context.diff.note !== undefined ? [NOTES[context.diff.note]] : []),
     context.range !== undefined ? 'The changes, as a diff:' : 'Proposed change:',
-    untrusted('diff', context.diff.diff, nonce),
+    fenced('diff', context.diff.diff, nonce, context.diff.omitted === undefined ? {} : { earlier: context.diff.omitted }),
     ...(context.preview !== undefined
-      ? [`The file in git (read-only preview):\n${untrusted('preview', truncate(context.preview, limits.previewLines, limits.previewChars), nonce)}`]
+      ? [`The file in git (read-only preview):\n${fenced('preview', context.preview, nonce, { limits: { lines: limits.previewLines, chars: limits.previewChars }, ...(context.previewOmitted !== undefined && { earlier: context.previewOmitted }) })}`]
       : []),
     "The user's latest message:",
-    untrusted('user-request', truncate(context.latestPrompt || '(none recorded)', 60, limits.promptChars), nonce),
+    fenced('user-request', context.latestPrompt || '(none recorded)', nonce, { limits: { lines: 60, chars: limits.promptChars } }),
     'Your verdict, as JSON only:',
   ]
   return sections.join('\n\n')

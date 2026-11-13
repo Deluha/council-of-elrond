@@ -1,4 +1,5 @@
-import { truncate } from './shared.js'
+import { cut } from './shared.js'
+import type { Cut } from './shared.js'
 import { FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
 import type { Call, Classification } from '../rules/classify.js'
 import type { ShellPart } from '../rules/shell.js'
@@ -235,8 +236,12 @@ export function planPreview(call: Call, classification: Classification, context:
   return [...unique.values()].slice(0, MAX_INSPECTIONS)
 }
 
-/** The preview text: each inspection's result under its label, cut to the line limit. */
-export function formatPreview(results: readonly InspectionResult[], maxLines: number): string | undefined {
+/**
+ * The preview text: each inspection's result under its label, cut to the line
+ * limit (its start and its end), with what the cut left out. `redactText` runs
+ * on the whole text before the cut, so a cut never splits a secret.
+ */
+export function formatPreviewCut(results: readonly InspectionResult[], maxLines: number, redactText: (text: string) => string = value => value): Cut | undefined {
   const blocks: string[] = []
   for (const result of results) {
     if (result.kind === 'failed') continue
@@ -257,8 +262,11 @@ export function formatPreview(results: readonly InspectionResult[], maxLines: nu
     }
   }
   if (blocks.length === 0) return undefined
-  return truncate(blocks.join('\n'), maxLines, maxLines * 200)
+  return cut(redactText(blocks.join('\n')), maxLines, maxLines * 200)
 }
+
+/** `formatPreviewCut`'s text. */
+export const formatPreview = (results: readonly InspectionResult[], maxLines: number): string | undefined => formatPreviewCut(results, maxLines)?.text
 
 /**
  * For the full council's diff reviewer: the changes a push would send, or a

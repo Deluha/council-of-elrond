@@ -108,7 +108,7 @@ describe('the plan comes from the table alone', () => {
   test('the preview is cut to the line limit', () => {
     const preview = formatPreview([{ kind: 'git', label: 'recent commits', exitCode: 0, stdout: Array.from({ length: 50 }, (_, i) => `c${i}`).join('\n') }], 10)
     expect(preview?.split('\n').length).toBeLessThanOrEqual(11)
-    expect(preview).toContain('[... truncated]')
+    expect(preview).toMatch(/\[\.\.\. \d+ lines, \d+ characters omitted \.\.\.\]/)
     expect(formatPreview([{ kind: 'failed', label: 'x' }], 10)).toBeUndefined()
   })
 })

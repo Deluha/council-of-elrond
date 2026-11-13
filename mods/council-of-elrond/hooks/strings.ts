@@ -91,7 +91,11 @@ const TABLE = {
   // The escalation's header: the dialog caps it at 12 characters.
   'ask.rollHeader': { plain: 'Council', themed: 'Loot roll' },
   'ask.title': { plain: 'A gated call needs your decision.', themed: 'Loot roll: a gated call needs your decision.' },
-  'ask.call': { plain: 'Call: {call}' },
+  // Text the call supplies (the call, a preview) is shown after this gutter on every line, so none of it can pass for a line of the dialog.
+  'ask.gutter': { plain: '  | ' },
+  'ask.call': { plain: 'Call:\n{call}' },
+  // The dialog's own marker where an excerpt was cut: it starts with two spaces and no gutter, which a line of the call never does.
+  'ask.omitted': { plain: '  [... {lines} line(s) and {chars} character(s) not shown ...]' },
   'ask.rule': { plain: 'Why it was gated: {reason}' },
   'ask.verdict': { plain: '{who}: {verdict}. {reason}' },
   'ask.failed': { plain: '{who}: no verdict ({problem}).' },
@@ -123,6 +127,7 @@ const TABLE = {
   'escalate.budget': { plain: "The session's review token budget is spent." },
   'escalate.failed': { plain: 'The reviewer could not give a verdict.' },
   'escalate.councilFailed': { plain: 'A big operation went to the full council, and members of it could not give a verdict.' },
+  'escalate.commandCut': { plain: "The command was too long to review in full, so a reviewer's approval of it does not count." },
   'escalate.rounds': { plain: 'The reviewer refused this operation twice since you last wrote; it comes to you before any further review.' },
   'escalate.secretLow': { plain: 'The secrets scan found something that may be a secret.' },
 

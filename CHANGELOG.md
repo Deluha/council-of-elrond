@@ -187,6 +187,37 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **The mod's own git starts no configured program.** The write preview's `git diff --stat` turns off
   external diff drivers and textconv filters, and every git the mod runs switches off `core.fsmonitor`
   and `log.showSignature` (which runs the configured gpg program).
+- **A command too long to review is never approved by a model alone.** A reviewer reads at most 200
+  lines or 12,000 characters of a shell command (40 lines or 4,000 characters of the push or merge
+  command a diff reviewer quotes). Past that, an approve no longer lets the call run: it comes to
+  you with "The command was too long to review in full", or is refused where nobody can be asked,
+  exactly as a call with no verdict is. The approve is not remembered, and the audit line shows the
+  reviewer's approve with that reason. A revise or a block still stands, and a long file or diff is
+  not held back (its reviewer is told, below). In the full council it applies when every member
+  approves and one of them saw only part of the command.
+- **Cut input keeps both ends, and reviewers are told what was left out.** Input over a limit used
+  to keep its start and end with `[... truncated]`, and no reviewer was told what that meant. It now
+  keeps about two thirds from the start and one third from the end, with one line saying how many
+  lines and characters are missing. Every reviewer's instructions say that what was left out has not
+  been seen and is not to be assumed safe: approve only when the rest is low-risk, otherwise ask for
+  the change in smaller pieces. A note from the council, outside the quoted material, says when and
+  by how much a block was cut, so a marker typed into a command or a file means nothing.
+- **Secrets are redacted before a cut, not after.** A script, a `.sql` file, the changes a push would
+  send, the read-only preview and a file's diff were cut first, so a secret that straddled the cut no
+  longer matched its pattern and a piece of it reached the reviewer. They are redacted whole first.
+- **Left-out context is named.** A `.sql` file the call names that is outside the project, missing or
+  unreadable (or past the three the reviewer reads), and a script the call runs that was not written
+  through a file tool this session or could not be read, are now said so in one line of the prompt,
+  where they used to be left out without a word.
+- **The question shows call text behind a gutter.** Every line of the call and the preview in the
+  escalation question starts with `  | ` and has control characters removed, so text in a command
+  cannot imitate a line of the dialog (a reviewer's verdict, a heading). A reviewer's reason, a
+  problem and a secret snippet are kept to one line. A long call or preview shows its start and its
+  end with the amount not shown, within the same 12 lines and 600 characters as before.
+- **A malformed verdict echoes less.** The names of unexpected fields in a reviewer's reply are
+  capped (three, 40 characters each, control characters removed) before they reach a dialog, a
+  refusal or the log.
+- **More secrets are redacted.** A value is treated as a placeholder only when all of it is one (`$NAME`, `${NAME}`, `<your-key>`, `{{ ... }}`, `****`); a literal that merely starts with such a character is redacted and reported. Quoted passwords containing spaces, shorter values, `curl -u user:password`, `--password` for the database clients already known, and `Authorization: Token`, `X-Api-Key` and `X-Auth-Token` headers are now covered. Text longer than the scan limit also has its end scanned.
 
 ### Fixed
 - **The status line is cleared when its surface leaves.** A label set for a phone or VS Code

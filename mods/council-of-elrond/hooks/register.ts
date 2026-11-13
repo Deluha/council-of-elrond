@@ -45,21 +45,20 @@ import { ruleJson, suggestRule } from './elrond/suggest.js'
 import type { Refusal } from './elrond/refusal.js'
 import { route } from './elrond/routing.js'
 import type { Enabled, Seat } from './elrond/routing.js'
-import { ARAGORN_LIMITS, productionHits, sqlOf } from './members/aragorn.js'
+import { productionHits, sqlOf } from './members/aragorn.js'
 import type { SqlPiece } from './members/aragorn.js'
-import { requestOf, whoOf } from './members/brief.js'
+import { isCommandCut, requestOf, whoOf } from './members/brief.js'
 import type { Brief } from './members/brief.js'
-import { formatPreview, INSPECTION_TIMEOUT_MS, MAX_LISTED, mergePlace, planPreview, rangeDiffInspection } from './members/galadriel.js'
+import { formatPreviewCut, INSPECTION_TIMEOUT_MS, MAX_LISTED, mergePlace, planPreview, rangeDiffInspection } from './members/galadriel.js'
 import type { Inspection, InspectionResult } from './members/galadriel.js'
-import { GANDALF_LIMITS } from './members/gandalf.js'
 import { isGimliBlock, keepTail, problemOf, statusOf, tailOf } from './members/gimli.js'
 import type { GimliRun } from './members/gimli.js'
 import { patternsWith, scanCall, warnsPasswordFingerprint } from './members/gollum.js'
 import { callDiff, LEGOLAS_LIMITS } from './members/legolas.js'
 import type { CallDiff, Current } from './members/legolas.js'
 import type { GollumFinding } from './members/gollum.js'
-import { newNonce, parseVerdict, truncate } from './members/shared.js'
-import type { Verdict } from './members/shared.js'
+import { cut, newNonce, parseVerdict } from './members/shared.js'
+import type { Omitted, Shown, Verdict } from './members/shared.js'
 import { redact } from './redact.js'
 import type { SecretPattern } from './redact.js'
 import { classify, FILE_PATH_FIELDS, SHELL_TOOLS, targetsOf } from './rules/classify.js'
@@ -467,25 +466,31 @@ async function realPathOf($: EngineInterface, call: Call, cwd: string, ctx: Cont
     : real
 }
 
-/** Content of scripts the call runs that Claude wrote this session, redacted. */
+/**
+ * Content of scripts the call runs that Claude wrote this session, redacted
+ * whole (the prompt cuts it, so a cut never splits a secret), and how many the
+ * call names that could not be shown.
+ */
 async function scriptsOf(
   $: EngineInterface,
   classification: Classification,
   cwd: string,
   written: readonly string[],
   ctx: Context,
-): Promise<{ path: string; content: string }[]> {
+): Promise<{ scripts: { path: string; content: string }[]; unseen: number }> {
   const scripts: { path: string; content: string }[] = []
+  let unseen = 0
   for (const word of classification.scriptPaths) {
-    if (scripts.length >= MAX_SCRIPTS) break
     const path = resolve(word, cwd, ctx.home)
-    if (!written.includes(path)) continue
-    const content = await $.fs.read(path).catch(() => undefined)
-    if (typeof content === 'string') {
-      scripts.push({ path, content: redact(truncate(content, GANDALF_LIMITS.scriptLines, GANDALF_LIMITS.scriptChars), ctx.patterns) })
+    if (scripts.length >= MAX_SCRIPTS || !written.includes(path)) {
+      unseen++
+      continue
     }
+    const content = await $.fs.read(path).catch(() => undefined)
+    if (typeof content === 'string') scripts.push({ path, content: redact(content, ctx.patterns) })
+    else unseen++
   }
-  return scripts
+  return { scripts, unseen }
 }
 
 /**
@@ -538,7 +543,7 @@ async function runGitInspection(
  * Runs Galadriel's inspections: only what the table planned, read-only, each
  * on its own timeout. A failure is no preview, never a decision.
  */
-async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: CallContext): Promise<string | undefined> {
+async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: CallContext): Promise<Shown | undefined> {
   const results: InspectionResult[] = []
   for (const step of plan) {
     try {
@@ -555,14 +560,14 @@ async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: C
         }
       } else {
         const { label, run } = await runGitInspection($, step, ctx)
-        results.push({ kind: 'git', label, exitCode: run.exitCode, stdout: run.stdout.slice(0, 50_000) })
+        // Redacted before it is cut, here and again in the preview's own cut.
+        results.push({ kind: 'git', label, exitCode: run.exitCode, stdout: redact(run.stdout, ctx.patterns).slice(0, 50_000) })
       }
     } catch {
       results.push({ kind: 'failed', label: step.label })
     }
   }
-  const preview = formatPreview(results, settings.previewLines)
-  return preview === undefined ? undefined : redact(preview, ctx.patterns)
+  return formatPreviewCut(results, settings.previewLines, shown => redact(shown, ctx.patterns))
 }
 
 /**
@@ -573,7 +578,8 @@ async function fileDiffOf($: EngineInterface, call: Call, cwd: string, realPath:
   const field = FILE_PATH_FIELDS[call.tool]
   const given = field === undefined ? undefined : call.input[field]
   if (field === undefined) return undefined
-  if (typeof given !== 'string') return { path: '(no path)', diff: callDiff(call, '(no path)', { state: 'unreadable' }, settings.diffLines) }
+  const redactText = (shown: string): string => redact(shown, ctx.patterns)
+  if (typeof given !== 'string') return { path: '(no path)', diff: callDiff(call, '(no path)', { state: 'unreadable' }, settings.diffLines, redactText) }
   const absolute = realPath ?? resolve(given, cwd, ctx.home)
   const path = relativeTo(absolute, ctx.root) || absolute
   let current: Current
@@ -583,25 +589,31 @@ async function fileDiffOf($: EngineInterface, call: Call, cwd: string, realPath:
     const content = await $.fs.read(absolute).catch(() => undefined)
     current = typeof content === 'string' ? { state: 'text', text: content } : { state: 'unreadable' }
   }
-  const diff = callDiff(call, path, current, settings.diffLines)
-  return { path, diff: { ...diff, diff: redact(diff.diff, ctx.patterns) } }
+  // Redacted inside the diff, before it is cut.
+  return { path, diff: callDiff(call, path, current, settings.diffLines, redactText) }
 }
 
-/** The `.sql` files a database call names, read when they sit inside the project, redacted and cut. */
-async function sqlFilesOf($: EngineInterface, files: readonly { word: string; cwd?: string }[], cwd: string, ctx: Context): Promise<SqlPiece[]> {
+/** The `.sql` files a database call names, read when they sit inside the project and redacted whole (the prompt cuts them), and how many could not be shown. */
+async function sqlFilesOf($: EngineInterface, files: readonly { word: string; cwd?: string }[], cwd: string, ctx: Context): Promise<{ pieces: SqlPiece[]; unseen: number }> {
   const pieces: SqlPiece[] = []
+  let unseen = 0
   for (const file of files) {
     const path = resolve(file.word.replace(/^['"]|['"]$/g, ''), file.cwd ?? cwd, ctx.home)
-    if (!isInside(path, ctx.root)) continue
+    if (!isInside(path, ctx.root)) {
+      unseen++
+      continue
+    }
     // Inside by name is not enough: a link may land outside the project.
     const real = (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath
-    if (real === undefined || !isInside(real, ctx.realRoot)) continue
-    const content = await $.fs.read(real).catch(() => undefined)
-    if (typeof content === 'string') {
-      pieces.push({ label: relativeTo(path, ctx.root) ?? path, text: redact(truncate(content, ARAGORN_LIMITS.sqlLines, ARAGORN_LIMITS.sqlChars), ctx.patterns) })
+    if (real === undefined || !isInside(real, ctx.realRoot)) {
+      unseen++
+      continue
     }
+    const content = await $.fs.read(real).catch(() => undefined)
+    if (typeof content === 'string') pieces.push({ label: relativeTo(path, ctx.root) ?? path, text: redact(content, ctx.patterns) })
+    else unseen++
   }
-  return pieces
+  return { pieces, unseen }
 }
 
 /** What the seated member is given: the context its profile asks for, and nothing else. */
@@ -613,13 +625,13 @@ async function briefOf(
   cwd: string,
   realPath: string | undefined,
   state: CouncilSession,
-  preview: string | undefined,
+  preview: Shown | undefined,
   ctx: Context,
 ): Promise<Brief> {
   const ruleReasons = [...new Set(classification.findings.map(finding => finding.reason))]
   const shown = callText(call, ctx.patterns)
   const latestPrompt = state.latestPrompt
-  const withPreview = preview !== undefined ? { preview } : {}
+  const withPreview = preview !== undefined ? { preview: preview.text, ...(preview.omitted !== undefined && { previewOmitted: preview.omitted }) } : {}
   // Routing seats the diff reviewer on file tools only, which always have a diff.
   const file = seat.member === 'gandalf' || seat.profile === 'git' ? undefined : await fileDiffOf($, call, cwd, realPath, ctx)
   if (seat.member === 'legolas' && file !== undefined) {
@@ -635,16 +647,18 @@ async function briefOf(
   if (seat.member === 'aragorn') {
     const found = sqlOf(classification)
     const inline = found.inline.map(piece => ({ label: piece.label, text: redact(piece.text, ctx.patterns) }))
-    const sql = [...inline, ...(await sqlFilesOf($, found.files, cwd, ctx))]
+    const read = await sqlFilesOf($, found.files, cwd, ctx)
+    const sql = [...inline, ...read.pieces]
+    const unseenSqlFiles = read.unseen + found.pastCap
     const production = productionHits([shown, ...sql.map(piece => piece.text)].join('\n'), ctx.loaded.compiled.production)
     return {
       member: 'aragorn',
       profile: 'database',
-      context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, sql, production, ...(file !== undefined && { diff: file.diff }) },
+      context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, sql, production, ...(unseenSqlFiles > 0 && { unseenSqlFiles }), ...(file !== undefined && { diff: file.diff }) },
     }
   }
-  const scripts = await scriptsOf($, classification, cwd, state.written, ctx)
-  return { member: 'gandalf', context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, scripts, ...withPreview } }
+  const { scripts, unseen } = await scriptsOf($, classification, cwd, state.written, ctx)
+  return { member: 'gandalf', context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, scripts, ...(unseen > 0 && { unseenScripts: unseen }), ...withPreview } }
 }
 
 /**
@@ -712,12 +726,14 @@ async function currentBranchOf($: EngineInterface, dir: string): Promise<string 
  * redacted, with the range that was read (the table's fallback range when the
  * first can't be read). Undefined when git can't say.
  */
-async function rangeDiffOf($: EngineInterface, step: Extract<Inspection, { kind: 'git' }>, ctx: CallContext): Promise<{ label: string; diff: string } | undefined> {
+async function rangeDiffOf($: EngineInterface, step: Extract<Inspection, { kind: 'git' }>, ctx: CallContext): Promise<{ label: string; diff: string; omitted?: Omitted } | undefined> {
   try {
     const { label, run } = await runGitInspection($, step, ctx)
     if (run.exitCode !== 0) return undefined
-    const diff = run.stdout.slice(0, LEGOLAS_LIMITS.diffChars * 4).trimEnd()
-    return { label, diff: redact(truncate(diff === '' ? '(no changes)' : diff, settings.diffLines, LEGOLAS_LIMITS.diffChars), ctx.patterns) }
+    // Redacted before it is cut, so a cut never splits a secret.
+    const diff = redact(run.stdout, ctx.patterns).trimEnd()
+    const { text: shown, omitted } = cut(diff === '' ? '(no changes)' : diff, settings.diffLines, LEGOLAS_LIMITS.diffChars)
+    return { label, diff: shown, ...(omitted !== undefined && { omitted }) }
   } catch {
     return undefined
   }
@@ -1551,7 +1567,7 @@ export const register: Register = (on, options) => {
     let decision: Decision | null = null
     let isCached = false
     let isShadowed = false
-    let preview: string | undefined
+    let preview: Shown | undefined
     let councilRecord: AuditRecord['council']
     let reviewMs: number | undefined
     let ruleAdded: string | undefined
@@ -1642,7 +1658,7 @@ export const register: Register = (on, options) => {
           ruleReason: decided?.reason ?? '',
           why,
           opinions,
-          ...(preview !== undefined && { preview }),
+          ...(preview !== undefined && { preview: preview.text }),
           ...(secrets.length > 0 && { secrets: secrets.map(finding => ({ label: finding.label, snippet: finding.snippet })) }),
           canAllowlist: secrets.length === 1 && ctx.writeDir !== undefined,
         },
@@ -1851,7 +1867,7 @@ export const register: Register = (on, options) => {
                   who,
                   brief: {
                     member: 'legolas',
-                    context: { tool: call.tool, path: read.label, range: { kind: seat.range, call: callText(call, ctx.patterns) }, diff: { diff: read.diff, isNew: false }, ruleReasons, latestPrompt: state.latestPrompt },
+                    context: { tool: call.tool, path: read.label, range: { kind: seat.range, call: callText(call, ctx.patterns) }, diff: { diff: read.diff, ...(read.omitted !== undefined && { omitted: read.omitted }), isNew: false }, ruleReasons, latestPrompt: state.latestPrompt },
                   },
                 },
           )
@@ -1906,7 +1922,9 @@ export const register: Register = (on, options) => {
       isShadowed = shadow
       const isVerdict = combined.reviewed > 0 && !combined.isFailureOnly
       verdictText = isVerdict ? combined.verdict : 'failed'
-      isCouncilApproved = isVerdict && combined.verdict === 'approve'
+      // An approve of a call whose command a member saw only in part is no approve (see `isCommandCut`): it goes to the person, as no verdict does.
+      const isCommandUnseen = sittings.some(sitting => sitting.brief !== undefined && isCommandCut(sitting.brief))
+      isCouncilApproved = isVerdict && combined.verdict === 'approve' && !isCommandUnseen
       const debateVerdict = isVerdict ? combined.verdict : 'failed'
       await update($, session, value => closeDebate(sessionOf(value), debateId, debateVerdict)).catch(() => undefined)
       // The audit keeps no check output: the summary leaves it out.
@@ -1933,6 +1951,10 @@ export const register: Register = (on, options) => {
 
       if (combined.reviewed === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', combined.opinions)
       if (combined.isFailureOnly) return shadow ? passInShadow() : askUser('escalate.councilFailed', combined.opinions)
+      if (combined.verdict === 'approve' && isCommandUnseen) {
+        reasonText = text('escalate.commandCut', {}, 'plain')
+        return shadow ? passInShadow() : askUser('escalate.commandCut', combined.opinions)
+      }
       if (combined.verdict === 'approve') {
         await update($, session, value => {
           const current = sessionOf(value)
@@ -2004,6 +2026,11 @@ export const register: Register = (on, options) => {
 
     verdictText = verdict.verdict.verdict
     reasonText = verdict.verdict.reason
+    if (verdict.verdict.verdict === 'approve' && isCommandCut(brief)) {
+      // The reviewer saw only the ends of the command: its approve does not stand, and is not cached.
+      reasonText = text('escalate.commandCut', {}, 'plain')
+      return shadow ? passInShadow() : askUser('escalate.commandCut', [{ who, verdict: 'approve', reason: verdict.verdict.reason }])
+    }
     if (verdict.verdict.verdict === 'approve') {
       await update($, session, value => {
         const current = sessionOf(value)

@@ -130,7 +130,8 @@ describe('Legolas: the diff', () => {
     const big = Array.from({ length: 1000 }, (_, i) => `line ${i}`).join('\n')
     const diff = textDiff('big', undefined, big, 50)
     expect(diff.split('\n').length).toBeLessThanOrEqual(53)
-    expect(diff).toContain('[... truncated]')
+    // The marker's wording is the mod's; the cut keeps the start and the end (tests below).
+    expect(diff).toMatch(/\[\.\.\. \d+ lines, \d+ characters omitted \.\.\.\]/)
     const before = Array.from({ length: 2000 }, (_, i) => `a${i}`)
     const after = Array.from({ length: 2000 }, (_, i) => `b${i}`)
     const ops = lineOps(before, after)

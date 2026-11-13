@@ -106,7 +106,7 @@ Each reviewer has a short checklist of its own and sees only what that checklist
 | Reviewer | Takes | Sees | Checks |
 | :- | :- | :- | :- |
 | Destructive operations (Gandalf, `gandalf`) | deletes, moves, overwrites, scripts, infrastructure, anything no rule names | the call, the preview, scripts Claude wrote this session | reversibility, width, reach, backups, intent |
-| Diffs (Legolas, `legolas`) | Write, Edit, NotebookEdit | a diff built from the call against the file as it stands (cut to the diff line limit), the file's git status | matches the request, scope creep, weakened tests, disabled checks, dependency/CI/config changes, obvious breakage. No style review. |
+| Diffs (Legolas, `legolas`) | Write, Edit, NotebookEdit | a diff built from the call against the file as it stands (cut to the diff line limit, keeping both ends), the file's git status | matches the request, scope creep, weakened tests, disabled checks, dependency/CI/config changes, obvious breakage. No style review. |
 | Git (Aragorn, `aragorn`, profile `git`) | push, merge, rebase, reset, tag, amend and other history changes | the command, the branch, remote and commits it would send or bring in, recent history with remote branches marked, your protected branches | protected target, force, rewriting pushed history, unrelated commits |
 | Database (Aragorn, `aragorn`, profile `database`) | SQL clients, migrations, `.sql` files | the command, SQL from `-c`/`-e`/heredocs, `.sql` files it names inside the project, or a SQL file's diff; which production patterns match | rollback path, destructive DDL, UPDATE/DELETE without WHERE, production-looking target, transactions, long locks |
 
@@ -115,6 +115,31 @@ reviewer is switched off, when a compound command's parts name different reviewe
 would judge only its own part), or when a rule names the diff reviewer for something with no file.
 If Gandalf is off too, the call comes to you. `/council test "<command>"` shows who would review and
 why.
+
+### Long input
+
+A reviewer reads a limited amount of each part of a call (the command, the preview, a script, SQL, a
+diff, your latest message). Text over the limit is cut in the middle: a reviewer sees the start and
+the end, with one line between them saying how many lines and characters were left out, and a note
+from the council, outside the quoted material, repeats how much. Its instructions say that what was
+left out has not been seen and is not to be assumed safe: it approves only when what it can see and
+the nature of the call make the rest low-risk, and otherwise asks for the change in smaller pieces
+(a revise). A line that looks like that marker, in a command or a file, is only text: the note is
+what counts.
+
+- **A command too long to read is never approved by a model alone.** When the command of a shell
+  call is longer than its reviewer reads (200 lines or 12,000 characters, and 40 lines or 4,000
+  characters for the push or merge a diff reviewer quotes), a reviewer's approve does not let it
+  run: the call comes to you ("The command was too long to review in full"), as a call with no
+  verdict does, or is refused where nobody can be asked. A revise or a block stands as it is, and
+  the approve is not remembered. This is about the command text; a long file or diff is not held
+  back, and its reviewer is told.
+- **Secrets are redacted before anything is cut**, so a cut cannot leave half a secret that no
+  longer looks like one.
+- **Context that could not be shown is said so.** A `.sql` file the call names that is outside the
+  project, missing or unreadable, and a script the call runs that Claude did not write through a
+  file tool this session (or that could not be read), are named in one line of the prompt, so a
+  reviewer does not take their absence for harmlessness.
 
 ## The full council
 
@@ -132,6 +157,7 @@ why.
   - Blocked only for want of verdicts (nobody actually objected, every check passed): the call comes to you, as a single reviewer's failure does.
   - Any real objection or failed check: Claude gets the refusal.
 - **Independent:** reviewers never see each other's verdicts.
+- **A command too long for a seat:** when every reviewer approves but one of them saw only part of the command, the call comes to you (see [Long input](#long-input)). An objection from any reviewer stands as before.
 
 **Project checks** (Gimli, `gimli`) run alongside: your tests, lint and typecheck, from
 `gimli.commands` in `rules.json`:
@@ -551,7 +577,10 @@ operation. A push keys on its remote and branch, and SQL on its database.
 ## Escalation
 
 When a call comes to you, the question shows the call (with secrets redacted), why it was gated,
-the read-only preview when there is one, and each reviewer's verdict. You can:
+the read-only preview when there is one, and each reviewer's verdict. A long call or preview is
+shown by its start and its end, with a line saying how much is not shown. Every line of the call
+and the preview starts with a gutter (`  | `) and has its control characters removed, so text in a
+command cannot pass for a line of the question, such as a reviewer's verdict or a heading. You can:
 
 - **Allow once** (themed: "Need: allow once"): the call runs, and still meets Claude Code's normal permission prompt, which then carries the line "Council: you allowed this once".
 - **Keep blocked** (themed: "Pass: keep blocked"): it is refused.
@@ -618,7 +647,7 @@ file with no lock between them, so their lines can interleave or one can overwri
 
 ## Expected token cost
 
-A review sends roughly 1,000–4,000 input tokens (checklist, the call or diff cut to its line limit,
+A review sends roughly 1,000–4,000 input tokens (checklist, the call or diff cut to its limit, both ends kept,
 the preview, your latest prompt) and receives roughly 100–300 output tokens, plus thinking on
 Sonnet, Opus and Fable at low effort. In a live check, small reviews took about 1,000 tokens each:
 a one-line file write (diffs, Sonnet) in 1.6 s, a `git tag` (git, Opus) in 2.8 s and a `psql -c`
@@ -651,7 +680,7 @@ substitutions in an unquoted heredoc body. The gaps that remain:
 - **Alternating verbs on one target are separate operations.** `rm build`, `trash build`, `find build -delete` and a script that deletes it each get their own rounds and their own failed attempts, since the key starts with the verb. Three refusals of `rm` do not lock out the fourth try with `trash`; the per-kind counter catches only retries of the same verb.
 - **A `.sql` file's content isn't read by the block rules.** The database reviewer reads a `.sql` file a command names inside the project (`psql -h prod-db -f drop.sql`), but the rules classify the command without opening any file, so a destructive file run against production is reviewed, not blocked. Put a project rule on the command if a file must never run against a database.
 - **POSIX only:** no Windows paths or PowerShell parsing. Windows is unsupported ([docs/INSTALL.md](../../docs/INSTALL.md)).
-- **Long commands aren't parsed.** Commands longer than 20,000 characters, or nested more than four levels deep, go to review.
+- **Long commands aren't parsed.** Commands longer than 20,000 characters, or nested more than four levels deep, go to review; and a command longer than its reviewer reads is never approved by a model alone (see [Long input](#long-input)).
 
 ## What it does not protect against
 

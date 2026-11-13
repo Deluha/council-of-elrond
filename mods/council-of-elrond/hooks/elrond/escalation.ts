@@ -1,4 +1,4 @@
-import { truncate } from '../members/shared.js'
+import { cut } from '../members/shared.js'
 import { redact } from '../redact.js'
 import { text } from '../strings.js'
 import type { Mode, StringKey } from '../strings.js'
@@ -40,6 +40,26 @@ const MAX_QUESTION_CHARS = 2_500
 
 const PREVIEW_LINES = 15
 
+// What a terminal can be made to act on or to hide: C0 and C1 controls, and the Unicode line and paragraph separators.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g
+
+/** One line of the dialog's own, from text the call or a reviewer supplied: no control character, so it cannot start another line. */
+const oneLine = (value: string): string => value.replace(CONTROL, ' ').trim()
+
+/**
+ * Call-supplied text as the dialog shows it: cut to its start and its end
+ * within the limits, every line after the gutter (control characters stripped),
+ * and the cut marked by the dialog's own line, which has no gutter.
+ */
+function excerptOf(raw: string, maxLines: number, maxChars: number, mode: Mode): string {
+  const gutter = text('ask.gutter', {}, mode)
+  const guttered = (part: string): string[] => part.split('\n').map(line => `${gutter}${line.replace(CONTROL, ' ')}`)
+  const shown = cut(raw, maxLines, maxChars)
+  if (shown.omitted === undefined) return guttered(shown.text).join('\n')
+  const marker = text('ask.omitted', { lines: shown.omitted.lines, chars: shown.omitted.chars }, mode)
+  return [...guttered(shown.head), marker, ...(shown.tail === '' ? [] : guttered(shown.tail))].join('\n')
+}
+
 /** The dialog's labels; a secrets question adds the allowlist. */
 export const optionsOf = (mode: Mode = 'plain', withAllowlist = false): string[] => [
   text('ask.allowOnce', {}, mode),
@@ -52,18 +72,18 @@ export function questionText(question: Question, mode: Mode = 'plain'): string {
   const lines = [
     text('ask.title', {}, mode),
     text(question.why, {}, mode),
-    text('ask.call', { call: truncate(redact(question.call), 12, 600) }, mode),
+    text('ask.call', { call: excerptOf(redact(question.call), 12, 600, mode) }, mode),
     ...(question.ruleReason !== '' ? [text('ask.rule', { reason: question.ruleReason }, mode)] : []),
     ...(question.secrets ?? []).map(secret =>
-      text('ask.secret', { label: secret.label, snippet: redact(secret.snippet) }, mode),
+      text('ask.secret', { label: oneLine(secret.label), snippet: oneLine(redact(secret.snippet)) }, mode),
     ),
     ...question.opinions.map(opinion =>
       'problem' in opinion
-        ? text('ask.failed', { who: text(opinion.who, {}, mode), problem: opinion.problem }, mode)
-        : text('ask.verdict', { who: text(opinion.who, {}, mode), verdict: opinion.verdict, reason: redact(opinion.reason) }, mode),
+        ? text('ask.failed', { who: text(opinion.who, {}, mode), problem: oneLine(opinion.problem) }, mode)
+        : text('ask.verdict', { who: text(opinion.who, {}, mode), verdict: oneLine(opinion.verdict), reason: oneLine(redact(opinion.reason)) }, mode),
     ),
     ...(question.preview !== undefined
-      ? [text('ask.preview', { preview: truncate(redact(question.preview), PREVIEW_LINES, 900) }, mode)]
+      ? [text('ask.preview', { preview: excerptOf(redact(question.preview), PREVIEW_LINES, 900, mode) }, mode)]
       : []),
     text(question.canAllowlist === true ? 'ask.closeSecret' : 'ask.close', {}, mode),
   ]
