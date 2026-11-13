@@ -3,8 +3,8 @@ import type { Cut } from './shared.js'
 import { FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
 import type { Call, Classification } from '../rules/classify.js'
 import type { ShellPart } from '../rules/shell.js'
-import { PUSH_OPTIONS_WITH_ARG } from '../rules/checks.js'
 import { relativeTo, resolve } from '../rules/paths.js'
+import { parsePush } from '../rules/push.js'
 
 /**
  * Galadriel, the mirror: a read-only preview of what a gated call would
@@ -28,16 +28,23 @@ export type Inspection =
       orElse?: { label: string; argv: readonly string[] }
       /** The folder the call's own `cd` leads to inside the root; absent, git runs where the session's rules scope says. */
       cwd?: string
+      /** This step lists the commits one refspec of a push would send; if it reads nothing, the preview says so. */
+      isCommits?: boolean
     }
+  /** A line of the preview no process produces: what the preview could not show. Not counted against the cap. */
+  | { kind: 'note'; label: string }
 
 export type InspectionResult =
   | { kind: 'path'; label: string; state: 'missing' }
   | { kind: 'path'; label: string; state: 'file'; size: number }
   | { kind: 'path'; label: string; state: 'dir'; entries: readonly string[]; total: number }
   | { kind: 'git'; label: string; exitCode: number; stdout: string }
+  | { kind: 'note'; label: string }
   | { kind: 'failed'; label: string }
 
 export const MAX_INSPECTIONS = 3
+/** A push's refspecs that get their own commits and changes; the rest are said to be left out. */
+export const MAX_PUSH_REFSPECS = 3
 export const INSPECTION_TIMEOUT_MS = 5_000
 export const MAX_LISTED = 20
 
@@ -85,29 +92,66 @@ function gitArgs(part: ShellPart, place: GitPlace): { sub: string; rest: readonl
   return sub === undefined ? undefined : { sub, rest: part.coreWords.slice(2) }
 }
 
+/** What one refspec of a push would send, as a git range of its own source. */
+type PushRange = {
+  /** `<remote>/<destination>..<source>`; `@{upstream}..HEAD` for a push that names no refspec. */
+  range: string
+  /** What is pushed: the range's end. */
+  source: string
+  /** The remote's default branch (`<remote>/HEAD`), for a branch the remote doesn't have yet; only a named remote has one. */
+  fallback?: string
+}
+
+type PushPlan = {
+  remote?: string
+  ranges: PushRange[]
+  /** Refspecs, among those looked at, whose commits cannot be named (a source or destination that is not a safe ref, or no remote to compare with). */
+  unseen: number
+  /** Refspecs past MAX_PUSH_REFSPECS, which are not looked at. */
+  past: number
+  /** How many refspecs the push names. */
+  total: number
+}
+
+/** The line said, trusted, when what some refspecs would send could not be shown. */
+export const unseenPushNote = (count: number): string =>
+  `The commits ${count === 1 ? 'one refspec' : `${count} refspecs`} of this push would send could not be shown, so what ${count === 1 ? 'it sends is' : 'they send is'} unknown.`
+
+const pastPushNote = (total: number): string =>
+  `This push names ${total} refspecs and commits are shown for the first ${MAX_PUSH_REFSPECS} only, so what the others would send is unknown.`
+
+/** The notes a push plan calls for, one line each. */
+const pushNotes = (plan: PushPlan): string[] => [
+  ...(plan.unseen > 0 ? [unseenPushNote(plan.unseen)] : []),
+  ...(plan.past > 0 ? [pastPushNote(plan.total)] : []),
+]
+
 /**
- * The remote a push names, and the commits it would send as a git range.
- * `fallback` is the remote's default branch (`<remote>/HEAD`), for a branch
- * the remote doesn't have yet; only a named remote has one.
+ * What a push would send, per refspec: its own source against the remote's
+ * branch it lands on, never the checked-out branch unless the refspec names
+ * it. A delete sends no commits and has no range. A push that names no
+ * refspec sends the current branch: `@{upstream}..HEAD`.
  */
-function pushRange(rest: readonly string[]): { remote?: string; range: string; fallback?: string } {
-  // An option's value is not a remote or a refspec (`-o ci.skip`).
-  const kept: string[] = []
-  for (let i = 0; i < rest.length; i++) {
-    const word = rest[i] as string
-    if (PUSH_OPTIONS_WITH_ARG.has(word)) i++
-    else kept.push(word)
+function pushPlan(rest: readonly string[]): PushPlan {
+  const push = parsePush(rest)
+  const remote = push.remote !== undefined && SAFE_REF.test(push.remote) ? push.remote : undefined
+  const fallback = remote === undefined ? undefined : `${remote}/HEAD`
+  const base = { ...(remote !== undefined && { remote }) }
+  if (push.refspecs.length === 0) {
+    return { ...base, ranges: [{ range: '@{upstream}..HEAD', source: 'HEAD', ...(fallback !== undefined && { fallback }) }], unseen: 0, past: 0, total: 0 }
   }
-  const words = positionals(kept)
-  const remote = words[0] !== undefined && SAFE_REF.test(words[0]) ? words[0] : undefined
-  const refspec = words[1]
-  const destination =
-    refspec === undefined ? undefined : refspec.slice(refspec.indexOf(':') + 1).replace(/^\+/, '').replace(/^refs\/heads\//, '')
-  const range =
-    remote !== undefined && destination !== undefined && SAFE_REF.test(destination)
-      ? `${remote}/${destination}..HEAD`
-      : '@{upstream}..HEAD'
-  return { ...(remote !== undefined && { remote, fallback: `${remote}/HEAD` }), range }
+  const ranges = new Map<string, PushRange>()
+  let unseen = 0
+  for (const spec of push.refspecs.slice(0, MAX_PUSH_REFSPECS)) {
+    if (push.isDelete || spec.source === '') continue
+    if (remote === undefined || !SAFE_REF.test(spec.source) || !SAFE_REF.test(spec.destination)) {
+      unseen++
+      continue
+    }
+    const range = `${remote}/${spec.destination}..${spec.source}`
+    ranges.set(range, { range, source: spec.source, ...(fallback !== undefined && { fallback }) })
+  }
+  return { ...base, ranges: [...ranges.values()], unseen, past: Math.max(0, push.refspecs.length - MAX_PUSH_REFSPECS), total: push.refspecs.length }
 }
 
 /** The ref a merge names, past the options that take a value. */
@@ -116,23 +160,32 @@ function mergeRef(rest: readonly string[]): string | undefined {
   return positionals(rest.filter((word, i) => !valued.has(rest[i - 1] ?? ''))).find(word => SAFE_REF.test(word))
 }
 
-function pushInspections(rest: readonly string[]): Inspection[] {
-  const { remote, range, fallback } = pushRange(rest)
-  return [
-    { kind: 'git', label: 'current branch', argv: ['git', 'rev-parse', '--abbrev-ref', 'HEAD'] },
-    ...(remote !== undefined ? [{ kind: 'git' as const, label: `remote ${remote}`, argv: ['git', 'remote', 'get-url', remote] }] : []),
-    {
+/** A push's steps, and how many of them are commit lists past the first (they raise the cap by that much). */
+function pushInspections(rest: readonly string[]): { steps: Inspection[]; extra: number } {
+  const plan = pushPlan(rest)
+  const logs = plan.ranges.map(
+    ({ range, source, fallback }): Inspection => ({
       kind: 'git',
       label: `commits it would send (${range})`,
       argv: ['git', 'log', '--oneline', '-n', '30', range, '--'],
+      isCommits: true,
       ...(fallback !== undefined && {
         orElse: {
-          label: `commits it would send (${fallback}..HEAD: the remote has no such branch yet, so against its default branch)`,
-          argv: ['git', 'log', '--oneline', '-n', '30', `${fallback}..HEAD`, '--'],
+          label: `commits it would send (${fallback}..${source}: the remote has no such branch yet, so against its default branch)`,
+          argv: ['git', 'log', '--oneline', '-n', '30', `${fallback}..${source}`, '--'],
         },
       }),
-    },
-  ]
+    }),
+  )
+  return {
+    steps: [
+      { kind: 'git', label: 'current branch', argv: ['git', 'rev-parse', '--abbrev-ref', 'HEAD'] },
+      ...(plan.remote !== undefined ? [{ kind: 'git' as const, label: `remote ${plan.remote}`, argv: ['git', 'remote', 'get-url', plan.remote] }] : []),
+      ...logs,
+      ...pushNotes(plan).map((label): Inspection => ({ kind: 'note', label })),
+    ],
+    extra: Math.max(0, logs.length - 1),
+  }
 }
 
 /** Recent history, decorated so the reviewer sees which commits a remote branch already holds. */
@@ -204,6 +257,8 @@ export function planPreview(call: Call, classification: Classification, context:
   if (!SHELL_TOOLS.has(call.tool)) return []
 
   const plan: Inspection[] = []
+  // A push with several refspecs lists the commits of each: its extra lists raise the cap, as the notes never count.
+  let allowed = MAX_INSPECTIONS
   for (const finding of classification.findings) {
     const part = finding.part
     if (part === undefined) continue
@@ -223,17 +278,21 @@ export function planPreview(call: Call, classification: Classification, context:
       const git = gitArgs(part, { command: commandOf(call), root: context.root, cwd })
       if (git === undefined) continue
       let steps: readonly Inspection[] = []
-      if (git.sub === 'push') steps = pushInspections(git.rest)
-      else if (git.sub === 'merge') steps = mergeInspections(git.rest)
+      if (git.sub === 'push') {
+        const pushed = pushInspections(git.rest)
+        steps = pushed.steps
+        allowed += pushed.extra
+      } else if (git.sub === 'merge') steps = mergeInspections(git.rest)
       else if (['reset', 'rebase'].includes(git.sub) || (git.sub === 'commit' && git.rest.includes('--amend'))) steps = HISTORY
       plan.push(...inFolder(steps, cwd, context.cwd))
     }
-    if (plan.length >= MAX_INSPECTIONS) break
+    if (plan.filter(step => step.kind !== 'note').length >= allowed) break
   }
   // One of each: a compound command can name the same inspection twice.
   // The folder is part of the key: the same command in two folders is two inspections.
-  const unique = new Map(plan.map(step => [step.kind === 'git' ? [step.cwd ?? '', ...step.argv].join('\u0000') : step.path, step]))
-  return [...unique.values()].slice(0, MAX_INSPECTIONS)
+  const unique = new Map(plan.map(step => [step.kind === 'git' ? [step.cwd ?? '', ...step.argv].join('\u0000') : step.kind === 'note' ? `note\u0000${step.label}` : step.path, step]))
+  let kept = 0
+  return [...unique.values()].filter(step => step.kind === 'note' || ++kept <= allowed)
 }
 
 /**
@@ -245,6 +304,10 @@ export function formatPreviewCut(results: readonly InspectionResult[], maxLines:
   const blocks: string[] = []
   for (const result of results) {
     if (result.kind === 'failed') continue
+    if (result.kind === 'note') {
+      blocks.push(result.label)
+      continue
+    }
     if (result.kind === 'path') {
       if (result.state === 'missing') blocks.push(`${result.label}: does not exist`)
       else if (result.state === 'file') blocks.push(`${result.label}: a file, ${result.size} bytes`)
@@ -269,29 +332,55 @@ export function formatPreviewCut(results: readonly InspectionResult[], maxLines:
 export const formatPreview = (results: readonly InspectionResult[], maxLines: number): string | undefined => formatPreviewCut(results, maxLines)?.text
 
 /**
- * For the full council's diff reviewer: the changes a push would send, or a
- * merge would bring in, as one read-only `git diff` from this table. The
- * range comes from the same validated refs the preview uses; a call git
- * would run elsewhere (`-C`, `--git-dir`, a location variable, a folder
- * outside the root) gets none; one that `cd`s inside the root carries that folder.
+ * The note for the commit lists of a plan that read nothing (git failed, timed
+ * out, or the folder is not one it may run in): what that refspec would send
+ * is as unknown as for one whose ref could not be named. `results` line up
+ * with `plan`, one each.
  */
-export function rangeDiffInspection(
+export function unreadCommitsNote(plan: readonly Inspection[], results: readonly InspectionResult[]): string | undefined {
+  const unread = plan.filter((step, index) => {
+    const result = results[index]
+    return step.kind === 'git' && step.isCommits === true && !(result?.kind === 'git' && result.exitCode === 0)
+  }).length
+  return unread > 0 ? unseenPushNote(unread) : undefined
+}
+
+/**
+ * For the full council's diff reviewer: the changes a push would send, or a
+ * merge would bring in, as read-only `git diff`s from this table: one per
+ * refspec of a push (at most MAX_PUSH_REFSPECS), each from its own source.
+ * The ranges come from the same validated refs the preview uses; a call git
+ * would run elsewhere (`-C`, `--git-dir`, a location variable, a folder
+ * outside the root) gets none (undefined); one that `cd`s inside the root
+ * carries that folder. `notes` say, trusted, which refspecs have no diff.
+ */
+export function rangeDiffInspections(
   kind: 'push' | 'merge',
   part: ShellPart,
   call: Call,
   context: PlanContext,
   partCwd: string = context.cwd,
-): Inspection | undefined {
+): { inspections: Inspection[]; notes: string[] } | undefined {
   const git = gitArgs(part, { command: commandOf(call), root: context.root, cwd: partCwd })
   if (git === undefined) return undefined
-  const pushed = kind === 'push' ? pushRange(git.rest) : undefined
-  const range = pushed !== undefined ? pushed.range : (() => {
-    const ref = mergeRef(git.rest)
-    return ref === undefined ? undefined : `HEAD...${ref}`
-  })()
-  if (range === undefined) return undefined
   const diff = (against: string): string[] => ['git', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', against, '--']
-  // Three dots: the changes since the branch point, which is what a new branch adds to the remote.
-  const orElse = pushed?.fallback === undefined ? undefined : { label: `${pushed.fallback}...HEAD`, argv: diff(`${pushed.fallback}...HEAD`) }
-  return { kind: 'git', label: range, argv: diff(range), ...(orElse !== undefined && { orElse }), ...(partCwd !== context.cwd && { cwd: partCwd }) }
+  const place = partCwd !== context.cwd ? { cwd: partCwd } : {}
+  if (kind === 'merge') {
+    const ref = mergeRef(git.rest)
+    return ref === undefined ? undefined : { inspections: [{ kind: 'git', label: `HEAD...${ref}`, argv: diff(`HEAD...${ref}`), ...place }], notes: [] }
+  }
+  const plan = pushPlan(git.rest)
+  return {
+    inspections: plan.ranges.map(
+      ({ range, source, fallback }): Inspection => ({
+        kind: 'git',
+        label: range,
+        argv: diff(range),
+        // Three dots: the changes since the branch point, which is what a new branch adds to the remote.
+        ...(fallback !== undefined && { orElse: { label: `${fallback}...${source}`, argv: diff(`${fallback}...${source}`) } }),
+        ...place,
+      }),
+    ),
+    notes: pushNotes(plan),
+  }
 }

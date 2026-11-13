@@ -197,6 +197,8 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | A project check fails, times out or can't start | A block, with its last 20 lines (redacted) for Claude; none of its output in the audit log. |
 | A project check ignores being ended | The council stops waiting at its timeout and calls `return()` on the stream, which kills the child (verified live). |
 | The current branch can't be read for a `git merge` | The merge counts as one into a protected branch (full council). |
+| The current branch can't be read for a force push of it (`git push -f`, `-f origin HEAD`, `origin +HEAD`: git fails or times out, a detached HEAD, git pointed elsewhere, a folder outside the project or past the third) | The push is the ask tier, rule `force-push-unknown-branch`: the user is asked, or the call is refused where nobody can be asked. Never allowed and never hangs: the lookup has the previews' 5 s timeout and their git protections (§15.17). |
+| A range a push would send can't be named (a source or destination that is no plain ref name, no remote that is a plain name) or can't be read (git fails, times out), or the push names more than three refspecs | That refspec has no commit list and no diff. The preview says so, and every reviewer's prompt carries a trusted `Note:` line outside the data blocks, so the checked-out branch's commits are never read as the push's (§15.18). A diff reviewer with no readable range sits out (`council.noRange`). |
 | The range a push or merge would change can't be read (a bad ref; a new branch with no remote named, or a remote with no `<remote>/HEAD`) | For a push that names a remote, the table's fallback against `<remote>/HEAD` is tried once (§13.1). If that can't be read either, the diff reviewer sits out of that council; the others decide. |
 | Esc during a review or a council | The model requests abort and the check processes are killed with the dispatch (and `convene` ends its own checks on the dispatch's signal too). The mod then refuses plainly, whatever the partial answers were (§10.9): no dialog opens on the abandoned dispatch, no round and no failed attempt is counted, no tokens or verdict counts are added, the debate is closed `aborted`, and the call is audited as `refused` with verdict `aborted` and no decision. |
 | A check outlives a council that throws | Not any more: `convene` ends its checks in a `finally`, so a throw (a `$` call rejecting between members) ends them at once instead of at their own timeouts. The call is then refused, as any throw before the call runs (§13.4 b). |
@@ -263,7 +265,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 3. **Who sits** (`councilSeats`). Every enabled model member with something of this call to review:
    - Gandalf always.
    - Aragorn once per profile the call's review parts ask for (both, for `git push && psql …`), so neither prompt carries the other's baggage. A big operation that is neither git nor database (a project's `kubectl apply`) gets no Aragorn.
-   - Legolas for a file tool's diff, or for a push or merge: the changes it would send (`<remote>/<branch>..HEAD`, or `@{upstream}..HEAD`) or bring in (`HEAD...<ref>`), read by one `git diff --no-color --no-ext-diff --no-textconv <range> --` from Galadriel's table (refs validated as before). It is cut to the diff limit and redacted, and only runs while the preview is on. A range git can't read (a branch the remote doesn't have yet) seats nobody: Legolas sits out.
+   - Legolas for a file tool's diff, or for a push or merge: the changes it would send (per refspec, `<remote>/<destination>..<source>`, or `@{upstream}..HEAD` for a push that names none; §15.18) or bring in (`HEAD...<ref>`), read by `git diff --no-color --no-ext-diff --no-textconv <range> --` from Galadriel's table, one per range (refs validated as before). It is cut to the diff limit and redacted, and only runs while the preview is on. A range git can't read (a branch the remote doesn't have yet) seats nobody: Legolas sits out.
    - Legolas's system prompt now names both kinds of change, and the prompt says which it is.
    - Each seat gets its own brief from the shared `briefOf`, and every seat runs on the `council` model slot.
    - A new branch's push (a range git can't read) falls back to the remote's default branch: §13.1.
@@ -1215,3 +1217,95 @@ decided; the live list of what still passes is the README's "Known gaps in shell
     passwords with spaces, shorter values, `curl -u user:password`, `--password` for the known
     database clients, and the `Authorization: Token`, `X-Api-Key` and `X-Auth-Token` headers are
     covered, and text past the scan limit has its end scanned.
+17. **A force push of the current branch meets the protected-branch block** (a tightening).
+    `forcePushProtected` (`rules/checks.ts`) only read refspecs that name a branch, so a force push
+    that names none (`git push --force`, `-f`, `-f origin`) or only `HEAD` (`-f origin HEAD`,
+    `origin +HEAD`), which overwrites whatever branch is checked out, was only a review even with
+    `main` checked out. The check context gains an optional `currentBranch`
+    (`CheckContext`, so `ClassifyContext` too); `forcesCurrentBranch(part)` is the one test for such a
+    push (no refspec and a force flag, or a refspec landing on `HEAD` or `@` with a force flag or a
+    `+`; `--all`, `--mirror` and `--prune` stay `forcePushProtected`'s whole). With a force of the
+    current branch:
+    - the branch is a protected one (`protectedBranches`, globs included): the block rule
+      `force-push-protected-branch` fires;
+    - the branch is unknown (not supplied, empty, or `HEAD`, a detached checkout): the new shipped ask
+      rule `force-push-unknown-branch` (check `force-push-unknown-branch`, in `CHECKS`) fires. Ask,
+      not block, as the branch may be a feature branch; a project rule can still decide a call, but
+      cannot lower the block, and `disableRules` can switch the ask rule off like any shipped ask rule;
+    - the branch is known and not protected: unchanged (review).
+    A destination-only delete, a refspec naming a protected branch (`+HEAD:refs/heads/main`), `--all`
+    and `--mirror` keep their handling. `git push.default` and other config are not read.
+    - **Who reads the branch.** `register.ts` (`pushBranchOf`), before the call is classified, and
+      only for a call with a part `forcesCurrentBranch` is true for (`forcePushPlaces` in
+      `rules/classify.ts`, a walk over the parts with each part's folder after any `cd`, the same
+      `cwdAfter` the classifier uses). Any other call starts no process. Decided: this is narrower
+      than "any call with a `git push` part", so an ordinary push, which cannot change the outcome,
+      pays no extra git process and no existing process count moved. The read is `git rev-parse
+      --abbrev-ref HEAD` through `currentBranchOf`: `GIT_ENV` (no locks or prompts, `core.fsmonitor` and
+      `log.showSignature` off) and the 5 s inspection timeout. The session's own folder is used as
+      it is; a folder a `cd` leads to is resolved and must lie inside the real root (`realDirInside`,
+      the check `gitDirOf` makes).
+    - **Unknown, never allow.** A part git would run elsewhere (`runsElsewhere`: `-C`, `--git-dir`,
+      a location variable, a folder outside the root or one `cd` cannot name), a folder that resolves
+      outside the root, a git failure, a timeout, empty output, a detached `HEAD`, or pushes in more
+      than three distinct folders, leave the branch unknown: the call asks.
+    - **Pushes in several folders.** `currentBranch` is one value, so when one call forces the current
+      branch in folders on different branches, a branch the root's protected branches match is the
+      answer (the block then covers each of them: the safer side), else unknown (ask).
+    - `/council test` runs nothing, so it reads no branch: such a push shows as asked about, as a
+      merge is assumed to land on a protected branch.
+    - `--force-if-includes` counts as a force flag. It only modifies `--force-with-lease`, so this goes
+      one step past git; a tightening, and the shared parser (item 19) takes any `--force-...` option.
+    Tests: `rules.test.ts` (the block, review and ask matrix with the branch supplied, unknown,
+    detached and empty; `forcePushPlaces`), `pipeline.test.ts` (through `register`: block, review,
+    git failing, timing out, detached, empty, allow once, nobody to ask, no lookup for another call,
+    a `cd`, git pointed elsewhere, two folders, more than three folders). Mutations: ignoring
+    `currentBranch` in the check fails the block tests; treating an unknown branch as review fails
+    the ask tests.
+18. **A push's preview and range diff show what is pushed** (a tightening). Galadriel read the first
+    refspec's destination only and always took `HEAD` as the source, so `git push origin
+    other:main`, `git push origin other` and `git push origin a b` showed the checked-out branch's
+    commits as what would be sent. Every refspec is now read (`pushPlan` in `members/galadriel.ts`),
+    at most `MAX_PUSH_REFSPECS` (3): its range is `<remote>/<destination>..<source>` (a bare name is
+    its own source), the log and the council's diff both, each with its own `orElse` against
+    `<remote>/HEAD` for a branch the remote lacks (`<remote>/HEAD..<source>`, and three dots for the
+    diff). A push that names no refspec is the current branch, `@{upstream}..HEAD`, as before.
+    - **Nothing is shown for what cannot be named.** A source or destination that is not a safe ref
+      (`SAFE_REF`: a space, `..`, a wildcard, a leading `-`), or any named refspec when the remote is
+      not a plain name (a URL), has no range; a delete (`:old`, `--delete`, `-d`) sends no commits and
+      has none, and no note. A range git cannot read (also after the fallback) counts as unseen.
+    - **Said, trusted.** The count of refspecs with no range and the number past the cap become
+      `note` steps of the plan (not counted against the cap; shown in the preview, so the person sees
+      them), and a commit list that read nothing adds one more line (`unreadCommitsNote`). Every
+      reviewer's prompt then carries each as a `Note:` line after its preview, outside any data block
+      (`noteLines` in `members/shared.ts`, the same place `Cut notice:` and the unseen-script and SQL
+      notes stand), in the general, git and diff reviewer's contexts (`notes`). The diff reviewer
+      gets its own note for a range of the council's diff that could not be read; with none readable it
+      sits out as before. Decided: a push with no readable range shows no commit list and no
+      checked-out branch's commits in its place.
+    - **Several ranges, one cap.** A push lists up to three commit lists beside the branch and the
+      remote, so the plan's cap (3, DEVELOPMENT.md) rises by one per extra list (at most 5 for a
+      push); every other kind of preview keeps 3. The council's diff of several ranges shares the
+      diff limits (each range gets an equal share, then each sits under `# <range>` in one diff).
+    - **Labels.** `commits it would send (<range>)` and the fallback's label name the range actually
+      computed, per refspec, so the text of a push's labels changed (`origin/feature..feature`, where
+      it read `origin/feature..HEAD`).
+    - **Not done (decision for the maintainer).** `--all`, `--mirror` and `--tags` with no refspec
+      still show the current branch's commits (`@{upstream}..HEAD`, labelled as such), though the
+      push sends more than that.
+    `rangeDiffInspection` became `rangeDiffInspections` (a list and the notes). Tests:
+    `galadriel.test.ts` ("what a push shows is what it pushes", and the pipeline tests that follow
+    it), `gitcwd.test.ts` and `council.test.ts` for the changed range text. Mutation: taking `HEAD`
+    as the source again fails the preview and council tests.
+19. **One reading of push arguments** (`parsePush`, `rules/push.ts`). The force-push check, the
+    operation key (`pushTargets`, `elrond/operations.ts`) and the preview (`pushPlan`) each had their
+    own loop over the words after `push`. They now share one: it skips the value of an option in
+    `PUSH_OPTIONS_WITH_ARG` (moved here from `rules/checks.ts`, which §13.7 (k) and (q) name), reads
+    the force, delete and every-ref flags, and returns the remote and each refspec as source and
+    destination (`+` and `refs/heads/` stripped from the destination; an empty source is a delete).
+    `rules/` is the one folder `elrond/` and `members/` both already import, so no new cross-folder
+    import. Operation keys are unchanged: every key `operations.test.ts` pins holds, and the new
+    tests pin more forms. An empty word is dropped for the key and the preview and kept for the
+    force-push check (`keepEmpty`), as each always read it, so no call that was blocked is read
+    differently. Differences that tighten, by design: a `+` after the colon (`a:+main`) is stripped
+    before the protected-branch test; any `--force-` option counts as force (item 17).

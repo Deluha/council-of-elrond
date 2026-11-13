@@ -24,6 +24,7 @@ export type ModelSlot = (typeof MODEL_SLOTS)[number]
 export const CHECKS = [
   'rm-outside-repo',
   'force-push-protected',
+  'force-push-unknown-branch',
   'destructive-sql-production',
   'privileged',
   'redirect-write',

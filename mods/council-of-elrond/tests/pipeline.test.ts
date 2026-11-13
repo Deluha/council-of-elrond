@@ -277,3 +277,175 @@ describe('audit log', () => {
     expect((w.files.get(path) ?? '').length).toBeLessThanOrEqual(16 * 1024)
   })
 })
+
+describe('a force push of the current branch (DESIGN §15)', () => {
+  const SUB = `${ROOT}/sub`
+  /** The git the mod runs for the branch: `rev-parse` answers with `branch`, or fails the way `how` says. */
+  const checkedOut = (w: ReturnType<typeof world>, branch: string, how: 'ok' | 'fails' | 'times-out' = 'ok') => {
+    w.processReply = argv => {
+      if (argv[1] !== 'rev-parse') return { exitCode: 0, stdout: '' }
+      if (how === 'times-out') return 'timeout'
+      return how === 'fails' ? { exitCode: 128, stdout: '' } : { exitCode: 0, stdout: `${branch}\n` }
+    }
+  }
+  const PUSHES = ['git push --force', 'git push -f', 'git push -f origin', 'git push -f origin HEAD', 'git push origin +HEAD']
+
+  test('with a protected branch checked out, every form is blocked by the rules: no model, no question, nothing runs', async ($, on) => {
+    const w = world(on)
+    checkedOut(w, 'main')
+    for (const command of PUSHES) {
+      const deny = expectRefusal(await $.tool.call({ tool: 'Bash', command }))
+      expect(deny, command).toContain('Decided by: the rules (block).')
+      expect(deny, command).toContain('Force push (or delete) of a protected branch.')
+    }
+    expect(w.ran).toEqual([])
+    expect(w.modelRequests).toEqual([])
+    expect(w.asked).toEqual([])
+    const lines = await auditLines(w)
+    expect(lines).toHaveLength(PUSHES.length)
+    for (const line of lines) expect(line).toMatchObject({ tier: 'block', ruleId: 'force-push-protected-branch', outcome: 'refused' })
+  })
+
+  test('the branch is read once per call, where the session works, with the mod\'s git protections', async ($, on) => {
+    const w = world(on)
+    checkedOut(w, 'main')
+    await $.tool.call({ tool: 'Bash', command: 'git push -f origin HEAD' })
+    expect(w.processes).toEqual([['git', 'rev-parse', '--abbrev-ref', 'HEAD']])
+    expect(w.processCwds).toEqual([ROOT])
+    expect(w.processEnvs[0]).toMatchObject({ GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.fsmonitor', GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'log.showSignature', GIT_CONFIG_VALUE_1: 'false', GIT_TERMINAL_PROMPT: '0' })
+  })
+
+  test('with another branch checked out they are reviewed, as before', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    checkedOut(w, 'feature')
+    for (const command of PUSHES) expect(await $.tool.call({ tool: 'Bash', command }), command).toEqual({ result: 'ran' })
+    expect(w.ran).toHaveLength(PUSHES.length)
+    expect(w.asked).toEqual([])
+    expect(w.modelRequests.length).toBeGreaterThan(0)
+    for (const line of await auditLines(w)) expect(line).toMatchObject({ tier: 'review', ruleId: 'git-remote-or-history' })
+  })
+
+  const unknown = async (w: ReturnType<typeof world>, call: Promise<unknown>) => {
+    const deny = expectRefusal(await call)
+    expect(deny).toContain('Decided by: the user (keep blocked).')
+    expect(w.asked).toHaveLength(1)
+    expect(w.asked[0]?.question).toContain('A rule sends this call straight to you.')
+    expect(w.asked[0]?.question).toContain('Force push of the current branch, and the branch it would overwrite could not be determined.')
+    expect(w.ran).toEqual([])
+    expect(w.modelRequests).toEqual([])
+    expect((await auditLines(w))[0]).toMatchObject({ tier: 'ask', ruleId: 'force-push-unknown-branch' })
+  }
+
+  test('git failing: the user is asked, the call is not reviewed and not run', async ($, on) => {
+    const w = world(on)
+    checkedOut(w, 'main', 'fails')
+    await unknown(w, $.tool.call({ tool: 'Bash', command: 'git push --force' }))
+  })
+
+  test('git timing out: the user is asked', async ($, on) => {
+    const w = world(on)
+    checkedOut(w, 'main', 'times-out')
+    await unknown(w, $.tool.call({ tool: 'Bash', command: 'git push -f origin' }))
+  })
+
+  test('a detached HEAD: the user is asked', async ($, on) => {
+    const w = world(on)
+    checkedOut(w, 'HEAD')
+    await unknown(w, $.tool.call({ tool: 'Bash', command: 'git push -f origin HEAD' }))
+  })
+
+  test('no output from git: the user is asked', async ($, on) => {
+    const w = world(on)
+    checkedOut(w, '')
+    await unknown(w, $.tool.call({ tool: 'Bash', command: 'git push origin +HEAD' }))
+  })
+
+  test('allow once on that question runs the call', async ($, on) => {
+    const w = world(on, { answer: ALLOW_ONCE })
+    checkedOut(w, 'main', 'fails')
+    expect(await $.tool.call({ tool: 'Bash', command: 'git push --force' })).toEqual({ result: 'ran' })
+    expect(w.ran).toEqual([{ tool: 'Bash', command: 'git push --force' }])
+  })
+
+  test('where nothing draws, an unknown branch is refused, not run', async ($, on) => {
+    const w = world(on, { surfaces: [] })
+    checkedOut(w, 'main', 'fails')
+    expect(expectRefusal(await $.tool.call({ tool: 'Bash', command: 'git push -f' }))).toContain('nobody can be asked')
+    expect(w.ran).toEqual([])
+  })
+
+  test('a call that is no force push of the current branch starts no branch lookup', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    checkedOut(w, 'main')
+    for (const command of ['ls', 'git status', 'git log -n 3', 'npm test', 'echo "git push -f"', 'git commit -m "git push --force"']) {
+      expect(await $.tool.call({ tool: 'Bash', command }), command).toEqual({ result: 'ran' })
+    }
+    expect(await $.tool.call({ tool: 'Write', file_path: `${ROOT}/notes.txt`, content: 'git push -f' })).toEqual({ result: 'ran' })
+    expect(w.processes.filter(argv => argv[1] === 'rev-parse')).toEqual([])
+    expect(w.processes.filter(argv => argv[1] === 'push')).toEqual([])
+  })
+
+  test('only the push\'s own preview reads the branch when it forces no current branch', async ($, on) => {
+    const count = async (command: string) => {
+      const w = world(on, { replies: [APPROVE] })
+      checkedOut(w, 'feature')
+      await $.tool.call({ tool: 'Bash', command })
+      return w.processes.filter(argv => argv[1] === 'rev-parse').length
+    }
+    // `git push origin feature` and a forced push of a named branch: the preview's read only.
+    expect(await count('git push origin feature')).toBe(1)
+  })
+
+  test('the folder a push runs in: after a cd inside the root, its branch decides', async ($, on) => {
+    const w = world(on)
+    w.dirs.add(SUB)
+    checkedOut(w, 'main')
+    expectRefusal(await $.tool.call({ tool: 'Bash', command: 'cd sub && git push -f' }))
+    expect(w.processCwds).toEqual([SUB])
+  })
+
+  test('a push git would run elsewhere has an unknown branch, and no git runs', async ($, on) => {
+    const w = world(on, { answer: ALLOW_ONCE })
+    checkedOut(w, 'feature')
+    w.dirs.add(`${ROOT}/out`)
+    w.links.set(`${ROOT}/out`, '/elsewhere')
+    for (const command of ['git -C /x push -f', 'GIT_DIR=/x git push -f', 'cd ../other && git push -f', 'cd $WHERE && git push -f origin HEAD', 'cd out && git push -f']) {
+      expect(await $.tool.call({ tool: 'Bash', command }), command).toEqual({ result: 'ran' })
+    }
+    expect(w.processes).toEqual([])
+    expect(w.asked.filter(asked => asked.question.includes('A rule sends this call straight to you.'))).toHaveLength(5)
+    for (const line of await auditLines(w)) expect(line).toMatchObject({ tier: 'ask', ruleId: 'force-push-unknown-branch' })
+  })
+
+  test('two pushes on different branches: the protected one decides; unknown where none is protected', async ($, on) => {
+    const w = world(on)
+    w.dirs.add(SUB)
+    let reads = 0
+    w.processReply = argv => (argv[1] === 'rev-parse' ? { exitCode: 0, stdout: `${reads++ === 0 ? 'feature' : 'main'}\n` } : { exitCode: 0, stdout: '' })
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'git push -f && cd sub && git push -f' }))).toContain('Force push (or delete) of a protected branch.')
+    expect(w.processCwds).toEqual([ROOT, SUB])
+    w.processReply = argv => (argv[1] === 'rev-parse' ? { exitCode: 0, stdout: `${reads++ % 2 === 0 ? 'feature' : 'topic'}\n` } : { exitCode: 0, stdout: '' })
+    const deny = expectRefusal(await $.tool.call({ tool: 'Bash', command: 'git push -f origin && cd sub && git push -f origin' }))
+    expect(deny).toContain('Decided by: the user (keep blocked).')
+    expect((await auditLines(w))[1]).toMatchObject({ tier: 'ask', ruleId: 'force-push-unknown-branch' })
+  })
+
+  test('pushes in more than three folders are not read: unknown', async ($, on) => {
+    const w = world(on)
+    for (const dir of ['a', 'b', 'c', 'd']) w.dirs.add(`${ROOT}/${dir}`)
+    checkedOut(w, 'main')
+    const command = 'cd a && git push -f && cd ../b && git push -f && cd ../c && git push -f && cd ../d && git push -f'
+    expect(expectRefusal(await $.tool.call({ tool: 'Bash', command }))).toContain('Decided by: the user (keep blocked).')
+    expect(w.processes).toEqual([])
+    expect((await auditLines(w))[0]).toMatchObject({ tier: 'ask', ruleId: 'force-push-unknown-branch' })
+  })
+
+  test('a push naming a protected branch is blocked with no branch read at all', async ($, on) => {
+    const w = world(on)
+    checkedOut(w, 'feature')
+    for (const command of ['git push --force origin main', 'git push -f origin HEAD:master', 'git push origin +release/2.0']) {
+      expect(denyOf(await $.tool.call({ tool: 'Bash', command })), command).toContain('(block)')
+    }
+    expect(w.processes).toEqual([])
+  })
+})

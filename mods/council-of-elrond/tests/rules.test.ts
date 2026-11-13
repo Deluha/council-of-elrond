@@ -2,10 +2,11 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { loadConfig } from '../hooks/config/schema.js'
 import type { Tier } from '../hooks/config/types.js'
-import { classify } from '../hooks/rules/classify.js'
+import { classify, forcePushPlaces } from '../hooks/rules/classify.js'
 import type { ClassifyContext } from '../hooks/rules/classify.js'
+import { parsePush } from '../hooks/rules/push.js'
 import { splitShell } from '../hooks/rules/shell.js'
-import { CONTEXT, SHIPPED_COMPILED } from './fixtures.js'
+import { CONTEXT, ROOT, SHIPPED_COMPILED } from './fixtures.js'
 
 const bash = (command: string, context: ClassifyContext = CONTEXT) =>
   classify({ tool: 'Bash', input: { command } }, SHIPPED_COMPILED, context)
@@ -446,6 +447,152 @@ describe('block rules that previously stopped one tier short', () => {
     expect(ruleOf("sh -c -- 'rm -rf /'")).toBe('rm-recursive-outside-repo')
     expect(ruleOf('pkexec rm -rf /')).toBe('rm-recursive-outside-repo')
     expect(ruleOf('pkexec whoami')).toBe('privileged')
+  })
+})
+
+describe('a force push of the current branch (DESIGN §15)', () => {
+  const on = (currentBranch: string | undefined) => (command: string) => bash(command, currentBranch === undefined ? CONTEXT : { ...CONTEXT, currentBranch })
+  // Every form that overwrites the branch checked out where the push runs: no refspec names a branch, or one lands on HEAD.
+  const IMPLICIT = [
+    'git push --force',
+    'git push -f',
+    'git push -f origin',
+    'git push -f origin HEAD',
+    'git push origin +HEAD',
+    'git push --force-with-lease',
+    'git push --force-with-lease=main origin',
+    'git push --force-if-includes origin',
+    'git push -uf origin HEAD',
+    'git push origin HEAD --force',
+    'git push -f origin @',
+    'cd sub && git push -f',
+  ]
+
+  test('with a protected branch checked out, they are blocked', () => {
+    for (const branch of ['main', 'master', 'release/2.0']) {
+      for (const command of IMPLICIT) expect(on(branch)(command).decided?.ruleId, `${branch}: ${command}`).toBe('force-push-protected-branch')
+      expect(on(branch)('git push -f origin').tier).toBe('block')
+    }
+  })
+
+  test('with another branch checked out, they stay review, as before', () => {
+    for (const command of IMPLICIT) {
+      const result = on('feature')(command)
+      expect(result.tier, command).toBe('review')
+      expect(result.decided?.ruleId, command).toBe('git-remote-or-history')
+    }
+  })
+
+  test('with the branch unknown (not supplied, detached, empty), they ask through their own rule', () => {
+    for (const branch of [undefined, 'HEAD', '']) {
+      for (const command of IMPLICIT) {
+        const result = on(branch)(command)
+        expect(result.tier, `${String(branch)}: ${command}`).toBe('ask')
+        expect(result.decided?.ruleId, command).toBe('force-push-unknown-branch')
+        expect(result.decided?.reason).toBe('Force push of the current branch, and the branch it would overwrite could not be determined.')
+      }
+    }
+  })
+
+  test('a push that does not force, or names its branch, is not decided by the current branch', () => {
+    for (const branch of [undefined, 'main', 'feature']) {
+      for (const command of ['git push', 'git push origin', 'git push origin HEAD', 'git push origin feature', 'git push -u origin HEAD', 'git push --tags']) {
+        expect(on(branch)(command).decided?.ruleId, `${String(branch)}: ${command}`).toBe('git-remote-or-history')
+      }
+      // Forced, but onto a branch the command names: the name decides, as always.
+      for (const command of ['git push --force origin feature', 'git push -f origin HEAD:feature', 'git push origin +HEAD:refs/heads/x', 'git push -f origin feature:other']) {
+        expect(on(branch)(command).decided?.ruleId, `${String(branch)}: ${command}`).toBe('git-remote-or-history')
+      }
+      for (const command of ['git push --force origin main', 'git push -f origin HEAD:master', 'git push origin +main', 'git push origin --delete main']) {
+        expect(on(branch)(command).decided?.ruleId, `${String(branch)}: ${command}`).toBe('force-push-protected-branch')
+      }
+    }
+  })
+
+  test('an empty word still holds the remote\'s place: the refspec after it is read as a refspec', () => {
+    for (const branch of [undefined, 'feature', 'main']) {
+      expect(on(branch)("git push -f '' main").decided?.ruleId, String(branch)).toBe('force-push-protected-branch')
+    }
+  })
+
+  test('--all and --mirror keep their own handling', () => {
+    for (const branch of [undefined, 'feature']) {
+      for (const command of ['git push --force --all origin', 'git push --mirror origin']) expect(on(branch)(command).decided?.ruleId, command).toBe('force-push-protected-branch')
+    }
+  })
+
+  test('another part of the call decides a compound as ever', () => {
+    expect(on('main')('ls && git push -f').decided?.ruleId).toBe('force-push-protected-branch')
+    expect(on('feature')('ls && git push -f && sudo ls').decided?.ruleId).toBe('privileged')
+    expect(on('feature')('git push -f origin feature && git push -f').decided?.ruleId).toBe('git-remote-or-history')
+  })
+
+  test('a project allow rule never lowers the block, and a protected branch listed by the project counts', () => {
+    const allowAll = loadConfig(JSON.stringify({ schemaVersion: 1, rules: [{ id: 'allow-everything', tier: 'allow', tools: ['*'], reason: 'Trust me.' }], protectedBranches: ['staging'] }))
+    const tier = (command: string, currentBranch: string) => classify({ tool: 'Bash', input: { command } }, allowAll.compiled, { ...CONTEXT, currentBranch }).tier
+    expect(tier('git push -f', 'main')).toBe('block')
+    expect(tier('git push -f origin HEAD', 'staging')).toBe('block')
+    expect(tier('git push -f', 'feature')).toBe('allow')
+  })
+
+  test('a project rule that disables the ask rule leaves the block in place', () => {
+    const loaded = loadConfig(JSON.stringify({ schemaVersion: 1, disableRules: ['force-push-unknown-branch'] }))
+    expect(loaded.errors).toEqual([])
+    const tier = (currentBranch: string | undefined) => classify({ tool: 'Bash', input: { command: 'git push -f' } }, loaded.compiled, currentBranch === undefined ? CONTEXT : { ...CONTEXT, currentBranch }).tier
+    expect(tier('main')).toBe('block')
+    expect(tier(undefined)).toBe('review')
+  })
+
+  test('forcePushPlaces: only a force push of the current branch, with the folder after any cd', () => {
+    const places = (command: string, tool = 'Bash') => forcePushPlaces({ tool, input: { command } }, CONTEXT).map(place => [place.part.core, place.cwd])
+    expect(places('git push -f')).toEqual([['git push -f', ROOT]])
+    expect(places('cd sub && git push origin +HEAD && cd .. && git push --force-with-lease')).toEqual([
+      ['git push origin +HEAD', `${ROOT}/sub`],
+      ['git push --force-with-lease', ROOT],
+    ])
+    expect(places('git push -f origin HEAD && git push -f origin feature')).toEqual([['git push -f origin HEAD', ROOT]])
+    // Anything that needs no branch starts no lookup.
+    for (const command of ['ls', 'git status', 'git push', 'git push origin feature', 'git push origin HEAD', 'git push -f origin main', 'git push --all -f', 'git push --mirror', 'rm -rf build']) {
+      expect(places(command), command).toEqual([])
+    }
+    expect(places('git push -f', 'Edit')).toEqual([])
+    expect(forcePushPlaces({ tool: 'Write', input: { file_path: '/work/a', content: 'git push -f' } }, CONTEXT)).toEqual([])
+  })
+})
+
+describe('one reading of git push arguments (parsePush)', () => {
+  test('remote, refspecs, and the flags, whatever their order', () => {
+    expect(parsePush(['-f', 'origin', 'main'])).toEqual({ isForce: true, isDelete: false, isEvery: false, remote: 'origin', refspecs: [{ isPlus: false, source: 'main', destination: 'main' }] })
+    expect(parsePush(['--delete', 'origin', 'old'])).toMatchObject({ isDelete: true, remote: 'origin', refspecs: [{ source: 'old', destination: 'old' }] })
+    expect(parsePush(['origin', '+src:refs/heads/dst', ':gone', 'a', '--force-if-includes'])).toEqual({
+      isForce: true,
+      isDelete: false,
+      isEvery: false,
+      remote: 'origin',
+      refspecs: [
+        { isPlus: true, source: 'src', destination: 'dst' },
+        { isPlus: false, source: '', destination: 'gone' },
+        { isPlus: false, source: 'a', destination: 'a' },
+      ],
+    })
+    expect(parsePush([])).toEqual({ isForce: false, isDelete: false, isEvery: false, refspecs: [] })
+    // An empty word: dropped for a key and a preview, kept by the force-push check, where it holds the remote's place.
+    expect(parsePush(['', 'main'])).toMatchObject({ remote: 'main', refspecs: [] })
+    expect(parsePush(['', 'main'], { keepEmpty: true })).toMatchObject({ remote: '', refspecs: [{ source: 'main' }] })
+    expect(parsePush(['--all', 'origin'])).toMatchObject({ isEvery: true })
+    expect(parsePush(['--mirror'])).toMatchObject({ isEvery: true })
+  })
+
+  test("an option's value is not the remote or a refspec", () => {
+    for (const words of [['-o', 'ci.skip', 'origin', 'main'], ['--push-option', 'x', 'origin', 'main'], ['--receive-pack', 'x', 'origin', 'main'], ['origin', 'main', '-o', 'ci.skip']]) {
+      expect(parsePush(words), words.join(' ')).toMatchObject({ remote: 'origin', refspecs: [{ source: 'main' }] })
+    }
+    expect(parsePush(['-o', 'x']).refspecs).toEqual([])
+  })
+
+  test('every force spelling counts', () => {
+    for (const flag of ['--force', '-f', '-uf', '--force-with-lease', '--force-with-lease=main', '--force-if-includes']) expect(parsePush([flag, 'origin']).isForce, flag).toBe(true)
+    for (const flag of ['-u', '--tags', '--no-verify', '--follow-tags']) expect(parsePush([flag, 'origin']).isForce, flag).toBe(false)
   })
 })
 

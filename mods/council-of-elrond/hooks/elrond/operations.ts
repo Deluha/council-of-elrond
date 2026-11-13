@@ -1,9 +1,9 @@
 import { CLIENT_OPTIONS } from '../members/aragorn.js'
 import { redact } from '../redact.js'
-import { PUSH_OPTIONS_WITH_ARG } from '../rules/checks.js'
 import { FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
 import type { Call, Classification } from '../rules/classify.js'
 import { relativeTo, resolve } from '../rules/paths.js'
+import { isCurrentBranchRef, parsePush } from '../rules/push.js'
 import type { ShellPart } from '../rules/shell.js'
 
 /**
@@ -65,19 +65,9 @@ const positionals = (words: readonly string[]): string[] => words.filter(word =>
 
 /** `git push [options] [remote] [refspec...]`: remote plus destination branches. */
 function pushTargets(args: readonly string[]): string[] {
-  const words: string[] = []
-  for (let i = 0; i < args.length; i++) {
-    const word = args[i] ?? ''
-    if (PUSH_OPTIONS_WITH_ARG.has(word)) i++ // `-o ci.skip`: the value is not the remote
-    else if (!word.startsWith('-') && word !== '') words.push(word)
-  }
-  const remote = words[0] ?? '(default remote)'
-  const branches = words.slice(1).map(refspec => {
-    const destination = refspec.includes(':') ? refspec.slice(refspec.indexOf(':') + 1) : refspec
-    const branch = destination.replace(/^\+/, '').replace(/^refs\/heads\//, '')
-    return branch === 'HEAD' || branch === '@' ? '(current branch)' : branch
-  })
-  return [remote, ...(branches.length > 0 ? branches : ['(current branch)'])]
+  const { remote, refspecs } = parsePush(args)
+  const branches = refspecs.map(spec => (isCurrentBranchRef(spec.destination) ? '(current branch)' : spec.destination))
+  return [remote ?? '(default remote)', ...(branches.length > 0 ? branches : ['(current branch)'])]
 }
 
 /**

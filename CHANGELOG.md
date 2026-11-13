@@ -218,6 +218,22 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   capped (three, 40 characters each, control characters removed) before they reach a dialog, a
   refusal or the log.
 - **More secrets are redacted.** A value is treated as a placeholder only when all of it is one (`$NAME`, `${NAME}`, `<your-key>`, `{{ ... }}`, `****`); a literal that merely starts with such a character is redacted and reported. Quoted passwords containing spaces, shorter values, `curl -u user:password`, `--password` for the database clients already known, and `Authorization: Token`, `X-Api-Key` and `X-Auth-Token` headers are now covered. Text longer than the scan limit also has its end scanned.
+- **A force push of the checked-out branch meets the protected-branch block.** A force push that
+  names no branch, or only `HEAD` (`git push --force`, `-f`, `-f origin`, `-f origin HEAD`,
+  `origin +HEAD`), overwrites the current branch, so the mod reads the branch checked out where the
+  push runs (only for such a push, in the folder it runs in, with the same git protections as the
+  previews) and blocks it when it matches your protected branches. When that branch cannot be
+  determined (a detached HEAD, git failing or timing out, git pointed elsewhere, more than three
+  folders), it asks (`force-push-unknown-branch`). On another branch it is reviewed as before.
+  `--force-if-includes` now counts as a force flag. `/council test` does not read the branch, so it
+  shows such a push as asked about.
+- **A push's preview and range diff show what is pushed.** The commits the preview lists and the
+  changes the diff reviewer reads are read per refspec (the first three), from its own source
+  against the remote branch it lands on: `git push origin other:main` shows `origin/main..other`, `git push origin a b` shows both.
+  A delete shows none. A refspec the mod cannot name safely, a range git cannot read, no remote that
+  is a plain name, or more than three refspecs is said in the preview and in a line the reviewers
+  read outside the preview, so they never take the checked-out branch's commits for the push's.
+  The operation key of a push is unchanged.
 
 ### Fixed
 - **The status line is cleared when its surface leaves.** A label set for a phone or VS Code

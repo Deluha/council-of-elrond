@@ -58,11 +58,19 @@ Shipped defaults:
 
 - **Block:**
   - a recursive delete of `/`, your home directory, the project root, or anything outside the project;
-  - a force push or delete of a protected branch;
+  - a force push or delete of a protected branch, including a force push of the branch that is checked
+    out when it is a protected one: `git push --force`, `-f`, `-f origin`, `-f origin HEAD` and
+    `origin +HEAD` name no branch or only `HEAD`, so the mod reads the checked-out branch (in the
+    folder the push runs in, only for such a push) and blocks it when it matches your protected
+    branches. On any other branch they stay in review;
   - DROP or TRUNCATE against a production-looking target;
   - raw disk writes.
 - **Ask:**
   - `sudo`, `doas`, `su`;
+  - a force push of the current branch when the branch it would overwrite cannot be determined
+    (rule `force-push-unknown-branch`): a detached HEAD, git failing or timing out, or git pointed
+    elsewhere (`git -C`, `GIT_DIR=`, a `cd` out of the project). It is asked about, not blocked, as
+    the branch may well be a feature branch;
   - installing, updating, enabling, disabling or removing a Claude Code plugin or marketplace
     (`claude plugin disable|uninstall|remove|rm|update|install|enable`, `claude plugin marketplace
     add|remove|rm|update`; rule `plugin-manage`). `claude plugin test`, `validate`, `list` and `eval`
@@ -150,7 +158,7 @@ what counts.
 - **Who sits:** every enabled reviewer with something of the call to review.
   - The destructive-operations reviewer always sits.
   - The git and database reviewer sits once for each profile the call touches, so `git push && psql …` gets both.
-  - The diff reviewer sits for a file change, and for a push or merge. There it reviews the changes the push would send or the merge would bring in, read by one fixed, read-only `git diff`. When the remote does not have the branch yet, the diff is against the remote's default branch (`<remote>/HEAD`), the changes since the branch point.
+  - The diff reviewer sits for a file change, and for a push or merge. There it reviews the changes the push would send or the merge would bring in, read by fixed, read-only `git diff`s: one for a merge, and for a push one per refspec (the first three), each from the refspec's own source. A refspec whose changes cannot be read is said so in the reviewer's prompt. When the remote does not have the branch yet, the diff is against the remote's default branch (`<remote>/HEAD`), the changes since the branch point.
 - **One model:** every member sits on the council's model (`opus` by default), not its own.
 - **One deadline:** every member runs under one shared deadline from that model (Opus 45 s, or "Review deadline" in `/config`). By default they run in parallel. "Full council one at a time" asks them in turn instead, each getting what is left of the deadline, and stops at the first block.
 - **Strictest wins:** block, then revise, then approve. Every objection is labelled with the reviewer who raised it. A reviewer that errors, times out or answers malformed counts as a block from that reviewer.
@@ -397,7 +405,7 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | `/council shadow on`, `/council shadow off` | Shadow mode for this session, over the `/config` setting. |
 | `/council log [n]` | The last *n* gated calls (default 10) from the audit log. |
 | `/council rules` | Every effective rule with its source (`shipped` or `project`), and the lists. |
-| `/council test "<command>"` | Which tier, rule, reviewer (and profile, and why it fell back to Gandalf if it did) and operation key a shell command would get. For a big operation it shows the full council's seats, model and checks. Runs nothing, so a merge is assumed to land on a protected branch. |
+| `/council test "<command>"` | Which tier, rule, reviewer (and profile, and why it fell back to Gandalf if it did) and operation key a shell command would get. For a big operation it shows the full council's seats, model and checks. Runs nothing, so a merge is assumed to land on a protected branch and a force push of the current branch is asked about (its branch is not read). |
 | `/council model [<member> <model> [--save]]` | Lists each slot's model and where it came from, or switches one for this session (`default` clears the switch). `--save` also writes the `/config` row when the model is one of its picker values. |
 | `/council reload` | Reads `rules.json` again (every repository's, when the session root holds several). |
 | `/council report` | A summary of the audit log, rotated files included (see below). |
@@ -549,7 +557,7 @@ reviewer and to you. The commands come from a table in the mod; the call's targe
 data, and the proposed command never runs.
 
 - **Deletes** (`rm`, `find -delete`): what each target is, and a folder's entries (no process).
-- **`git push`:** the current branch, the remote's URL (redacted) and the commits it would send. When the remote does not have the branch yet, the commits are shown against the remote's default branch (`<remote>/HEAD`).
+- **`git push`:** the current branch, the remote's URL (redacted) and, for each refspec the push names (the first three), the commits it would send: `<remote>/<destination>..<source>` from the refspec's own source, so `git push origin other:main` shows `origin/main..other` and `git push origin a b` shows both, never the checked-out branch's commits unless a refspec names `HEAD`. A push that names no refspec sends the current branch (`@{upstream}..HEAD`). A delete (`:old`, `--delete`) sends no commits and shows none. When the remote does not have the branch yet, the commits are shown against the remote's default branch (`<remote>/HEAD`). What cannot be shown is said, in the preview and in a line the reviewers are given outside the preview: a source or destination that is not a plain ref name, no remote named as a plain name for a refspec to compare against, a range git could not read, or more than three refspecs.
 - **`git merge`:** the current branch and the commits it would bring in.
 - **`git reset`, `git rebase`, `git commit --amend`:** recent commits, marked with the remote branches that point at them, and uncommitted changes.
 - **Write, Edit:** the file's diff stat against `HEAD`, and whether git tracks it.
@@ -689,7 +697,7 @@ substitutions in an unquoted heredoc body. The gaps that remain:
 - **Bypass.** While `/council off` is on, every gated call passes, block-tier calls and the secrets scan included, until `/council on` or the session ends.
 - **Diffs are built from the call, not from git.** The diff reviewer sees the change the call describes against the file as it stands when the hook runs; a file over 4 MiB, or one it can't read, is shown as the call's own text only, and the prompt says so.
 - **The project checks run your project's code.** Claude can edit the tests and scripts they run (file edits go to the diff reviewer, not to you), so a passing check is only as good as the code it runs. They run as you, with your environment.
-- **A push with no range to read.** For a branch the remote doesn't have yet, the range is read against the remote's default branch, which needs `<remote>/HEAD`: `git clone` sets it, `git remote add` does not (`git remote set-head origin -a` sets it). Without it, or for a push that names no remote, the diff reviewer sits out of that council and the preview shows no commits.
+- **A push with no range to read.** For a branch the remote doesn't have yet, the range is read against the remote's default branch, which needs `<remote>/HEAD`: `git clone` sets it, `git remote add` does not (`git remote set-head origin -a` sets it). Without it, or for a push that names no remote, the diff reviewer sits out of that council and the preview shows no commits. The same goes for a refspec the mod cannot name safely (a source or destination with spaces, `..` or a wildcard): its commits are not shown, and the reviewers are told so. A push of `--all`, `--mirror` or `--tags` still shows the current branch's commits, not every ref it sends.
 - **Git pointed elsewhere.** For a push or merge that runs git in another repository (`git -C`, `GIT_DIR=`, a `cd` out of the project), the mod does not read that repository: the preview shows no commits, the diff reviewer sits out of the council, and a merge counts as one into a protected branch.
 - **The database reviewer sees only the SQL it can find**: inline `-c`/`-e` (and `sqlite3`'s `-cmd` and its statement after the database file), heredocs, and `.sql` files named in the command and inside the project. A migration tool's own migration files (`prisma migrate deploy`) are not looked up.
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.

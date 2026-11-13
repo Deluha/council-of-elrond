@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, fenced, label, OMISSION_RULES, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, fenced, label, noteLines, OMISSION_RULES, untrustedRules } from './shared.js'
 import type { Omitted } from './shared.js'
 
 /**
@@ -17,6 +17,8 @@ export type GandalfContext = {
   preview?: string
   /** What the preview's own cut left out, when it was cut before it got here. */
   previewOmitted?: Omitted
+  /** What the preview could not show (a push's commits), in the mod's own words. */
+  notes?: readonly string[]
   /** The user's latest prompt, redacted already. */
   latestPrompt: string
   /** Scripts the call runs that were written in this session, redacted whole (the prompt cuts them). */
@@ -65,6 +67,7 @@ export function gandalfPrompt(context: GandalfContext, nonce: string): string {
     context.preview !== undefined
       ? `What it would touch (read-only preview):\n${fenced('preview', context.preview, nonce, { limits: { lines: limits.previewLines, chars: limits.previewChars }, ...(context.previewOmitted !== undefined && { earlier: context.previewOmitted }) })}`
       : 'No preview is available.',
+    ...noteLines(context.notes),
     ...context.scripts.map(
       script =>
         `Script it runs, written in this session (${label(script.path)}):\n${fenced('script', script.content, nonce, { limits: { lines: limits.scriptLines, chars: limits.scriptChars } })}`,

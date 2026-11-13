@@ -49,7 +49,7 @@ import { productionHits, sqlOf } from './members/aragorn.js'
 import type { SqlPiece } from './members/aragorn.js'
 import { isCommandCut, requestOf, whoOf } from './members/brief.js'
 import type { Brief } from './members/brief.js'
-import { formatPreviewCut, INSPECTION_TIMEOUT_MS, MAX_LISTED, mergePlace, planPreview, rangeDiffInspection } from './members/galadriel.js'
+import { formatPreviewCut, INSPECTION_TIMEOUT_MS, MAX_LISTED, mergePlace, planPreview, rangeDiffInspections, runsElsewhere, unreadCommitsNote, unseenPushNote } from './members/galadriel.js'
 import type { Inspection, InspectionResult } from './members/galadriel.js'
 import { isGimliBlock, keepTail, problemOf, statusOf, tailOf } from './members/gimli.js'
 import type { GimliRun } from './members/gimli.js'
@@ -57,11 +57,11 @@ import { patternsWith, scanCall, warnsPasswordFingerprint } from './members/goll
 import { callDiff, LEGOLAS_LIMITS } from './members/legolas.js'
 import type { CallDiff, Current } from './members/legolas.js'
 import type { GollumFinding } from './members/gollum.js'
-import { cut, newNonce, parseVerdict } from './members/shared.js'
+import { addOmitted, cut, newNonce, parseVerdict } from './members/shared.js'
 import type { Omitted, Shown, Verdict } from './members/shared.js'
 import { redact } from './redact.js'
 import type { SecretPattern } from './redact.js'
-import { classify, FILE_PATH_FIELDS, SHELL_TOOLS, targetsOf } from './rules/classify.js'
+import { classify, FILE_PATH_FIELDS, forcePushPlaces, SHELL_TOOLS, targetsOf } from './rules/classify.js'
 import type { Call, Classification, ClassifyContext, Target } from './rules/classify.js'
 import { isInside, relativeTo, resolve } from './rules/paths.js'
 import { auditDirsOf, candidateChildren, checksOf, combineClassifications, intersection, scopesTouched, scopeTagOf, unionById, writeDirOf } from './rules/scopes.js'
@@ -500,8 +500,46 @@ async function scriptsOf(
  */
 async function gitDirOf($: EngineInterface, cwd: string | undefined, ctx: CallContext): Promise<string | undefined> {
   if (cwd === undefined) return ctx.gitDir
-  const real = (await $.fs.stat(cwd, { resolve: true }).catch(() => undefined))?.realPath
+  return realDirInside($, cwd, ctx)
+}
+
+/** A folder with its links resolved, when that really lies inside the root; undefined when it cannot be resolved or lies outside. */
+async function realDirInside($: EngineInterface, dir: string, ctx: Context): Promise<string | undefined> {
+  const real = (await $.fs.stat(dir, { resolve: true }).catch(() => undefined))?.realPath
   return real !== undefined && (real === ctx.realRoot || isInside(real, ctx.realRoot)) ? real : undefined
+}
+
+/** The most distinct folders whose branch is read for one call; more is unknown (a force push then asks). */
+const MAX_BRANCH_DIRS = 3
+
+/**
+ * The branch a force push of the current branch would overwrite, for the
+ * check that blocks it on a protected one. Read only when the call has such a
+ * push part (a cheap test on its parts: any other call starts no process), in
+ * the folder each push runs in, with the git environment and timeout of the
+ * previews. Unknown (undefined) on any failure: a push git would run elsewhere,
+ * a folder outside the root, a detached HEAD, a git error or timeout, more
+ * than MAX_BRANCH_DIRS folders. Where the pushes of one call sit on different
+ * branches, one the root's protected branches match is the answer, else unknown.
+ */
+async function pushBranchOf($: EngineInterface, ctx: Context, call: Call, where: ClassifyContext): Promise<string | undefined> {
+  const places = forcePushPlaces(call, where)
+  if (places.length === 0) return undefined
+  const command = typeof call.input.command === 'string' ? call.input.command : ''
+  const dirs = new Set<string>()
+  for (const { part, cwd } of places) {
+    if (runsElsewhere(part, { command, root: where.root, cwd })) return undefined
+    dirs.add(cwd)
+  }
+  if (dirs.size > MAX_BRANCH_DIRS) return undefined
+  const branches: (string | undefined)[] = []
+  for (const cwd of dirs) {
+    const dir = cwd === where.cwd ? cwd : await realDirInside($, cwd, ctx)
+    branches.push(dir === undefined ? undefined : await currentBranchOf($, dir))
+  }
+  const first = branches[0]
+  if (branches.every(branch => branch === first)) return first === 'HEAD' ? undefined : first
+  return branches.find(branch => branch !== undefined && branch !== 'HEAD' && ctx.loaded.compiled.protectedBranches.some(re => re.test(branch)))
 }
 
 /**
@@ -543,11 +581,13 @@ async function runGitInspection(
  * Runs Galadriel's inspections: only what the table planned, read-only, each
  * on its own timeout. A failure is no preview, never a decision.
  */
-async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: CallContext): Promise<Shown | undefined> {
+async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: CallContext): Promise<{ shown: Shown | undefined; notes: string[] }> {
   const results: InspectionResult[] = []
   for (const step of plan) {
     try {
-      if (step.kind === 'path') {
+      if (step.kind === 'note') {
+        results.push({ kind: 'note', label: step.label })
+      } else if (step.kind === 'path') {
         const stat = await $.fs.stat(step.path).catch(() => undefined)
         if (stat === undefined) {
           results.push({ kind: 'path', label: step.label, state: 'missing' })
@@ -567,7 +607,13 @@ async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: C
       results.push({ kind: 'failed', label: step.label })
     }
   }
-  return formatPreviewCut(results, settings.previewLines, shown => redact(shown, ctx.patterns))
+  const redactShown = (shown: string): string => redact(shown, ctx.patterns)
+  const unread = unreadCommitsNote(plan, results)
+  const base = formatPreviewCut(results, settings.previewLines, redactShown)
+  // What git could not read is said in the preview too, where there is one; the notes go to the reviewers either way.
+  const note: InspectionResult[] = unread === undefined ? [] : [{ kind: 'note', label: unread }]
+  const shown = base === undefined || unread === undefined ? base : formatPreviewCut([...results, ...note], settings.previewLines, redactShown)
+  return { shown, notes: [...results, ...note].flatMap(result => (result.kind === 'note' ? [result.label] : [])) }
 }
 
 /**
@@ -626,12 +672,14 @@ async function briefOf(
   realPath: string | undefined,
   state: CouncilSession,
   preview: Shown | undefined,
+  notes: readonly string[],
   ctx: Context,
 ): Promise<Brief> {
   const ruleReasons = [...new Set(classification.findings.map(finding => finding.reason))]
   const shown = callText(call, ctx.patterns)
   const latestPrompt = state.latestPrompt
   const withPreview = preview !== undefined ? { preview: preview.text, ...(preview.omitted !== undefined && { previewOmitted: preview.omitted }) } : {}
+  const withNotes = notes.length > 0 ? { notes } : {}
   // Routing seats the diff reviewer on file tools only, which always have a diff.
   const file = seat.member === 'gandalf' || seat.profile === 'git' ? undefined : await fileDiffOf($, call, cwd, realPath, ctx)
   if (seat.member === 'legolas' && file !== undefined) {
@@ -641,7 +689,7 @@ async function briefOf(
     return {
       member: 'aragorn',
       profile: 'git',
-      context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, protectedBranches: ctx.loaded.compiled.config.protectedBranches, ...withPreview },
+      context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, protectedBranches: ctx.loaded.compiled.config.protectedBranches, ...withPreview, ...withNotes },
     }
   }
   if (seat.member === 'aragorn') {
@@ -658,7 +706,7 @@ async function briefOf(
     }
   }
   const { scripts, unseen } = await scriptsOf($, classification, cwd, state.written, ctx)
-  return { member: 'gandalf', context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, scripts, ...(unseen > 0 && { unseenScripts: unseen }), ...withPreview } }
+  return { member: 'gandalf', context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, scripts, ...(unseen > 0 && { unseenScripts: unseen }), ...withPreview, ...withNotes } }
 }
 
 /**
@@ -726,16 +774,50 @@ async function currentBranchOf($: EngineInterface, dir: string): Promise<string 
  * redacted, with the range that was read (the table's fallback range when the
  * first can't be read). Undefined when git can't say.
  */
-async function rangeDiffOf($: EngineInterface, step: Extract<Inspection, { kind: 'git' }>, ctx: CallContext): Promise<{ label: string; diff: string; omitted?: Omitted } | undefined> {
+async function rangeDiffOf(
+  $: EngineInterface,
+  step: Extract<Inspection, { kind: 'git' }>,
+  ctx: CallContext,
+  share = 1,
+): Promise<{ label: string; diff: string; omitted?: Omitted } | undefined> {
   try {
     const { label, run } = await runGitInspection($, step, ctx)
     if (run.exitCode !== 0) return undefined
     // Redacted before it is cut, so a cut never splits a secret.
     const diff = redact(run.stdout, ctx.patterns).trimEnd()
-    const { text: shown, omitted } = cut(diff === '' ? '(no changes)' : diff, settings.diffLines, LEGOLAS_LIMITS.diffChars)
+    // Each of several ranges gets its share of the limits.
+    const { text: shown, omitted } = cut(diff === '' ? '(no changes)' : diff, Math.max(1, Math.floor(settings.diffLines / share)), Math.floor(LEGOLAS_LIMITS.diffChars / share))
     return { label, diff: shown, ...(omitted !== undefined && { omitted }) }
   } catch {
     return undefined
+  }
+}
+
+/**
+ * The changes of every range a push names, for the diff reviewer: each read by
+ * `rangeDiffOf` on its share of the limits and set under its own label when
+ * there are several. `unread` counts the ranges git could not read. Undefined
+ * when none could be.
+ */
+async function rangesDiffOf(
+  $: EngineInterface,
+  steps: readonly Inspection[],
+  ctx: CallContext,
+): Promise<{ label: string; diff: string; omitted?: Omitted; unread: number } | undefined> {
+  const gits = steps.filter((step): step is Extract<Inspection, { kind: 'git' }> => step.kind === 'git')
+  const reads: { label: string; diff: string; omitted?: Omitted }[] = []
+  for (const step of gits) {
+    const read = await rangeDiffOf($, step, ctx, gits.length)
+    if (read !== undefined) reads.push(read)
+  }
+  const [only] = reads
+  if (only === undefined) return undefined
+  const omitted = reads.reduce<Omitted | undefined>((sum, read) => addOmitted(sum, read.omitted), undefined)
+  return {
+    label: reads.map(read => read.label).join(', '),
+    diff: reads.length === 1 ? only.diff : reads.map(read => `# ${read.label}\n${read.diff}`).join('\n\n'),
+    ...(omitted !== undefined && { omitted }),
+    unread: gits.length - reads.length,
   }
 }
 
@@ -1458,12 +1540,15 @@ export const register: Register = (on, options) => {
     const cwd = await $.session.cwd()
     const realPath = await realPathOf($, call, cwd, sessionCtx)
     // The session root's: operation keys, previews and the Legolas brief's paths keep it, so two repositories' keys never meet.
-    const where = {
+    const placed = {
       root: sessionCtx.root,
       cwd,
       ...(sessionCtx.home !== undefined && { home: sessionCtx.home }),
       ...(realPath !== undefined && { realPath }),
     }
+    // A force push of the current branch is judged by the branch it would overwrite: read first, only for such a call.
+    const currentBranch = await pushBranchOf($, sessionCtx, call, placed)
+    const where = { ...placed, ...(currentBranch !== undefined && { currentBranch }) }
     // C5: classified against every repository the call touches; the strictest decides, and its scope's config is `ctx`'s.
     const { classification, ctx } = await classifyIn($, sessionCtx, call, where)
     const scopeDirs = ctx.scopes.map(scope => scope.dir)
@@ -1568,6 +1653,8 @@ export const register: Register = (on, options) => {
     let isCached = false
     let isShadowed = false
     let preview: Shown | undefined
+    /** What the preview could not show, said to every reviewer outside the preview. */
+    let previewNotes: readonly string[] = []
     let councilRecord: AuditRecord['council']
     let reviewMs: number | undefined
     let ruleAdded: string | undefined
@@ -1833,7 +1920,11 @@ export const register: Register = (on, options) => {
     }
 
     // 8. The read-only preview, for the reviewer and the user.
-    if (settings.galadrielEnabled) preview = await previewOf($, planPreview(call, classification, where), ctx)
+    if (settings.galadrielEnabled) {
+      const previewed = await previewOf($, planPreview(call, classification, where), ctx)
+      preview = previewed.shown
+      previewNotes = previewed.notes
+    }
 
     /**
      * A big operation: every enabled member with something to review sits on
@@ -1857,8 +1948,10 @@ export const register: Register = (on, options) => {
         if (seat.member === 'legolas' && seat.range !== undefined) {
           // The part's own folder (after any `cd`): rangeOf names the part, the finding holds where it runs.
           const rangeCwd = range === undefined ? undefined : classification.findings.find(finding => finding.part === range.part)?.cwd
-          const inspection = range === undefined ? undefined : rangeDiffInspection(range.kind, range.part, call, where, rangeCwd)
-          const read = inspection?.kind === 'git' ? await rangeDiffOf($, inspection, ctx) : undefined
+          const planned = range === undefined ? undefined : rangeDiffInspections(range.kind, range.part, call, where, rangeCwd)
+          const read = planned === undefined ? undefined : await rangesDiffOf($, planned.inspections, ctx)
+          // What no diff could be shown for: refspecs left out of the plan, and ranges git could not read.
+          const notes = planned === undefined || read === undefined ? [] : [...planned.notes, ...(read.unread > 0 ? [unseenPushNote(read.unread)] : [])]
           sittings.push(
             read === undefined
               ? { seat, who, skip: text('council.noRange') }
@@ -1867,14 +1960,22 @@ export const register: Register = (on, options) => {
                   who,
                   brief: {
                     member: 'legolas',
-                    context: { tool: call.tool, path: read.label, range: { kind: seat.range, call: callText(call, ctx.patterns) }, diff: { diff: read.diff, ...(read.omitted !== undefined && { omitted: read.omitted }), isNew: false }, ruleReasons, latestPrompt: state.latestPrompt },
+                    context: {
+                      tool: call.tool,
+                      path: read.label,
+                      range: { kind: seat.range, call: callText(call, ctx.patterns) },
+                      diff: { diff: read.diff, ...(read.omitted !== undefined && { omitted: read.omitted }), isNew: false },
+                      ruleReasons,
+                      latestPrompt: state.latestPrompt,
+                      ...(notes.length > 0 && { notes }),
+                    },
                   },
                 },
           )
           continue
         }
         const asked: Seat = seat.member === 'aragorn' ? { member: 'aragorn', profile: seat.profile } : { member: seat.member }
-        sittings.push({ seat, who, brief: await briefOf($, asked, call, classification, cwd, realPath, state, preview, ctx) })
+        sittings.push({ seat, who, brief: await briefOf($, asked, call, classification, cwd, realPath, state, preview, previewNotes, ctx) })
       }
       const checks = checksIn(ctx)
       const debate = debateOf(
@@ -1985,7 +2086,7 @@ export const register: Register = (on, options) => {
     if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
 
     // 10. Review, and act on the verdict.
-    const brief = await briefOf($, seated, call, classification, cwd, realPath, state, preview, ctx)
+    const brief = await briefOf($, seated, call, classification, cwd, realPath, state, preview, previewNotes, ctx)
     const who = whoOf(brief.member, brief.profile)
     member = brief.member
     profile = brief.profile ?? null

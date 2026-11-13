@@ -1,5 +1,7 @@
 import type { CheckName } from '../config/types.js'
 import { isInside, resolve } from './paths.js'
+import { isCurrentBranchRef, parsePush } from './push.js'
+import type { ParsedPush } from './push.js'
 import { PRIVILEGE_WRAPPERS } from './shell.js'
 import type { ShellPart } from './shell.js'
 
@@ -10,6 +12,12 @@ export type CheckContext = {
   cwd: string
   /** $HOME, when known. */
   home?: string
+  /**
+   * The branch checked out where a force push of the current branch would run,
+   * read by the caller only for such a call. Absent when it could not be read
+   * (git failed, a detached HEAD, git would run elsewhere): then it is unknown.
+   */
+  currentBranch?: string
   protectedBranches: readonly RegExp[]
   production: readonly RegExp[]
 }
@@ -55,47 +63,53 @@ function rmOutsideRepo(part: ShellPart, context: CheckContext): boolean {
   })
 }
 
-/** Options of `git push` that take the next word as their value. */
-export const PUSH_OPTIONS_WITH_ARG: ReadonlySet<string> = new Set(['--repo', '-o', '--push-option', '--receive-pack', '--exec'])
-
-/** A force push (or a delete) naming a protected branch, or of every branch. */
-function forcePushProtected(part: ShellPart, context: CheckContext): boolean {
+const pushOf = (part: ShellPart): ParsedPush | undefined => {
   const [git, push, ...rest] = part.coreWords
-  if (git !== 'git' || push !== 'push') return false
-  let isForce = false
-  let isDelete = false
-  let isEvery = false
-  const positional: string[] = []
-  for (let i = 0; i < rest.length; i++) {
-    const word = rest[i] as string
-    if (PUSH_OPTIONS_WITH_ARG.has(word)) {
-      i++
-    } else if (word === '--force' || word === '-f' || word.startsWith('--force-with-lease') || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(word)) {
-      isForce = true
-    } else if (word === '--delete' || word === '-d') {
-      isDelete = true
-    } else if (word === '--mirror' || word === '--all' || word === '--prune') {
-      isEvery = true
-    } else if (!word.startsWith('-')) {
-      positional.push(word)
-    }
-  }
+  return git === 'git' && push === 'push' ? parsePush(rest, { keepEmpty: true }) : undefined
+}
+
+/** The checked-out branch when it is known: a detached HEAD (`HEAD`) is not one. */
+const knownBranch = (context: CheckContext): string | undefined =>
+  context.currentBranch === undefined || context.currentBranch === '' || isCurrentBranchRef(context.currentBranch) ? undefined : context.currentBranch
+
+/**
+ * A force push (or a `+` refspec) that overwrites the branch checked out where
+ * it runs: it names no refspec at all (`git push -f`, `git push -f origin`), or
+ * one that lands on `HEAD`. Which branch that is, only the caller can say
+ * (`CheckContext.currentBranch`). `--all`, `--mirror` and `--prune` are not this:
+ * the protected-branch check takes them whole.
+ */
+export function forcesCurrentBranch(part: ShellPart): boolean {
+  const push = pushOf(part)
+  if (push === undefined || push.isEvery) return false
+  if (push.refspecs.length === 0) return push.isForce
+  return push.refspecs.some(spec => isCurrentBranchRef(spec.destination) && (push.isForce || spec.isPlus))
+}
+
+/** A force push (or a delete) naming a protected branch, or of every branch, or of a protected branch that is checked out. */
+function forcePushProtected(part: ShellPart, context: CheckContext): boolean {
+  const push = pushOf(part)
+  if (push === undefined) return false
   // --mirror force-overwrites every ref and deletes refs the local lacks;
   // --prune deletes remote branches with no local match. Either can destroy a
   // protected branch, with or without an explicit force flag.
-  if (isEvery) return true
-  const refspecs = positional.slice(1)
-  return refspecs.some(spec => {
-    const isPlus = spec.startsWith('+')
-    const bare = isPlus ? spec.slice(1) : spec
-    const isEmptySource = bare.startsWith(':')
-    const destination = (bare.includes(':') ? bare.slice(bare.indexOf(':') + 1) : bare).replace(/^refs\/heads\//, '')
-    const isDestructive = isForce || isDelete || isPlus || isEmptySource
+  if (push.isEvery) return true
+  const isProtectedName = (name: string): boolean => context.protectedBranches.some(branch => branch.test(name))
+  const isNamed = push.refspecs.some(spec => {
+    const isDestructive = push.isForce || push.isDelete || spec.isPlus || spec.source === ''
     if (!isDestructive) return false
     // A glob destination (refs/heads/*) can land on a protected branch.
-    if (/[*?]/.test(destination)) return true
-    return context.protectedBranches.some(branch => branch.test(destination))
+    if (/[*?]/.test(spec.destination)) return true
+    return isProtectedName(spec.destination)
   })
+  if (isNamed) return true
+  const branch = knownBranch(context)
+  return branch !== undefined && forcesCurrentBranch(part) && isProtectedName(branch)
+}
+
+/** A force push of the checked-out branch whose name the caller could not determine: what it would overwrite is unknown. */
+function forcePushUnknownBranch(part: ShellPart, context: CheckContext): boolean {
+  return forcesCurrentBranch(part) && knownBranch(context) === undefined
 }
 
 const RAW_DEVICE = /^\/dev\/(sd|hd|vd|xvd|nvme|disk\d|rdisk|mmcblk|loop|md\d|dm-|mapper\/)/
@@ -211,6 +225,8 @@ export function runCheck(check: CheckName, part: ShellPart, context: CheckContex
       return rmOutsideRepo(part, context)
     case 'force-push-protected':
       return forcePushProtected(part, context)
+    case 'force-push-unknown-branch':
+      return forcePushUnknownBranch(part, context)
     case 'destructive-sql-production':
       return destructiveSqlProduction(part, context)
     case 'privileged':

@@ -186,8 +186,8 @@ describe('the full council in the pipeline', () => {
     ])
     const systems = w.modelRequests.map(request => String(request.system))
     expect(systems[1]).toContain('the commits a git push would send')
-    expect(String(w.modelRequests[1]?.prompt)).toContain('The changes the push would send: origin/feature..HEAD')
-    expect(w.processes).toContainEqual(['git', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', 'origin/feature..HEAD', '--'])
+    expect(String(w.modelRequests[1]?.prompt)).toContain('The changes the push would send: origin/feature..feature')
+    expect(w.processes).toContainEqual(['git', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', 'origin/feature..feature', '--'])
     expect((await auditLines(w))[0]).toMatchObject({
       member: 'council',
       model: 'opus',
@@ -213,12 +213,12 @@ describe('the full council in the pipeline', () => {
     const w = world(on, { replies: [APPROVE] })
     w.processReply = argv => {
       if (argv[1] !== 'diff') return { exitCode: 0, stdout: '' }
-      return argv.at(-2) === 'origin/feature..HEAD' ? { exitCode: 128, stdout: '' } : { exitCode: 0, stdout: '+export const started = true\n' }
+      return argv.at(-2) === 'origin/feature..feature' ? { exitCode: 128, stdout: '' } : { exitCode: 0, stdout: '+export const started = true\n' }
     }
     expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })
-    expect(w.processes.filter(argv => argv[1] === 'diff').map(argv => argv.at(-2))).toEqual(['origin/feature..HEAD', 'origin/HEAD...HEAD'])
+    expect(w.processes.filter(argv => argv[1] === 'diff').map(argv => argv.at(-2))).toEqual(['origin/feature..feature', 'origin/HEAD...feature'])
     const prompt = String(w.modelRequests.find(request => String(request.system).includes('the commits a git push would send'))?.prompt)
-    expect(prompt).toContain('The changes the push would send: origin/HEAD...HEAD')
+    expect(prompt).toContain('The changes the push would send: origin/HEAD...feature')
     expect(prompt).toContain('+export const started = true')
     expect((await auditLines(w))[0]).toMatchObject({ council: { voices: [{ member: 'gandalf' }, { member: 'legolas', verdict: 'approve' }, { member: 'aragorn' }] } })
     expect(w.processes.filter(argv => argv[1] === 'push')).toEqual([])

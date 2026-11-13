@@ -1,7 +1,7 @@
 import type { CompiledConfig, CompiledRule } from '../config/schema.js'
 import { strictness } from '../config/types.js'
 import type { MemberName, Profile, RuleSource, Tier } from '../config/types.js'
-import { runCheck } from './checks.js'
+import { forcesCurrentBranch, runCheck } from './checks.js'
 import type { CheckContext } from './checks.js'
 import { touchesProtected } from './globs.js'
 import { relativeTo, resolve } from './paths.js'
@@ -148,6 +148,23 @@ export function cwdAfter(part: ShellPart | undefined, cwd: string, home?: string
   if (part === undefined || part.isNested || (part.coreWords[0] !== 'cd' && part.coreWords[0] !== 'pushd')) return cwd
   const target = part.coreWords.find((word, index) => index > 0 && !word.startsWith('-')) ?? home ?? '/'
   return /[$`]|^-$/.test(target) ? '/' : resolve(target, cwd, home)
+}
+
+/**
+ * The shell parts that force-push the checked-out branch (no refspec, or one
+ * on `HEAD`) and the directory each runs in, after any `cd`. Empty for any
+ * other call, which is how a call that needs no branch lookup pays for none.
+ */
+export function forcePushPlaces(call: Call, context: ClassifyContext): { part: ShellPart; cwd: string }[] {
+  if (!SHELL_TOOLS.has(call.tool)) return []
+  const command = typeof call.input.command === 'string' ? call.input.command : ''
+  const places: { part: ShellPart; cwd: string }[] = []
+  let cwd = context.cwd
+  for (const part of splitShell(command).parts) {
+    cwd = cwdAfter(part, cwd, context.home)
+    if (forcesCurrentBranch(part)) places.push({ part, cwd })
+  }
+  return places
 }
 
 /** A place a call touches (C5): a working directory, or a path it names. */

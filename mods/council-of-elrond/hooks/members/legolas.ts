@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, cut, fenced, label, OMISSION_RULES, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, cut, fenced, label, noteLines, OMISSION_RULES, untrustedRules } from './shared.js'
 import type { Omitted, Shown } from './shared.js'
 import type { Call } from '../rules/classify.js'
 
@@ -38,6 +38,8 @@ export type LegolasContext = {
   preview?: string
   /** What the preview's own cut left out, when it was cut before it got here. */
   previewOmitted?: Omitted
+  /** For a range: which refspecs' changes it could not show, in the mod's own words. */
+  notes?: readonly string[]
   /** The user's latest prompt, redacted already. */
   latestPrompt: string
 }
@@ -310,6 +312,7 @@ export function legolasPrompt(context: LegolasContext, nonce: string): string {
     ...(context.diff.note !== undefined ? [NOTES[context.diff.note]] : []),
     context.range !== undefined ? 'The changes, as a diff:' : 'Proposed change:',
     fenced('diff', context.diff.diff, nonce, context.diff.omitted === undefined ? {} : { earlier: context.diff.omitted }),
+    ...noteLines(context.notes),
     ...(context.preview !== undefined
       ? [`The file in git (read-only preview):\n${fenced('preview', context.preview, nonce, { limits: { lines: limits.previewLines, chars: limits.previewChars }, ...(context.previewOmitted !== undefined && { earlier: context.previewOmitted }) })}`]
       : []),

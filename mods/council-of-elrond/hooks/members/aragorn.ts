@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, fenced, label, OMISSION_RULES, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, fenced, label, noteLines, OMISSION_RULES, untrustedRules } from './shared.js'
 import type { Omitted } from './shared.js'
 import type { CallDiff } from './legolas.js'
 import { seatOf } from '../elrond/routing.js'
@@ -18,6 +18,8 @@ export type AragornGitContext = {
   preview?: string
   /** What the preview's own cut left out, when it was cut before it got here. */
   previewOmitted?: Omitted
+  /** What the preview could not show (a push's commits), in the mod's own words. */
+  notes?: readonly string[]
   /** The configured protected branches (names or globs). */
   protectedBranches: readonly string[]
   latestPrompt: string
@@ -174,6 +176,7 @@ export function aragornGitPrompt(context: AragornGitContext, nonce: string): str
     context.preview !== undefined
       ? `The repository (read-only preview):\n${fenced('preview', context.preview, nonce, { limits: { lines: limits.previewLines, chars: limits.previewChars }, ...(context.previewOmitted !== undefined && { earlier: context.previewOmitted }) })}`
       : 'No preview is available.',
+    ...noteLines(context.notes),
     "The user's latest message:",
     fenced('user-request', context.latestPrompt || '(none recorded)', nonce, { limits: { lines: 60, chars: limits.promptChars } }),
     'Your verdict, as JSON only:',

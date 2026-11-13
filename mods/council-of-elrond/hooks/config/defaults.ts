@@ -54,6 +54,13 @@ const ASK: readonly Rule[] = [
     reason: 'Runs with elevated privileges (sudo, doas, su).',
   },
   {
+    id: 'force-push-unknown-branch',
+    tier: 'ask',
+    tools: SHELL,
+    check: 'force-push-unknown-branch',
+    reason: 'Force push of the current branch, and the branch it would overwrite could not be determined.',
+  },
+  {
     id: 'plugin-manage',
     tier: 'ask',
     tools: SHELL,

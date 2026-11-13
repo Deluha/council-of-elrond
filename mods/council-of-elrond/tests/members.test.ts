@@ -220,7 +220,7 @@ describe('in the pipeline', () => {
     await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })
     // A push sits the full council; the git reviewer's request is the one with its checklist.
     const prompt = String(w.modelRequests.find(request => String(request.system).includes('Published history'))?.prompt)
-    expect(prompt).toContain('commits it would send (origin/feature..HEAD)')
+    expect(prompt).toContain('commits it would send (origin/feature..feature)')
     expect(prompt).toContain('abc123 Unrelated tweak')
     expect(prompt).toContain('Protected branches: main, master')
   })

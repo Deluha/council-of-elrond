@@ -139,6 +139,21 @@ describe('operation keys: accuracy (H3)', () => {
     expect(partKey('git push origin feature')).not.toBe(partKey('git push origin HEAD'))
   })
 
+  test('git push keys are what they were, under the one shared reading of its arguments (DESIGN §15.19)', () => {
+    // Pinned against the loop each of these once had of its own; every form below keyed so before.
+    expect(partKey('git push')).toBe('git push (current branch) (default remote)')
+    expect(partKey('git push -f')).toBe('git push (current branch) (default remote)')
+    expect(partKey('git push --force-if-includes origin')).toBe('git push (current branch) origin')
+    expect(partKey('git push origin other:main')).toBe('git push main origin')
+    expect(partKey('git push origin +other:refs/heads/main')).toBe('git push main origin')
+    expect(partKey('git push origin :old')).toBe('git push old origin')
+    expect(partKey('git push origin --delete old')).toBe('git push old origin')
+    expect(partKey('git push origin a b')).toBe('git push a b origin')
+    expect(partKey('git push origin refs/heads/a')).toBe('git push a origin')
+    expect(partKey('git push --repo x origin a')).toBe('git push a origin')
+    expect(partKey('git push origin a --receive-pack x')).toBe('git push a origin')
+  })
+
   test('quoted words key as they did: the parser already removes the quotes', () => {
     expect(partKey('rm -r "build dir"')).toBe('rm build dir')
     expect(partKey("rm -r 'build dir'")).toBe('rm build dir')

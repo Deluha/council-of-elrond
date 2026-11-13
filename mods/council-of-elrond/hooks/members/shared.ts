@@ -190,6 +190,13 @@ export function fenced(kind: string, content: string, nonce: string, options: { 
   return `${block}\nCut notice: the block above was cut, and ${amount(omitted.lines, 'line')} and ${amount(omitted.chars, 'character')} in all were left out of it, in the places a line like "${markerOf(omitted)}" stands. You have not seen what was left out.`
 }
 
+/**
+ * The mod's own notes about what a reviewer was not shown (a push's commits
+ * that could not be read), as prompt lines outside every data block, like the
+ * cut notice: said by the mod, so the call's text cannot forge or drown them.
+ */
+export const noteLines = (notes: readonly string[] | undefined): string[] => (notes ?? []).map(note => `Note: ${note}`)
+
 /** The rule every reviewer's system prompt carries about cut content. */
 export const OMISSION_RULES = [
   'Long content is cut to its start and its end. When a data block was cut, the prompt text outside every data block has a line beginning "Cut notice:" right after it, saying how much was left out; the cut shows inside the block as a line like "[... 12 lines, 480 characters omitted ...]".',
