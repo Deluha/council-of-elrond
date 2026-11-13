@@ -22,7 +22,12 @@ export type GollumFinding = {
   fingerprint: string
 }
 
-export type GollumScan = { high: GollumFinding[]; low: GollumFinding[] }
+export type GollumScan = {
+  high: GollumFinding[]
+  low: GollumFinding[]
+  /** True when the text was too long to scan in full: its start and its last 100,000 characters were read, not the middle. */
+  partial: boolean
+}
 
 /** Whether the allowlist confirm warns that this finding's fingerprint can be guessed offline. */
 export const warnsPasswordFingerprint = (finding: Pick<GollumFinding, 'kind'>): boolean => finding.kind === 'password'
@@ -45,6 +50,8 @@ export function scannedText(call: Call): string {
 }
 
 const MAX_SCAN_CHARS = 500_000
+/** A longer text is scanned from its start and, too, from this many characters at its end. */
+const TAIL_SCAN_CHARS = 100_000
 const MAX_FINDINGS = 10
 const SNIPPET_CHARS = 160
 
@@ -77,8 +84,11 @@ export async function scanText(
   patterns: readonly SecretPattern[] = SECRET_PATTERNS,
   allowlist: readonly string[] = [],
 ): Promise<GollumScan> {
-  const scan: GollumScan = { high: [], low: [] }
-  const body = text.length > MAX_SCAN_CHARS ? text.slice(0, MAX_SCAN_CHARS) : text
+  const capped = text.length > MAX_SCAN_CHARS
+  // Head and tail together cover a text up to the cap plus the tail; only a longer one has a middle that is skipped.
+  const scan: GollumScan = { high: [], low: [], partial: text.length > MAX_SCAN_CHARS + TAIL_SCAN_CHARS }
+  // The head and the tail, joined by a line break so no match spans the gap.
+  const body = capped ? `${text.slice(0, MAX_SCAN_CHARS)}\n${text.slice(Math.max(MAX_SCAN_CHARS, text.length - TAIL_SCAN_CHARS))}` : text
   const covered: [number, number][] = []
   const seen = new Set<string>()
 
