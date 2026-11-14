@@ -44,10 +44,41 @@ mods/
                                  escalation, refusal text, model choice, commands, suggest, report,
                                  relay (what reaches Claude where nothing draws),
                                  view (the rows the debate pane and the band draw)
+    hooks/elrond/chat.ts         the `council allow` / `council deny` lines a person types, parsed
     types/index.d.ts             the $.state contract (CouncilSession, CouncilDebate, CouncilPanel)
     tests/                       *.test.ts, run by `claude plugin test`; fixtures.ts is the fake world
-    tests/trust.test.ts          the trust rule: which settings wait, the record, the commands
+    tests/approvals.test.ts      what an approval holds for: the folder, a big operation, a git part, a fresh read
+    tests/aragorn.test.ts        the SQL a shell call carries, for the database reviewer
+    tests/audit.test.ts          the call fingerprint and audit rotation by bytes
+    tests/broken.test.ts         a rules file with errors: what still applies, what is ignored, the caps
+    tests/chat.test.ts           approving or refusing a call in chat where nothing draws
+    tests/commands.test.ts       the `/council` subcommands: parsing, who may run what, the output
+    tests/config.test.ts         loading the rules file and merging it with the shipped rules; model layers
+    tests/council.test.ts        big operations, the project checks, who sits, combining the verdicts
+    tests/debate.test.ts         the debate pane, the council check band and the epic drop, mounted
+    tests/done.test.ts           the definition-of-done evidence and the owner tests SPEC §19 names
+    tests/galadriel.test.ts      the read-only preview: the table, where git runs, what a push shows
+    tests/gandalf.test.ts        verdict parsing, the destructive-operations prompt, redaction
+    tests/gitcwd.test.ts         where the mod's own git runs: the folder the call works in
+    tests/gollum.test.ts         the secrets scan: formats, low patterns, redaction that keeps code
+    tests/members.test.ts        the diff and git or database reviewers' prompts; the names fenced
     tests/omission.test.ts       what a reviewer is told when its input was cut short
+    tests/operations.test.ts     operation keys, rounds, failed attempts and the outcome of a call
+    tests/pipeline.test.ts       the gate end to end: allow, block, review, escalate, fail closed
+    tests/relay.test.ts          what reaches Claude where nothing draws
+    tests/report.test.ts         reading the audit log and `/council report`
+    tests/robustness.test.ts     stale, malformed, interrupted and late inputs; failing writes; Esc
+    tests/rounds.test.ts         review rounds, lockouts, and a part retried inside a compound command
+    tests/routing.test.ts        which member gets which call, and the fallback
+    tests/rules.test.ts          the shell parser and the classifier: shipped rules, near misses, compounds
+    tests/scopes.test.ts         rules per repository under a parent root
+    tests/secrets.test.ts        project patterns applied wherever the mod redacts; what the scan reads
+    tests/state.test.ts          the session record's shape check and its older versions
+    tests/suggest.test.ts        the allow rule offered after "allow once", and writing it
+    tests/terminal.test.ts       what a person is handed: the question's text, lines and size cap
+    tests/theme.test.ts          the strings table, plain mode, and what Claude reads staying plain
+    tests/trust.test.ts          the trust rule: which settings wait, the record, the commands
+    tests/view.test.ts           the rows the debate pane and the band draw
     README.md DESIGN.md ROADMAP.md SPEC.md
 ```
 

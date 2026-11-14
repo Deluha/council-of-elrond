@@ -136,6 +136,3 @@ export type Overrides = Partial<Omit<Config, 'schemaVersion' | 'gollum' | 'gimli
 export type RuleSource = 'shipped' | 'project'
 
 export const strictness = (tier: Tier): number => TIERS.indexOf(tier)
-
-export const stricter = (a: Tier, b: Tier): Tier =>
-  strictness(a) >= strictness(b) ? a : b

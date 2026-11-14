@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, fenced, label, noteLines, OMISSION_RULES, projectReasonLines, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, callNames, fenced, noteLines, OMISSION_RULES, projectReasonLines, untrustedRules } from './shared.js'
 import type { Omitted } from './shared.js'
 import type { CallDiff } from './legolas.js'
 import { seatOf } from '../elrond/routing.js'
@@ -172,7 +172,7 @@ export function aragornGitSystem(nonce: string): string {
 export function aragornGitPrompt(context: AragornGitContext, nonce: string): string {
   const limits = ARAGORN_LIMITS
   const sections = [
-    `Tool: ${context.tool}`,
+    callNames([['Tool', context.tool]], nonce),
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
     ...projectReasonLines(context.projectReasons, nonce),
     `Protected branches: ${context.protectedBranches.join(', ') || '(none configured)'}`,
@@ -214,7 +214,7 @@ const unseenSqlNote = (count: number): string =>
 export function aragornDatabasePrompt(context: AragornDatabaseContext, nonce: string): string {
   const limits = ARAGORN_LIMITS
   const sections = [
-    `Tool: ${context.tool}`,
+    callNames([['Tool', context.tool], ...context.sql.map((piece, index) => [`SQL ${index + 1}`, piece.label] as const)], nonce),
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
     ...projectReasonLines(context.projectReasons, nonce),
     `Looks like production: ${context.production.length > 0 ? context.production.map(hit => JSON.stringify(hit)).join(', ') : 'nothing matched the configured patterns'}`,
@@ -222,7 +222,7 @@ export function aragornDatabasePrompt(context: AragornDatabaseContext, nonce: st
     context.diff !== undefined
       ? fenced('diff', context.diff.diff, nonce, context.diff.omitted === undefined ? {} : { earlier: context.diff.omitted })
       : fenced('call', context.call, nonce, { limits: { lines: limits.callLines, chars: limits.callChars } }),
-    ...context.sql.map(piece => `SQL (${label(piece.label)}):\n${fenced('sql', piece.text, nonce, { limits: { lines: limits.sqlLines, chars: limits.sqlChars } })}`),
+    ...context.sql.map((piece, index) => `SQL ${index + 1} (named in the call-names block):\n${fenced('sql', piece.text, nonce, { limits: { lines: limits.sqlLines, chars: limits.sqlChars } })}`),
     ...(context.unseenSqlFiles !== undefined && context.unseenSqlFiles > 0 ? [unseenSqlNote(context.unseenSqlFiles)] : []),
     "The user's latest message:",
     fenced('user-request', context.latestPrompt || '(none recorded)', nonce, { limits: { lines: 60, chars: limits.promptChars } }),

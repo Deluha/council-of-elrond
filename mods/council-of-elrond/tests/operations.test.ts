@@ -4,6 +4,7 @@ import {
   attemptsOf,
   FORCE_SUFFIX,
   hasGitPart,
+  isAutomaticDenial,
   isForcePush,
   isOutOfRounds,
   isWipeOutcome,
@@ -441,6 +442,41 @@ describe('outcomes', () => {
     ]) {
       expect(outcomeOf({ isError: true, text })).toBe('denied-by-permission')
     }
+  })
+
+  test('a command that ran and failed with a denial wording in its own output is an error, not a denial (DESIGN §16)', () => {
+    const WORDING = 'Permission to read /work/.env has been denied.'
+    // The engine's message is the whole text; whitespace before it is nothing.
+    expect(outcomeOf({ isError: true, text: WORDING })).toBe('denied-by-permission')
+    expect(outcomeOf({ isError: true, text: `\n  ${WORDING}` })).toBe('denied-by-permission')
+    // A command's output follows an exit-code line, or its earlier output.
+    for (const text of [`Exit code 1\n${WORDING}`, `Exit code 126\ncat: ${WORDING}`, `building...\n${WORDING}`, `ok ${WORDING}`, `Error: ${WORDING}`]) {
+      expect(outcomeOf({ isError: true, text }), text).toBe('error')
+      // So it is a failed attempt when tool errors count, and not when the setting is off.
+      expect(isWipeOutcome(outcomeOf({ isError: true, text }), { toolErrors: true }), text).toBe(true)
+      expect(isWipeOutcome(outcomeOf({ isError: true, text }), { toolErrors: false }), text).toBe(false)
+    }
+    expect(isAutomaticDenial(`Exit code 1\n${WORDING}`)).toBe(false)
+  })
+
+  test('every recorded automatic-denial wording is still a denial where the engine says it', () => {
+    for (const text of [
+      // Opening the text:
+      'Permission to use Bash has been denied.',
+      'Permission to edit /work/src/app.ts has been denied.',
+      'Permission to read /work/.env has been denied.',
+      // Recorded with a subject or a first sentence before the phrase, so kept wherever the phrase is (DESIGN §16):
+      AUTO,
+      'Bash needs approval (asked by plugin probe: a reason)',
+      'This command requires approval',
+      'The github connector requires approval for this call.',
+      'Permission for this tool use was denied. It requires approval, and this session has no approval surface.',
+      "Claude requested permissions to write to /work/a.txt, but you haven't granted it yet.",
+    ]) {
+      expect(outcomeOf({ isError: true, text }), text).toBe('denied-by-permission')
+    }
+    // The user's refusal is read first and is not narrowed: it still counts wherever its words stand.
+    expect(outcomeOf({ isError: true, text: `Exit code 1\n${USER}` })).toBe('refused-by-user')
   })
 
   test('the person refusing counts; an automatic denial never does', () => {

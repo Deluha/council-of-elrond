@@ -5,15 +5,16 @@ import type { CouncilPanel } from '../types'
 import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, isRotation, placeScopeOf, ROTATED_FILES } from './audit.js'
 import type { AuditRecord, Decision } from './audit.js'
 import { OVERRIDES_PATH, SHIPPED } from './config/defaults.js'
-import { loadConfig, MODEL_ID } from './config/schema.js'
+import { ignoredConfig, loadConfig, MODEL_ID } from './config/schema.js'
+import type { BrokenFile } from './config/schema.js'
 import type { LoadedConfig } from './config/schema.js'
-import { codeOf, hashOf, ignoredChecksOf, isHeldBack, isTrusted, matchCode, parseRecord, recordValue, TRUST_KEY, trustMode, withoutTrusted, withTrusted } from './config/trust.js'
+import { brokenChecksOf, codeOf, hashOf, ignoredChecksOf, isHeldBack, isTrusted, matchCode, parseRecord, recordValue, TRUST_KEY, trustMode, withoutTrusted, withTrusted } from './config/trust.js'
 import type { RulesFile, TrustCounts, TrustRecord } from './config/trust.js'
 import { MODEL_SLOTS } from './config/types.js'
 import type { GimliCommand, MemberName, ModelSlot } from './config/types.js'
 import { withAllowlistEntry, withRule } from './config/write.js'
 import type { FileEdit } from './config/write.js'
-import { countsText, isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput, trustedOutput, trustLines, trustListing } from './elrond/commands.js'
+import { countsText, errorsLine, isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput, trustedOutput, trustLines, trustListing } from './elrond/commands.js'
 import { callKeyOf, codeOf as chatCodeOf, isOfferable, parseChatLines } from './elrond/chat.js'
 import { combine, hasRealBlock } from './elrond/combine.js'
 import type { Voice } from './elrond/combine.js'
@@ -41,7 +42,7 @@ import {
 } from './elrond/operations.js'
 import type { WipePolicy } from './elrond/operations.js'
 import { projectReasonText, refusalText } from './elrond/refusal.js'
-import { isRelayed, noticeText, nobodyToAsk, relayContext, untrustedNotice } from './elrond/relay.js'
+import { brokenNotice, isRelayed, noticeText, nobodyToAsk, relayContext, untrustedNotice } from './elrond/relay.js'
 import { reportOutput } from './elrond/report.js'
 import { bandRows, debateRows, voiceNote } from './elrond/view.js'
 import type { Row } from './elrond/view.js'
@@ -274,8 +275,10 @@ let context: Promise<Context> | undefined
 /** C5: one entry per child of the root, a repository's scope or undefined for a plain folder. */
 const children = new Map<string, Promise<Scope | undefined>>()
 let auditQueue: Promise<void> = Promise.resolve()
-/** The folders whose audit `.gitignore` was looked at since the module loaded. */
+/** The folders whose audit `.gitignore` exists or was written since the module loaded: one that failed to be written is tried again at the next line. */
 const gitignoreChecked = new Set<string>()
+/** Audit lines that could not be written since the module loaded (the session's start): `/council status` says how many. */
+let auditFailures = 0
 const warned = new Set<string>()
 
 const wipePolicy = (): WipePolicy => ({ toolErrors: settings.toolErrorsAreWipes })
@@ -343,18 +346,34 @@ async function fileTrustOf($: EngineInterface, path: string, fileText: string, l
   return { path: key, hash, state: stored.ok && isTrusted(stored.record, key, hash) ? 'confirmed' : 'untrusted' }
 }
 
+/** Where nothing draws, one row the model reads (the only channel to the person). A refusal or a failure is logged, never raised. */
+async function appendRow($: EngineInterface, content: string): Promise<void> {
+  try {
+    if ((await $.session.surfaces()).length > 0) return
+    const result = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: content }] } })
+    if (result.deny !== undefined) $.ui.log(text('notice.appendFailed', { problem: result.deny }), { to: 'debug' })
+  } catch (error) {
+    $.ui.log(text('notice.appendFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
+  }
+}
+
 /** Once per session per file content, when its settings are held back: a line and a toast, and where nothing draws a row Claude relays. Counts only. */
 async function noticeUntrusted($: EngineInterface, file: RulesFile, counts: TrustCounts): Promise<void> {
   const key = `trust:${file.path}:${file.hash ?? ''}`
   if (warned.has(key)) return
   warnOnce($, key, text('notice.rulesUntrusted', { summary: countsText(counts) }), text('notice.rulesUntrustedShort'))
-  try {
-    if ((await $.session.surfaces()).length > 0) return
-    const result = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: untrustedNotice(counts) }] } })
-    if (result.deny !== undefined) $.ui.log(text('notice.appendFailed', { problem: result.deny }), { to: 'debug' })
-  } catch (error) {
-    $.ui.log(text('notice.appendFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
-  }
+  await appendRow($, untrustedNotice(counts))
+}
+
+/**
+ * Once per session per file content, when a rules file has errors: where nothing draws, a row Claude relays,
+ * with the number of errors and nothing from the file. (The line and the toast are `loadRules`'s.)
+ */
+async function noticeBroken($: EngineInterface, path: string, fileText: string | undefined, broken: BrokenFile, errors: number): Promise<void> {
+  const key = `broken:${await rulesKeyOf($, path)}:${fileText === undefined ? 'unreadable' : await hashOf(fileText)}`
+  if (warned.has(key)) return
+  warned.add(key)
+  await appendRow($, brokenNotice(broken.kind, errors))
 }
 
 /** Reads and validates the rules file of one directory; a broken one warns once under `key`. */
@@ -369,14 +388,16 @@ async function loadRules($: EngineInterface, dir: string, key: string): Promise<
       return undefined
     })
   }
-  let loaded = readProblem !== undefined ? { ...loadConfig(undefined), errors: [readProblem] } : loadConfig(fileText)
-  if (loaded.errors.length > 0) {
+  let loaded = readProblem !== undefined ? ignoredConfig([readProblem]) : loadConfig(fileText)
+  if (loaded.broken !== undefined) {
+    const isPartial = loaded.broken.kind === 'partial'
     warnOnce(
       $,
       key,
-      text('notice.configBroken', { path: OVERRIDES_PATH, errors: loaded.errors.join('; ') }),
-      text('notice.configBrokenShort'),
+      text(isPartial ? 'notice.configPartial' : 'notice.configBroken', { path: OVERRIDES_PATH, errors: loaded.errors.join('; ') }),
+      text(isPartial ? 'notice.configPartialShort' : 'notice.configBrokenShort'),
     )
+    await noticeBroken($, path, fileText, loaded.broken, loaded.errors.length)
   }
   if (fileText !== undefined && loaded.errors.length === 0) {
     const file = await fileTrustOf($, path, fileText, loaded)
@@ -561,7 +582,7 @@ async function scriptsOf(
       continue
     }
     const content = await $.fs.read(path).catch(() => undefined)
-    if (typeof content === 'string') scripts.push({ path, content: redact(content, ctx.patterns) })
+    if (typeof content === 'string') scripts.push({ path: redact(path, ctx.patterns), content: redact(content, ctx.patterns) })
     else unseen++
   }
   return { scripts, unseen }
@@ -730,7 +751,7 @@ async function sqlFilesOf($: EngineInterface, files: readonly { word: string; cw
       continue
     }
     const content = await $.fs.read(real).catch(() => undefined)
-    if (typeof content === 'string') pieces.push({ label: relativeTo(path, ctx.root) ?? path, text: redact(content, ctx.patterns) })
+    if (typeof content === 'string') pieces.push({ label: redact(relativeTo(path, ctx.root) ?? path, ctx.patterns), text: redact(content, ctx.patterns) })
     else unseen++
   }
   return { pieces, unseen }
@@ -752,24 +773,26 @@ async function briefOf(
   const { ruleReasons, projectReasons } = reasonsOf(classification.findings)
   const withProject = projectReasons.length > 0 ? { projectReasons } : {}
   const shown = callText(call, ctx.patterns)
+  // The names the call supplies go to the reviewer inside one fenced block, redacted like the rest (DESIGN §16).
+  const named = (value: string): string => redact(value, ctx.patterns)
   const latestPrompt = state.latestPrompt
   const withPreview = preview !== undefined ? { preview: preview.text, ...(preview.omitted !== undefined && { previewOmitted: preview.omitted }) } : {}
   const withNotes = notes.length > 0 ? { notes } : {}
   // Routing seats the diff reviewer on file tools only, which always have a diff.
   const file = seat.member === 'gandalf' || seat.profile === 'git' ? undefined : await fileDiffOf($, call, cwd, realPath, ctx)
   if (seat.member === 'legolas' && file !== undefined) {
-    return { member: 'legolas', context: { tool: call.tool, path: file.path, diff: file.diff, ruleReasons, ...withProject, latestPrompt, ...withPreview } }
+    return { member: 'legolas', context: { tool: named(call.tool), path: named(file.path), diff: file.diff, ruleReasons, ...withProject, latestPrompt, ...withPreview } }
   }
   if (seat.member === 'aragorn' && seat.profile === 'git') {
     return {
       member: 'aragorn',
       profile: 'git',
-      context: { tool: call.tool, call: shown, ruleReasons, ...withProject, latestPrompt, protectedBranches: ctx.loaded.compiled.config.protectedBranches, ...withPreview, ...withNotes },
+      context: { tool: named(call.tool), call: shown, ruleReasons, ...withProject, latestPrompt, protectedBranches: ctx.loaded.compiled.config.protectedBranches, ...withPreview, ...withNotes },
     }
   }
   if (seat.member === 'aragorn') {
     const found = sqlOf(classification)
-    const inline = found.inline.map(piece => ({ label: piece.label, text: redact(piece.text, ctx.patterns) }))
+    const inline = found.inline.map(piece => ({ label: named(piece.label), text: redact(piece.text, ctx.patterns) }))
     const read = await sqlFilesOf($, found.files, cwd, ctx)
     const sql = [...inline, ...read.pieces]
     const unseenSqlFiles = read.unseen + found.pastCap
@@ -777,11 +800,11 @@ async function briefOf(
     return {
       member: 'aragorn',
       profile: 'database',
-      context: { tool: call.tool, call: shown, ruleReasons, ...withProject, latestPrompt, sql, production, ...(unseenSqlFiles > 0 && { unseenSqlFiles }), ...(file !== undefined && { diff: file.diff }) },
+      context: { tool: named(call.tool), call: shown, ruleReasons, ...withProject, latestPrompt, sql, production, ...(unseenSqlFiles > 0 && { unseenSqlFiles }), ...(file !== undefined && { diff: file.diff }) },
     }
   }
   const { scripts, unseen } = await scriptsOf($, classification, cwd, state.written, ctx)
-  return { member: 'gandalf', context: { tool: call.tool, call: shown, ruleReasons, ...withProject, latestPrompt, scripts, ...(unseen > 0 && { unseenScripts: unseen }), ...withPreview, ...withNotes } }
+  return { member: 'gandalf', context: { tool: named(call.tool), call: shown, ruleReasons, ...withProject, latestPrompt, scripts, ...(unseen > 0 && { unseenScripts: unseen }), ...withPreview, ...withNotes } }
 }
 
 /**
@@ -1147,9 +1170,10 @@ async function appendAudit($: EngineInterface, record: AuditRecord, root: string
   const path = resolve(settings.auditLogPath, root)
   const folder = path.slice(0, path.lastIndexOf('/'))
   if (!gitignoreChecked.has(folder)) {
-    gitignoreChecked.add(folder)
     const ignore = `${folder}/.gitignore`
     if (isInside(path, root) && !(await $.fs.exists(ignore))) await $.fs.write(ignore, AUDIT_GITIGNORE)
+    // Only now: a write that failed above is looked at again with the next line.
+    gitignoreChecked.add(folder)
   }
   const line = auditLine(record, patterns)
   const current = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
@@ -1167,15 +1191,19 @@ async function appendAudit($: EngineInterface, record: AuditRecord, root: string
 /**
  * Queues one audit line for each of `dirs` (the call's repositories, else the
  * root: DESIGN §14.5). Writes run in order, but nobody waits for them: a
- * failed write is logged and a hanging one holds back only the lines queued
- * after it, never a decision or the call that follows.
+ * failed write is counted, the first of the session is said in the transcript
+ * and in a toast, and a hanging one holds back only the lines queued after it,
+ * never a decision or the call that follows.
  */
 function audit($: EngineInterface, record: AuditRecord, dirs: readonly string[], patterns: readonly SecretPattern[]): void {
   for (const dir of dirs) {
     auditQueue = auditQueue
       .then(() => appendAudit($, record, dir, patterns))
       .catch((error: unknown) => {
-        $.ui.log(text('notice.auditFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
+        const problem = error instanceof Error ? error.message : String(error)
+        auditFailures++
+        warnOnce($, 'audit-failed', text('notice.auditFailedFirst', { problem }), text('notice.auditFailedShort'))
+        $.ui.log(text('notice.auditFailed', { problem }), { to: 'debug' })
       })
   }
 }
@@ -1506,6 +1534,7 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
         gollumEnabled: settings.gollumEnabled,
         galadrielEnabled: settings.galadrielEnabled,
         tokenBudget: settings.tokenBudget,
+        auditFailures,
       }
       const scoped = await cwdContextOf($)
       return inMode(() => statusOutput({ ...input, trust: trustLines(scoped.loaded) }))
@@ -1530,7 +1559,7 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
     }
     case 'rules': {
       const ctx = await cwdContextOf($)
-      return inMode(() => rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors, trustLines(ctx.loaded)))
+      return inMode(() => rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors, trustLines(ctx.loaded), ctx.loaded.broken?.kind === 'partial'))
     }
     case 'test': {
       // Classification only: nothing the command names is run or read. The directories below the root
@@ -1559,6 +1588,7 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
               choice: modelChoice('council', ctx, state.models),
               checks: settings.gimliEnabled ? checksIn(ctx).map(check => check.command.name) : [],
               ignoredChecks: settings.gimliEnabled ? ignoredChecksOf(ctx.scopes.map(scope => scope.loaded)) : 0,
+              brokenChecks: settings.gimliEnabled ? brokenChecksOf(ctx.scopes.map(scope => scope.loaded)) : 0,
               isBranchAssumed: big.entry === 'merge-to-protected' && needsCurrentBranch(classification, ctx.loaded.compiled),
             }
       const typed = redact(command.command, ctx.patterns)
@@ -1580,7 +1610,7 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
       const ctx = await reloadContext($)
       return inMode(() => {
         const lines = [text('cmd.reloaded', { count: ctx.loaded.compiled.rules.length, origin: ctx.loaded.origin })]
-        if (ctx.loaded.errors.length > 0) lines.push(text('cmd.configErrors', { errors: ctx.loaded.errors.join('; ') }))
+        if (ctx.loaded.errors.length > 0) lines.push(errorsLine(ctx.loaded.errors, ctx.loaded.broken?.kind === 'partial'))
         return { title, lines }
       })
     }
@@ -2210,8 +2240,8 @@ export const register: Register = (on, options) => {
                   brief: {
                     member: 'legolas',
                     context: {
-                      tool: call.tool,
-                      path: read.label,
+                      tool: redact(call.tool, ctx.patterns),
+                      path: redact(read.label, ctx.patterns),
                       range: { kind: seat.range, call: callText(call, ctx.patterns) },
                       diff: { diff: read.diff, ...(read.omitted !== undefined && { omitted: read.omitted }), isNew: false },
                       ruleReasons,
@@ -2228,8 +2258,14 @@ export const register: Register = (on, options) => {
         sittings.push({ seat, who, brief: await briefOf($, asked, call, classification, cwd, realPath, state, preview, previewNotes, ctx) })
       }
       const checks = checksIn(ctx)
-      // Checks the project asked for whose rules file is not trusted are not run: in their place one that could not be started, so the council blocks.
-      const notRun = settings.gimliEnabled && ignoredChecksOf(ctx.scopes.map(scope => scope.loaded)) > 0 ? [notRunCheck(text('gimli.untrustedName', {}, 'plain'), text('gimli.untrusted', {}, 'plain'))] : []
+      // Checks the project asked for whose rules file is not trusted, or has errors, are not run: in their place one that could not be started, so the council blocks.
+      const loadedScopes = ctx.scopes.map(scope => scope.loaded)
+      const heldChecks = settings.gimliEnabled ? ignoredChecksOf(loadedScopes) : 0
+      const brokenChecks = settings.gimliEnabled ? brokenChecksOf(loadedScopes) : 0
+      const notRun = [
+        ...(heldChecks > brokenChecks ? [notRunCheck(text('gimli.untrustedName', {}, 'plain'), text('gimli.untrusted', {}, 'plain'))] : []),
+        ...(brokenChecks > 0 ? [notRunCheck(text('gimli.untrustedName', {}, 'plain'), text('gimli.broken', {}, 'plain'))] : []),
+      ]
       const debate = debateOf(
         'council',
         sittings.map(sitting => ({

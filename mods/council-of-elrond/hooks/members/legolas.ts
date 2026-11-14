@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, cut, fenced, label, noteLines, OMISSION_RULES, projectReasonLines, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, callNames, cut, fenced, noteLines, OMISSION_RULES, projectReasonLines, untrustedRules } from './shared.js'
 import type { Omitted, Shown } from './shared.js'
 import type { Call } from '../rules/classify.js'
 
@@ -306,10 +306,10 @@ export function legolasSystem(nonce: string): string {
 export function legolasPrompt(context: LegolasContext, nonce: string): string {
   const limits = LEGOLAS_LIMITS
   const sections = [
-    `Tool: ${context.tool}`,
+    callNames([['Tool', context.tool], [context.range !== undefined ? 'Changes' : 'File', context.path]], nonce),
     ...(context.range !== undefined
-      ? [`Command:\n${fenced('call', context.range.call, nonce, { limits: { lines: limits.rangeCallLines, chars: limits.rangeCallChars } })}`, `The changes the ${context.range.kind} would ${context.range.kind === "push" ? "send" : "bring in"}: ${label(context.path)}`]
-      : [`File: ${label(context.path)}${context.diff.isNew ? ' (new file)' : ''}`]),
+      ? [`Command:\n${fenced('call', context.range.call, nonce, { limits: { lines: limits.rangeCallLines, chars: limits.rangeCallChars } })}`, `The changes the ${context.range.kind} would ${context.range.kind === "push" ? "send" : "bring in"} are named in the call-names block.`]
+      : [`The file named in the call-names block ${context.diff.isNew ? 'does not exist yet: this change creates it.' : 'is the one this change is to.'}`]),
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
     ...projectReasonLines(context.projectReasons, nonce),
     ...(context.diff.note !== undefined ? [NOTES[context.diff.note]] : []),

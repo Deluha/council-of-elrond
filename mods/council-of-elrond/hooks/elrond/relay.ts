@@ -42,6 +42,10 @@ export const noticeText = (): string => text('notice.noSurface', { chatRoute: te
 /** Where nothing draws: that a project rules file waits for the person's confirmation. Counts only, never a word from the file. */
 export const untrustedNotice = (counts: TrustCounts): string => text('relay.rulesUntrusted', { summary: countsText(counts, 'plain') }, 'plain')
 
+/** Where nothing draws: that a project rules file has errors, and how far it applies. The count only, never a word from the file. */
+export const brokenNotice = (kind: 'partial' | 'ignored', errors: number): string =>
+  text(kind === 'partial' ? 'relay.rulesPartial' : 'relay.rulesIgnored', { n: errors }, 'plain')
+
 /** The nobody-to-ask refusal: what was refused, what is behind it (names only) and the way forward. */
 export type NobodyToAsk = {
   /** Why the call came to the user, a plain string. */

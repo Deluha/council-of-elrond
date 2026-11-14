@@ -118,6 +118,15 @@ describe('failed attempts and lockout', () => {
     expect(w.ran).toHaveLength(4)
   })
 
+  test('a command that ran and failed with a denial wording in its own output is a failed attempt, so it cannot escape the lockout (DESIGN §16)', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    w.toolResult = { result: 'failed', isError: true, text: 'Exit code 1\nPermission to read /work/.env has been denied.' }
+    for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+    expect((await auditLines(w))[0]).toMatchObject({ outcome: 'error' })
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('locked out')
+    expect(w.ran).toHaveLength(3)
+  })
+
   test('a dismissed question is a failed attempt', async ($, on) => {
     world(on, { answer: 'dismiss' })
     for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Bash', command: 'sudo ls' })

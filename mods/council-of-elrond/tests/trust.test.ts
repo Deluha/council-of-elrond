@@ -229,8 +229,9 @@ describe('loadConfig with the file held back', () => {
     expect(classify(bashCall('terraform apply'), loadConfig(text).compiled, CONTEXT)).toMatchObject({ tier: 'ask', decided: { ruleId: 'ask-terraform' } })
   })
 
-  test('an invalid file is ignored whole, trusted or not', () => {
+  test('a file with errors is never confirmed, trusted or not; one that cannot be read is ignored whole', () => {
     expect(loadConfig('{"schemaVersion": 1, "nope": 1}', SHIPPED, false).errors).not.toEqual([])
+    expect(loadConfig('{"schemaVersion": 1, "nope": 1}', SHIPPED, true).broken).toEqual({ kind: 'partial', checks: 0 })
     expect(loadConfig('not json', SHIPPED, false).origin).toBe('shipped')
   })
 })
@@ -312,11 +313,11 @@ describe('the subcommands', () => {
     for (const args of ['trust nope', 'trust 0123abc', 'trust 0123abcd more', 'untrust now']) expect(parseCouncil(args), args).toMatchObject({ kind: 'usage', key: 'trust.usage' })
   })
 
-  test('trust, listing or confirming, needs a person; untrust only tightens', () => {
+  test('trust, listing or confirming, and reload need a person; untrust only tightens', () => {
     expect(needsPerson(parseCouncil('trust'))).toBe(true)
     expect(needsPerson(parseCouncil('trust 0123abcd'))).toBe(true)
     expect(needsPerson(parseCouncil('untrust'))).toBe(false)
-    expect(needsPerson(parseCouncil('reload'))).toBe(false)
+    expect(needsPerson(parseCouncil('reload'))).toBe(true)
   })
 })
 
@@ -1253,8 +1254,8 @@ describe('the names a rules file gives are short and plain (DESIGN §16)', () =>
         expect(errors.join(' '), `${name}: ${JSON.stringify(id)}`).toContain(`${field}: at most 64 characters`)
       }
     }
-    // The whole file is ignored, as for any other validation error.
-    expect(loadConfig(JSON.stringify(rule('two words'))).origin).toBe('shipped')
+    // The rule with the bad name is dropped; the file is then partly applied, as for any other validation error (DESIGN §16).
+    expect(loadConfig(JSON.stringify(rule('two words'))).origin).toBe('shipped+project (partly applied)')
   })
 
   test('the existing rules still stand: empty is required, a shipped id and a duplicate are still refused', () => {

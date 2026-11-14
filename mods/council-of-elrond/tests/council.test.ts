@@ -10,7 +10,7 @@ import { statusOf, tailOf } from '../hooks/members/gimli.js'
 import type { GimliRun } from '../hooks/members/gimli.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
-import { APPROVE, auditLines, BLOCK, CONTEXT, council, denyOf, KEEP_BLOCKED, REVISE, ROOT, SHIPPED_COMPILED, verdict, world } from './fixtures.js'
+import { APPROVE, auditLines, BLOCK, CONTEXT, council, denyOf, KEEP_BLOCKED, namesOf, REVISE, ROOT, SHIPPED_COMPILED, verdict, world } from './fixtures.js'
 import type { World } from './fixtures.js'
 
 const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
@@ -186,7 +186,7 @@ describe('the full council in the pipeline', () => {
     ])
     const systems = w.modelRequests.map(request => String(request.system))
     expect(systems[1]).toContain('the commits a git push would send')
-    expect(String(w.modelRequests[1]?.prompt)).toContain('The changes the push would send: origin/feature..feature')
+    expect(namesOf(String(w.modelRequests[1]?.prompt))).toContain('Changes: origin/feature..feature')
     expect(w.processes).toContainEqual(['git', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', 'origin/feature..feature', '--'])
     expect((await auditLines(w))[0]).toMatchObject({
       member: 'council',
@@ -218,7 +218,7 @@ describe('the full council in the pipeline', () => {
     expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })
     expect(w.processes.filter(argv => argv[1] === 'diff').map(argv => argv.at(-2))).toEqual(['origin/feature..feature', 'origin/HEAD...feature'])
     const prompt = String(w.modelRequests.find(request => String(request.system).includes('the commits a git push would send'))?.prompt)
-    expect(prompt).toContain('The changes the push would send: origin/HEAD...feature')
+    expect(namesOf(prompt)).toContain('Changes: origin/HEAD...feature')
     expect(prompt).toContain('+export const started = true')
     expect((await auditLines(w))[0]).toMatchObject({ council: { voices: [{ member: 'gandalf' }, { member: 'legolas', verdict: 'approve' }, { member: 'aragorn' }] } })
     expect(w.processes.filter(argv => argv[1] === 'push')).toEqual([])

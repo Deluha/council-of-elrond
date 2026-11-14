@@ -512,6 +512,12 @@ export const auditLines = async (w: World, path = `${ROOT}/.claude/council-of-el
     .map(line => JSON.parse(line) as Record<string, unknown>)
 }
 
+/** What a reviewer's prompt holds in its `call-names` block (the names the call supplies), or undefined when it has none. */
+export const namesOf = (prompt: string): string | undefined => /kind="call-names">\n([\s\S]*?)\n<\/data-/.exec(prompt)?.[1]
+
+/** A reviewer's prompt without any data block: what stands in the prompt's own voice. */
+export const outsideData = (prompt: string): string => prompt.replace(/<data-([^ >]+) kind="[^"]*">[\s\S]*?<\/data-\1>/g, '')
+
 export const denyOf = (result: unknown): string => {
   const deny = (result as { deny?: unknown }).deny
   return typeof deny === 'string' ? deny : ''

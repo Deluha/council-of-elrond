@@ -157,8 +157,11 @@ export type RulesFile = {
 }
 
 /** The project checks of the files whose settings are being held back: they are not run, and the council says so. */
-export const ignoredChecksOf = (loaded: readonly { needsTrust?: { isIgnored: boolean; counts: TrustCounts } | undefined }[]): number =>
-  loaded.reduce((sum, one) => sum + (one.needsTrust?.isIgnored === true ? one.needsTrust.counts.checks : 0), 0)
+export const ignoredChecksOf = (loaded: readonly { needsTrust?: { isIgnored: boolean; counts: TrustCounts } | undefined; broken?: { checks: number } | undefined }[]): number =>
+  loaded.reduce((sum, one) => sum + (one.needsTrust?.isIgnored === true ? one.needsTrust.counts.checks : 0) + (one.broken?.checks ?? 0), 0)
+
+/** The part of those held back because the file has errors (not because it waits for confirmation). */
+export const brokenChecksOf = (loaded: readonly { broken?: { checks: number } | undefined }[]): number => loaded.reduce((sum, one) => sum + (one.broken?.checks ?? 0), 0)
 
 /** Whether a file is held back: its needs-trust settings are ignored. */
 export const isHeldBack = (loaded: { file?: RulesFile | undefined }): boolean => loaded.file?.state === 'untrusted'

@@ -1,4 +1,3 @@
-import type { GimliCommand } from '../config/types.js'
 
 /**
  * Gimli: the project's own checks (tests, lint, typecheck), run for the full
@@ -71,9 +70,6 @@ export function statusOf(ended: 'timeout' | 'stopped' | undefined, exit: { code:
 
 /** A run that blocks: it failed, timed out, or could not start. */
 export const isGimliBlock = (run: GimliRun): boolean => run.status === 'failed' || run.status === 'timed-out' || run.status === 'error'
-
-/** The longest any configured command may run: with the model deadline, how long a council can take. */
-export const longestTimeout = (commands: readonly GimliCommand[]): number => commands.reduce((most, command) => Math.max(most, command.timeoutMs), 0)
 
 /**
  * What stands in for the project's checks while their rules file is not

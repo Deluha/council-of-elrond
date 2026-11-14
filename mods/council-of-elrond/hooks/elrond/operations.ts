@@ -378,6 +378,18 @@ const USER_REFUSAL: readonly RegExp[] = [
 /**
  * Claude Code's words when its permission check stops a call with nobody
  * asked: no one to ask (`-p`), or a deny rule. The first is verified live.
+ *
+ * A denial is the engine's whole message, so its words are the start of the
+ * text; a command that ran and failed has its own output after an exit-code
+ * line or its earlier output, and may print the same words (DESIGN §16). The
+ * wordings recorded as opening the text are anchored there. The others are
+ * recorded with something before the phrase (a subject: "rm in '<path>' needs
+ * approval", "Bash needs approval (...)", "The <name> connector requires
+ * approval", a first sentence: "Permission for this tool use was denied. It
+ * requires approval ...", "<who> requested permissions to ... but you haven't
+ * granted it yet"), so no start can be named for them; they are kept as they
+ * are, anywhere in the text, until the maintainer decides how much may come
+ * first.
  */
 const AUTOMATIC_DENIAL: readonly RegExp[] = [
   /needs? approval/i,
@@ -385,7 +397,8 @@ const AUTOMATIC_DENIAL: readonly RegExp[] = [
   /\brequires? approval\b/i,
   /requested permissions? to (use|write|edit|read|run)/i,
   /haven'?t granted it yet/i,
-  /permission to (use|edit|read) .+ has been denied/i,
+  // A deny rule on a tool, a file or a command: the sentence opens the text.
+  /^\s*permission to (use|edit|read) .+ has been denied/i,
 ]
 
 export const isUserRefusal = (text: string): boolean => USER_REFUSAL.some(re => re.test(text))

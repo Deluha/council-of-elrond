@@ -43,7 +43,7 @@ describe('config', () => {
     expect(loaded.errors).toEqual(['schemaVersion: 2 is not a version this build reads (1)'])
   })
 
-  test('errors are reported by field, and any error ignores the whole file', () => {
+  test('errors are reported by field, and a file with any error is only partly applied (DESIGN §16)', () => {
     const loaded = loadConfig(
       JSON.stringify({
         schemaVersion: 1,
@@ -58,7 +58,8 @@ describe('config', () => {
         models: { gimli: 'opus', gandalf: '' },
       }),
     )
-    expect(loaded.origin).toBe('shipped')
+    expect(loaded.origin).toBe('shipped+project (partly applied)')
+    expect(loaded.broken).toEqual({ kind: 'partial', checks: 0 })
     expect(loaded.errors).toEqual(
       expect.arrayContaining([
         'rulez: unknown field',

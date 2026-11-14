@@ -10,6 +10,7 @@ import {
   FAKE_AWS_KEY,
   FAKE_GITHUB_TOKEN,
   KEEP_BLOCKED,
+  namesOf,
   REVISE,
   ROOT,
   settled,
@@ -105,7 +106,8 @@ describe('review by Gandalf', () => {
     w.files.set(`${ROOT}/deploy.sh`, 'rm -rf build\n')
     await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh' })
     const prompt = String(w.modelRequests[1]?.prompt)
-    expect(prompt).toContain('Script it runs, written in this session (/work/deploy.sh)')
+    expect(namesOf(prompt)).toContain('Script 1: /work/deploy.sh')
+    expect(prompt).toContain('Script 1 it runs, written in this session')
     expect(prompt).toContain('rm -rf build')
     expect(JSON.stringify(w.modelRequests)).not.toContain(FAKE_GITHUB_TOKEN)
   })

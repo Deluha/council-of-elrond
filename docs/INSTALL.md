@@ -179,7 +179,7 @@ to you instead when spent. Details in the manual under
 
 Read [CHANGELOG.md](../CHANGELOG.md) before updating across a minor version: before 1.0.0 a minor
 bump may change shipped rules or defaults. Your `rules.json` carries a `schemaVersion`; a version
-the mod doesn't know is treated as a broken file (ignored whole, shipped rules enforce, errors
+the mod doesn't know is treated as an unreadable file (ignored whole, shipped rules enforce, errors
 listed in the transcript), never as a reason to drop the gate.
 
 ## Removing it
@@ -209,8 +209,13 @@ shows which.
 out. That is the fail-closed path working. Raise "Review deadline" in `/config`, or pick a faster
 model with `/council model <member> sonnet`.
 
-**The rules file is ignored.** The transcript lists the errors by field; `/council rules` shows what
-is in force. Fix the file and `/council reload`. Common causes: the file is not confirmed, or was
+**The rules file is ignored, or only partly applied.** The transcript lists the errors by field;
+`/council status` and `/council rules` say "ignored: not readable" (not JSON, not an object, or
+another `schemaVersion`: the shipped rules stand) or "partly applied: N error(s)" (a file of this
+version with errors: its block, ask and review rules, protected paths and the like still apply and
+only add to the shipped rules, and everything else in it, its project checks included, is ignored
+until it is fixed; a big operation then blocks, "not run: the project rules file has errors"). Fix
+the file and `/council reload` (typed by you: it is refused from a plugin or the SDK). Common causes: the file is not confirmed, or was
 edited since it was confirmed (`/council rules` and `/council` say "not trusted" and how many settings
 are ignored; run `/council trust` and type the code); a missing `schemaVersion: 1`, a rule
 without an `id`, a regex with the `g` or `y` flag.

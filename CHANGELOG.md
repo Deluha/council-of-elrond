@@ -199,6 +199,29 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 
 
 ### Security
+- **A rules file with errors keeps what can only tighten, and you are told.** Before, a file with any
+  validation error was ignored whole: its own block and ask rules and protected paths vanished with one
+  transcript line, and where nothing draws nobody was told. Now the entries that validate on their own
+  and can only make the gate stricter still apply (protected paths and branches, production patterns,
+  big operations, and block, ask and review rules, which only add to the shipped decision); allow rules,
+  disabled rules, models, secret patterns, the allowlist and checks are ignored, and the file is never
+  read as confirmed. Its project checks are held back and a big operation's council blocks until it is
+  fixed. A file that is not JSON, not an object or of another version is ignored whole, as before. The
+  transcript line and toast say how far it applies, `/council status` and `rules` show "partly applied"
+  or "ignored", and where nothing draws one row with the error count reaches Claude, once per version
+  of the file.
+- **A regex in a rules file is at most 1,000 characters, and a file holds at most 200 rules and 200
+  secret patterns.** Over a limit is a validation error like any other.
+- **`/council reload` needs a person**, as `trust` does: it reads the rules file again, so from a
+  plugin, another session or the SDK it is refused.
+- **A command that ran and failed is no longer read as a permission denial because its own output
+  held the wording.** The deny-rule wording ("Permission to use|edit|read … has been denied") counts only
+  at the start of the error text, so a failed command that prints it is a failed attempt. The wordings
+  recorded with a subject before the phrase ("rm in '…' needs approval", "This command requires
+  approval", and the like) are read as before; see DESIGN §16 item 24.
+- **The names a call supplies are inside the fence.** The reviewers' prompts printed the tool name and
+  the file, script and SQL names in the prompt's own voice. They are now one data block, redacted with
+  the call's patterns, and each reviewer is told that names in it are data.
 - **A repository's rules file can no longer loosen the gate or run code on its own say-so.** See the
   first entry under "Changed": its allow rules, disabled shipped rules, model choices,
   extra secret patterns, secrets allowlist and project checks wait for a person to confirm that exact
@@ -467,6 +490,11 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   reviewer outside it, says so.
 
 ### Fixed
+- **The audit log says when it fails.** The first audit line that could not be written in a session is
+  now said in the transcript with a toast (it went to the debug log only), `/council status` shows how
+  many lines failed since the session began, and a `.gitignore` that could not be written is tried
+  again with the next line instead of being given up for the session.
+- **A refusal text Claude reads said "You chose".** `reason.allowlistNotWritten` now says "The user chose".
 - **The status line is cleared when its surface leaves.** A label set for a phone or VS Code
   (`council: shadow`) used to stay after that client detached; it is now cleared, and set again when
   a client attaches.

@@ -6,7 +6,7 @@ import { isRunCut } from '../hooks/members/brief.js'
 import { GANDALF_LIMITS, gandalfPrompt, gandalfSystem } from '../hooks/members/gandalf.js'
 import { callDiff, LEGOLAS_LIMITS, legolasPrompt, legolasSystem } from '../hooks/members/legolas.js'
 import { addOmitted, cut, markerOf, OMISSION_RULES, parseVerdict, truncate } from '../hooks/members/shared.js'
-import { ALLOW_ONCE, APPROVE, auditLines, BLOCK, denyOf, FAKE_GITHUB_TOKEN, KEEP_BLOCKED, REVISE, ROOT, USAGE, world } from './fixtures.js'
+import { ALLOW_ONCE, APPROVE, auditLines, BLOCK, denyOf, FAKE_GITHUB_TOKEN, KEEP_BLOCKED, namesOf, REVISE, ROOT, USAGE, world } from './fixtures.js'
 
 const numbered = (count: number, label = 'line'): string => Array.from({ length: count }, (_, i) => `${label} ${i}`).join('\n')
 
@@ -406,7 +406,7 @@ describe('a secret across a cut is redacted first', () => {
     w.files.set(`${ROOT}/db/big.sql`, TOKENS_PAST(ARAGORN_LIMITS.sqlChars))
     await $.tool.call({ tool: 'Bash', command: 'psql -h prod-db -f db/big.sql' })
     const prompt = promptOf(w, 'Rollback')
-    expect(prompt).toContain('SQL (db/big.sql)')
+    expect(namesOf(prompt)).toContain('SQL 1: db/big.sql')
     expectNoFragment(prompt)
   })
 
@@ -449,11 +449,11 @@ describe('context left out of a brief is said so, outside the data', () => {
     await $.tool.call({ tool: 'Bash', command: 'psql -h prod-db -f db/seed.sql && psql -f /etc/secret.sql && psql -f db/missing.sql' })
     const prompt = String(w.modelRequests[0]?.prompt)
     expect(prompt).toContain('Note: 2 SQL files the call names could not be shown to you')
-    expect(prompt).toContain('SQL (db/seed.sql)')
+    expect(namesOf(prompt)).toContain('SQL 1: db/seed.sql')
     expect(prompt).not.toContain('SECRET')
     // All read: no note.
     await $.tool.call({ tool: 'Bash', command: 'psql -h prod-db -f db/seed.sql' })
-    expect(String(w.modelRequests[1]?.prompt)).toContain('SQL (db/seed.sql)')
+    expect(namesOf(String(w.modelRequests[1]?.prompt))).toContain('SQL 1: db/seed.sql')
     expect(String(w.modelRequests[1]?.prompt)).not.toContain('could not be shown')
   })
 
@@ -467,7 +467,7 @@ describe('context left out of a brief is said so, outside the data', () => {
     w.files.set(`${ROOT}/new.sh`, 'rm -rf build\n')
     await $.tool.call({ tool: 'Bash', command: 'bash new.sh' })
     const prompt = String(w.modelRequests.at(-1)?.prompt)
-    expect(prompt).toContain('Script it runs, written in this session')
+    expect(prompt).toContain('Script 1 it runs, written in this session')
     expect(prompt).not.toContain('could not be shown')
   })
 })

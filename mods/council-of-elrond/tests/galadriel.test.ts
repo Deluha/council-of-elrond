@@ -4,7 +4,7 @@ import { rangeOf } from '../hooks/elrond/council.js'
 import { broadPushNote, formatPreview, MAX_INSPECTIONS, planPreview, rangeDiffInspections, stalePushNote, unseenPushNote } from '../hooks/members/galadriel.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
-import { APPROVE, auditLines, CONTEXT, FAKE_GITHUB_TOKEN, KEEP_BLOCKED, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
+import { APPROVE, auditLines, CONTEXT, FAKE_GITHUB_TOKEN, KEEP_BLOCKED, namesOf, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
 
 const plan = (call: Call) => planPreview(call, classify(call, SHIPPED_COMPILED, CONTEXT), CONTEXT)
 const bash = (command: string) => plan({ tool: 'Bash', input: { command } })
@@ -393,7 +393,7 @@ describe('in the pipeline', () => {
     await $.tool.call({ tool: 'Bash', command: 'git push origin a b' })
     expect(w.processes.filter(argv => argv[1] === 'diff').map(argv => argv.at(-2))).toEqual(['origin/a..a', 'origin/b..b'])
     const prompt = String(w.modelRequests.find(request => String(request.system).includes('the commits a git push would send'))?.prompt)
-    expect(prompt).toContain('The changes the push would send: origin/a..a, origin/b..b')
+    expect(namesOf(prompt)).toContain('Changes: origin/a..a, origin/b..b')
     expect(prompt).toContain('# origin/a..a\n+changes of origin/a..a')
     expect(prompt).toContain('# origin/b..b\n+changes of origin/b..b')
     expect(prompt).not.toContain('Note: ')
@@ -407,7 +407,7 @@ describe('in the pipeline', () => {
     }
     await $.tool.call({ tool: 'Bash', command: 'git push origin a b' })
     const prompt = String(w.modelRequests.find(request => String(request.system).includes('the commits a git push would send'))?.prompt)
-    expect(prompt).toContain('The changes the push would send: origin/a..a')
+    expect(namesOf(prompt)).toContain('Changes: origin/a..a')
     expect(prompt).toContain('+only a')
     expect(prompt).toContain(`Note: ${unseenPushNote(1)}`)
   })

@@ -41,7 +41,7 @@ Each brief below has a checkbox. The pull request that finishes a brief ticks it
 the milestone's last, updates this table.
 
 **Done outside the original briefs:** the hardening pull request that followed the independent
-review. Every change in it tightens; the decisions are in DESIGN.md §15, by group:
+review. Every change in it tightens; the decisions are in DESIGN.md §15 and §16, by group:
 
 - the call fingerprint (item 8);
 - the classifier's shell forms and the mod's self-protection (items 1 to 7);
@@ -49,7 +49,8 @@ review. Every change in it tightens; the decisions are in DESIGN.md §15, by gro
 - redaction (item 16);
 - force pushes and push previews (items 17 to 19 and 21);
 - retry counting on the parts of a compound command (item 20);
-- trust in a repository's rules file (item 22, which is M1.3).
+- trust in a repository's rules file (item 22, which is M1.3);
+- hardening round 2, the briefs of "Round 2" (DESIGN.md §16, items 1 to 27).
 
 Findings and classes:
 [docs/REVIEW-2026-11-INDEPENDENT.md](../../docs/REVIEW-2026-11-INDEPENDENT.md).
@@ -157,23 +158,29 @@ recommendations in advance; every code change in it tightens.
 
 **Briefs**
 
-| Id | What | Gate |
-| :- | :- | :- |
-| R2-H1 | Wrapper option clusters, and wrappers that change directory or root | tightens |
-| R2-H2 | Block-rule misses in the delete and raw-device checks | tightens |
-| R2-R1 | Approvals bound to the working directory, and a full-council approve never cached | tightens |
-| R2-H3 | Forms that evade an existing shipped rule | tightens |
-| R2-R4 | A broken rules file keeps its tightening entries, and `/council reload` needs a person | tightens |
-| R2-U1 | The allow-rule offer says what it allows and is not made for globs or big operations | tightens |
-| R2-R2 | Project redaction patterns applied to the operation key, audit line, refusal and dialog | tightens |
-| R2-R3 | The secrets scan reads descriptions, paths and other tools' inputs, and a text too long to scan in full is not passed silently | tightens |
-| R2-O1 | A failed command is not read as a permission denial, the verb counter is bounded, and a force push keeps its own retry count | tightens |
-| R2-B2 | An unconfirmed file's review rules apply raise-only | tightens |
-| R2-L1 | The audit log says when a write fails | neutral |
-| R2-K1 | Call-supplied names inside the fenced block | tightens |
-| R2-K2 | Strings, dead code and the bypass-and-secrets wording in the manual | neutral |
-| R2-T1 | Mounted-tree tests for the trust listing and the dialog, and a written terminal check | neutral |
-| R2-V2 | The scripted probe suite (this is M0.4) | neutral |
+| Id | What | Gate | Done |
+| :- | :- | :- | :- |
+| R2-H1 | Wrapper option clusters, and wrappers that change directory or root | tightens | Done |
+| R2-H2 | Block-rule misses in the delete and raw-device checks | tightens | Done |
+| R2-R1 | Approvals bound to the working directory, and a full-council approve never cached | tightens | Done |
+| R2-H3 | Forms that evade an existing shipped rule | tightens | Done |
+| R2-R4 | A broken rules file keeps its tightening entries, and `/council reload` needs a person | tightens | Done |
+| R2-U1 | The allow-rule offer says what it allows and is not made for globs or big operations | tightens | Done |
+| R2-R2 | Project redaction patterns applied to the operation key, audit line, refusal and dialog | tightens | Done |
+| R2-R3 | The secrets scan reads descriptions, paths and other tools' inputs, and a text too long to scan in full is not passed silently | tightens | Done |
+| R2-O1 | A failed command is not read as a permission denial, the verb counter is bounded, and a force push keeps its own retry count | tightens | Done |
+| R2-B2 | An unconfirmed file's review rules apply raise-only | tightens | Done |
+| R2-L1 | The audit log says when a write fails | neutral | Done |
+| R2-K1 | Call-supplied names inside the fenced block | tightens | Done |
+| R2-K2 | Strings, dead code and the bypass-and-secrets wording in the manual | neutral | Done |
+| R2-T1 | Mounted-tree tests for the trust listing and the dialog, and a written terminal check | neutral | Done |
+| R2-V2 | The scripted probe suite (this is M0.4) | neutral | Open (this is M0.4, not done) |
+| R2-F1 | The protected-path regression fix: protected paths on every word, wrapper and runner options read in full (DESIGN §16 item 9) | tightens | Done |
+| R2-F2 | The complete trust listing and the session-bound code (DESIGN §16 item 1) | tightens | Done |
+| R2-F3 | Unconfirmed rules only add to the shipped decision (DESIGN §16 item 10) | tightens | Done |
+| R2-F4 | The plugin folders are write-protected only, not read-protected (DESIGN §16 item 11) | loosens, approved by the maintainer | Done |
+| R2-F5 | Cut scripts and long compounds are held (DESIGN §16 items 6 and 7) | tightens | Done |
+| R2-F6 | The redaction noise undone (DESIGN §16 item 18) | loosens, approved by the maintainer | Done |
 
 **Left open**, for the lockout brief (M4.6) or M2's data:
 

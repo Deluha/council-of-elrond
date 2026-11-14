@@ -296,8 +296,24 @@ Put project overrides in `.claude/council-of-elrond/rules.json`:
 - **Some settings wait for you.** Until you confirm the file with `/council trust`, its allow rules, disabled rules, models, patterns, allowlist and checks are ignored ([Trusting a project's rules file](#trusting-a-projects-rules-file)).
 - **A project rule's reason is the project's text.** Reviewers see it inside a data block under a lead-in that says so, not after "Flagged because", and the dialog shows it after the `|` bar. Claude's refusal and the audit line introduce it as "The project's rules file says" and never as the council's own sentence. Everywhere it is on one line of at most 200 characters, with control, invisible and direction-changing characters removed.
 
-**A broken file is ignored whole.** The shipped rules stay in force, and the errors are listed by
-field in the transcript.
+**A file with errors is partly applied.** If the file is JSON of this schema version but has
+errors (an unknown key, a rule that does not validate, a regex over 1,000 characters), what can only
+make the gate stricter still applies: its `protectedPaths`, `protectedBranches`, valid
+`productionPatterns` and `bigOperations`, and its valid `block`, `ask` and `review` rules, which
+only add to what the shipped rules decide, as for a file nobody has confirmed. Everything else in it
+is ignored, whatever the file's trust and the `trustProjectRules` option: allow rules, `disableRules`,
+`models`, `gollum.patterns`, `gollum.allowlist`, `gimli.commands`, and every entry that has an error.
+A broken file is never read as confirmed, and `/council trust` has nothing to confirm in it. Its
+project checks are not run: a big operation then blocks, with "not run: the project rules file has
+errors", until the file is fixed (fix it, then `/council reload`). A file that is not JSON, not an
+object or of another `schemaVersion` is ignored whole and the shipped rules stay in force. Either way you are
+told: the errors are listed by field in the transcript with a toast, `/council status` and
+`/council rules` say "partly applied: N error(s)" or "ignored: not readable", and where nothing
+draws, Claude is given one row with the number of errors (nothing from the file) to pass on to you,
+once per version of the file.
+
+**Limits.** A regex in a rules file is at most 1,000 characters, and a file holds at most 200 rules
+and 200 secret patterns. Over a limit is an error like any other.
 
 The overrides file is itself a protected path, so Claude can't edit it without asking you.
 
@@ -538,7 +554,7 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 
 | Command | What it does |
 | :- | :- |
-| `/council` | Status: mode, each member with its state, model and verdict counts, the full council and the project checks, failed attempts since your last prompt, tokens spent, median review time. |
+| `/council` | Status: mode, each member with its state, model and verdict counts, the full council and the project checks, failed attempts since your last prompt, tokens spent, median review time, how the project rules file stands (confirmed, waiting, partly applied or ignored), and, once any failed, how many audit lines could not be written. |
 | `/council off`, `/council on` | Bypass for this session: gated calls pass unreviewed and are logged. Never persisted. The label `council: bypass` (`council: Leeroy mode` when themed) shows by the prompt. |
 | `/council shadow on`, `/council shadow off` | Shadow mode for this session, over the `/config` setting. |
 | `/council log [n]` | The last *n* gated calls (default 10) from the audit log. |
@@ -546,16 +562,16 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | `/council test "<command>"` | Which tier, rule, reviewer (and profile, and why it fell back to Gandalf if it did) and operation key a shell command would get. For a big operation it shows the full council's seats, model and checks. Runs nothing, so a merge is assumed to land on a protected branch and a force push of the current branch is asked about (its branch is not read). |
 | `/council model [<member> <model> [--save]]` | Lists each slot's model and where it came from, or switches one for this session (`default` clears the switch). `--save` also writes the `/config` row when the model is one of its picker values. |
 | `/council trust`, `/council trust <code>`, `/council untrust` | Lists everything a rules file with settings that wait would enable, with its code (or why it cannot be confirmed from the session); confirms the file whose code you type, if it was listed in this session and is unchanged; removes the confirmation. See [Trusting a project's rules file](#trusting-a-projects-rules-file). |
-| `/council reload` | Reads `rules.json` again (every repository's, when the session root holds several). It never trusts a file. |
+| `/council reload` | Reads `rules.json` again (every repository's, when the session root holds several). It never trusts a file. Only a person's own command runs it. |
 | `/council report` | A summary of the audit log, rotated files included (see below). |
 | `/council debate` | Opens the [debate pane](#debate-pane-and-council-check) at any width (where nothing draws, prints its rows as transcript lines). |
 
-**`off`, `shadow on`, `model` and `trust` only run when a person types them.** They loosen the gate (bypass,
-reviewers that never refuse, a different reviewing model, a project file's settings), so a command that arrives from a plugin,
+**`off`, `shadow on`, `model`, `trust` and `reload` only run when a person types them.** They loosen the gate (bypass,
+reviewers that never refuse, a different reviewing model, a project file's settings, or reading a changed rules file), so a command that arrives from a plugin,
 another Claude session or a scheduled prompt is refused with one line and changes nothing. Typing
 them at the prompt (the cloud web client included) or through the Remote Control bridge works.
-`claude -p` and the SDK are not a person, so those four are refused there; set them in `/config` or
-the plugin's options instead. `on`, `shadow off`, the `model` listing, `reload` and the rest answer
+`claude -p` and the SDK are not a person, so those five are refused there; set them in `/config` or
+the plugin's options instead. `on`, `shadow off`, the `model` listing and the rest answer
 from any origin (`untrust` too: it only tightens).
 
 ### `/council report`
@@ -819,9 +835,11 @@ tells apart a call you refused at Claude Code's permission prompt (`refused-by-u
 check denied with nobody asked (`denied-by-permission`), and one that ran and errored (`error`). It never holds file contents, diffs or secrets: the
 call itself appears only as a hash. A `.gitignore` beside it keeps it out of git. With several repositories under one root, the line goes to each repository the call touched.
 
-Lines are written in order after the call, and nothing waits for them: a failed write is noted in
-the debug log, and one that never returns holds back only the lines queued after it, never a
-decision or a later call. `/council log` and `/council report` may not show a line still waiting.
+Lines are written in order after the call, and nothing waits for them: a failed write never changes a
+decision. The first one that fails in a session is said once in the transcript, with a toast;
+`/council status` then shows how many lines could not be written since the session began, and every one
+goes to the debug log. A `.gitignore` that could not be written is tried again with the next line. One
+write that never returns holds back only the lines queued after it, never a decision or a later call. `/council log` and `/council report` may not show a line still waiting.
 The log is rotated by size (in bytes) into `.1` and `.2`. Two Claude Code sessions in one project share the
 file with no lock between them, so their lines can interleave or one can overwrite the other's;
 `/council report` skips any line it cannot read.

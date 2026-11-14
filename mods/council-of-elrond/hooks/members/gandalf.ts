@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, fenced, label, noteLines, OMISSION_RULES, projectReasonLines, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, callNames, fenced, noteLines, OMISSION_RULES, projectReasonLines, untrustedRules } from './shared.js'
 import type { Omitted } from './shared.js'
 
 /**
@@ -62,7 +62,7 @@ const unseenScriptsNote = (count: number): string =>
 export function gandalfPrompt(context: GandalfContext, nonce: string): string {
   const limits = GANDALF_LIMITS
   const sections = [
-    `Tool: ${context.tool}`,
+    callNames([['Tool', context.tool], ...context.scripts.map((script, index) => [`Script ${index + 1}`, script.path] as const)], nonce),
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
     ...projectReasonLines(context.projectReasons, nonce),
     'Proposed call:',
@@ -72,8 +72,8 @@ export function gandalfPrompt(context: GandalfContext, nonce: string): string {
       : 'No preview is available.',
     ...noteLines(context.notes),
     ...context.scripts.map(
-      script =>
-        `Script it runs, written in this session (${label(script.path)}):\n${fenced('script', script.content, nonce, { limits: { lines: limits.scriptLines, chars: limits.scriptChars } })}`,
+      (script, index) =>
+        `Script ${index + 1} it runs, written in this session (named in the call-names block):\n${fenced('script', script.content, nonce, { limits: { lines: limits.scriptLines, chars: limits.scriptChars } })}`,
     ),
     ...(context.unseenScripts !== undefined && context.unseenScripts > 0 ? [unseenScriptsNote(context.unseenScripts)] : []),
     "The user's latest message:",

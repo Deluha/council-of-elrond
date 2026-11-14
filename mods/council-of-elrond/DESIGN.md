@@ -115,7 +115,7 @@ project checks the user listed in `rules.json` (`gimli.commands`, §8).
 
 ```
 config load (session start, /council reload, after the mod's own write) ─► rules.json per repository
-             │ validate ─► broken: ignored whole, shipped rules enforce
+             │ validate ─► broken: what can only tighten still applies (§16 item 21); unreadable: ignored whole, shipped rules enforce
              │ confirmed (path + SHA-256 in the trust record) or trustProjectRules = always ─► in force in full
              │ unconfirmed ─► split (pure): ask, block and review rules (adding only, §16.10), protected lists,
              │                bigOperations apply; allow rules, disables, models, patterns, allowlist and
@@ -184,6 +184,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | :- | :- |
 | Hook throws before the call runs | `.catch` refuses ("fails closed"). |
 | Project checks held back for an unconfirmed rules file | Counted as a check that could not start: a big operation's council blocks ("not run: the rules file is not trusted", §15.22). |
+| Project checks of a rules file with errors | The same: held back whole, counted as a check that could not start, and the council blocks ("not run: the project rules file has errors", §16 item 21). A file that cannot be read at all names none that can be counted. |
 | A high-confidence secret in an allowed call | Refused, audited with tier `allow`; no rounds, no failed attempt, no state write. |
 | Hook throws after the call ran | `.catch` replays the real result (`next.called`); the call is not re-run and Claude isn't told a call that ran was refused. |
 | A `tool.call` raised beneath the hook's own frame (`re-entry`, from 2.1.294) | `.catch` answers with `called` false and refuses. A subagent's calls do not arrive this way, in the background or the foreground (verified live, §12.1). |
@@ -204,14 +205,15 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | The start notice can't be appended (`$.session.append` rejects, or resolves `{ deny }`) | A debug line (`notice.appendFailed`); `session.start` goes on and returns `next(e)`. Nothing is retried; the refusal still tells Claude why (§13.5 d). |
 | The status sync after a roster change fails (`session.attach`, `session.detach`) | Caught where it is made; the hook returns what `next(e)` gave. The status line keeps its last value until the next sync (§13.5 f). |
 | `$.ui.ask` dismissed / "Chat about this" | Refuse, a failed attempt (recorded as `dismissed`; the two cannot be told apart, §12.4). "Talk first" refuses without counting (recorded as `chat`). |
-| Overrides file broken, unknown version, invalid field | Ignored whole; shipped rules enforce; a transcript line lists errors by field, plus a toast. Each repository's file under a multi-repository root is checked on its own and warns once (§14.5). |
+| Overrides file is not JSON, not an object, or of another `schemaVersion` | Ignored whole; the shipped rules enforce; a transcript line lists the error, plus a toast, and where nothing draws one row through the relay with the error count (§16 item 21). `/council status` and `rules` say "ignored: not readable". Each repository's file under a multi-repository root is checked on its own and warns once (§14.5). |
+| Overrides file of this version with an invalid field (an unknown key, a bad rule, a regex over 1,000 characters, more than 200 rules or patterns) | Partly applied: the entries that validate on their own and that `FIELD_TRUST` and `TIER_TRUST` class as applying at once (protected paths and branches, valid production patterns and big operations, valid block, ask and review rules) still apply, read as an unconfirmed file's are (they only add to the shipped decision), whatever the file's trust and the option; everything else in it, and every invalid entry, is ignored. The line, the toast, the relayed row, `/council status` and `rules` say so, with the error count (§16 item 21). Its project checks are held back (next row). |
 | The trust record cannot be read (`$.store.get` rejects, or the stored value is not the expected shape) | Nothing is trusted by it: a rules file with settings that wait for confirmation is held back, exactly as with no record. The tightening part of the file still applies. `/council trust <code>` then confirms nothing and says the record could not be read or saved (§15 item 22). With `trustProjectRules` at `always` the store is never read. |
 | A rules file that cannot be listed in full or safely read (more than 40 settings waiting, a value over 400 characters after cleaning, a value `redact()` would change, a value that held a control, invisible or direction-changing character, or more than 20 files waiting) | Listed as far as it can be, each such value named and marked, with the line "This file cannot be confirmed from the session because …" in place of a code. Its hash is never noted as listed, so `/council trust <code>` for it confirms nothing and says the same (§16 item 1). The way out is to fix the file, or the option at `always`. |
 | `/council trust <code>` for content that was not listed in this session (before any listing, or a file edited after its listing), or whose listing a confirmation already used up | Confirms nothing; says to run `/council trust` first and read what it lists (`trust.notListed`), or, when the code fits no file now, that none has it (`trust.noMatch`). |
 | The trust record cannot be saved (`$.store.set` rejects) | `/council trust <code>` confirms nothing and says why. After the mod's own write (the rule or allowlist offer the person answered), the new content is simply not trusted: a transcript line (`notice.trustNotSaved`) says to run `/council trust`. |
 | A project `ask` rule of a file nobody confirmed matches a call the shipped rules review | The shipped decision runs as it would with no file (reviewer or full council, preview, checks); only an approve is then put to the person with the project's reason as the project's text, a revise or a block stands, a failed or absent review goes to the person anyway, and where nobody can be asked the call is refused. Never cached (§16 item 10). |
 | A rules file's content differs from the one confirmed (any byte; a copy at another path; a link that now points elsewhere) | Untrusted: the hash, or the real path, no longer matches the record. Its settings that wait for confirmation are held back at the next load (session start, `/council reload`, or when a call first reaches a repository below a multi-repository root); a session already running keeps the content it loaded and confirmed. |
-| Audit write fails | Logged to the debug log (`notice.auditFailed`); never changes a decision, and the queue goes on to the next line. Nothing waits for the queue: a write that never returns holds back only the lines queued after it, never a decision or a later call (§13.4 d). `/council log` and `/council report` read the files, so they may not show a line still queued. |
+| Audit write fails | Counted (`/council status` shows "Audit lines that could not be written this session"), logged to the debug log (`notice.auditFailed`), and the first failure of the session is also one transcript line and a toast (`notice.auditFailedFirst`); never changes a decision, and the queue goes on to the next line. The audit folder's `.gitignore` is marked as seen only once it exists or was written, so a failed write of it is tried again with the next line (§16 item 25). Nothing waits for the queue: a write that never returns holds back only the lines queued after it, never a decision or a later call (§13.4 d). `/council log` and `/council report` read the files, so they may not show a line still queued. |
 | Two Claude Code sessions in one project share the audit log | `$.fs` has no lock and no append, so each write reads the whole file and writes it back: lines of the two sessions can interleave, and a line can be lost when two writes cross. Each session's own writes are queued in order. `/council report` skips any line it cannot parse (§13.4 e). |
 | A preview inspection fails or times out (5 s) | That inspection is left out; no preview is never a reason to allow or block. |
 | Writing the allowlist fails, or `rules.json` is broken | Nothing is written (a broken file is never rewritten); the call stays blocked, with a transcript line. It is not a failed attempt: the failure is the mod's, not Claude's, so it counts toward no lockout. Cancelling the confirm still is one (§13.4 h). |
@@ -708,7 +710,7 @@ The `/upgrade-types` runs for 2.1.308 and 2.1.322 read the binary with `grep -a`
    - **(j) Approved 2026-10-13:** decisions 1 to 7 above and the narrower redaction test were approved by the user after the H1 checkpoint.
 
 4. **H2: pipeline robustness** (`hooks/register.ts`, `hooks/state.ts`, `hooks/audit.ts`, `hooks/elrond/commands.ts`, `hooks/strings.ts`). The findings are REVIEW-2026-10 §2.5 to §2.11; the rows are ROADMAP's "H2" table.
-   - **(a) `command.run` needs a person for what loosens the gate** (§2.9). `needsPerson(command)` in `elrond/commands.ts` is true for `off` (bypass on), `shadow on` and `model` (a switch or clearing one, a bad member or usage included: the kind decides, so `model` with a bad slot is also refused). `on`, `shadow off`, the `model` listing (`models`), `reload` and every other subcommand answer any origin. The hook checks `needsPerson` and then `HUMAN_ORIGINS` (`composer`, `bridge`, `sdk`: the set `prompt.submit` already uses, not a second list); a refusal changes nothing and shows one line (`cmd.needsPerson`) through `show()`. `sdk` counts as a person until C3 shows which kind the web client's commands arrive with (ROADMAP C3) (dropped 2026-10-20, §14.3); a `plugin`, `peer`, `scheduled-trigger` and `task-notification` origin do not. Test kit: `$.command.run` in a test takes the whole `command.run` input, and a call without `origin` reaches the hook with none, so the tests' `council()` helper (`tests/fixtures.ts`) sends `{ kind: 'composer' }` and the presentation by default, and a test passes another origin to try it.
+   - **(a) `command.run` needs a person for what loosens the gate** (§2.9). `needsPerson(command)` in `elrond/commands.ts` is true for `off` (bypass on), `shadow on` and `model` (a switch or clearing one, a bad member or usage included: the kind decides, so `model` with a bad slot is also refused). `on`, `shadow off`, the `model` listing (`models`), `reload` and every other subcommand answer any origin. *(Amended by §16 item 23: `reload` needs a person.)* The hook checks `needsPerson` and then `HUMAN_ORIGINS` (`composer`, `bridge`, `sdk`: the set `prompt.submit` already uses, not a second list); a refusal changes nothing and shows one line (`cmd.needsPerson`) through `show()`. `sdk` counts as a person until C3 shows which kind the web client's commands arrive with (ROADMAP C3) (dropped 2026-10-20, §14.3); a `plugin`, `peer`, `scheduled-trigger` and `task-notification` origin do not. Test kit: `$.command.run` in a test takes the whole `command.run` input, and a call without `origin` reaches the hook with none, so the tests' `council()` helper (`tests/fixtures.ts`) sends `{ kind: 'composer' }` and the presentation by default, and a test passes another origin to try it.
    - **(b) The checks end with the council** (§2.6). The body of `convene` after `stop` is created runs in a `try`/`finally`: `stop.abort()` and removing the listener run on every exit, so a throw no longer leaves a check to its own timeout (up to 600 s). The dispatch's `signal` is chained into `stop` (abort at once if it is already aborted), so an Esc ends the checks through the mod's own path as well as the engine's. A `$.model.complete` rejection does not reach it (`review` catches that and returns a failed voice); the test makes a `$.clock.now()` read between two members fail, which does.
    - **(c) The log rotates by bytes** (§2.7). `isRotation(current, line, maxBytes)` in `audit.ts` compares UTF-8 sizes (`byteLength`) and both `appendAudit` (whether to read `.1`) and `appendPlan` (whether to rotate) use it, so the two can no longer disagree. Before, `appendAudit` compared characters, so with multibyte text it skipped reading `.1` and the log rotated with `.2` never written.
    - **(d) Nothing waits for the audit queue** (§2.7). `audit()` queues the line and returns; `finish()` and the allowed-call refusal no longer await it. The queue keeps its order and its `.catch` (a failed write is logged to debug with `notice.auditFailed` and the queue goes on). The kit showed that a `$.fs.write` started by the hook still lands after the hook has returned, in order, a few event-loop turns later, so every line is still written. A write that never returns holds back only the lines queued after it; a decision, the call, and the next gated call are not delayed. Two consequences: a `/council log` or `/council report` run straight after a call may not see its line yet, and the tests read the log through `auditLines(w)`, which is now asynchronous and first calls `settled(w)` (it takes zero-delay event-loop turns, or settles the mocked clock, until the fixture's file calls stop; no fixed wait). A direct read of the log file from `w.files` does the same first. A test with an audit-file write that never resolves (`w.writeHangs`) checks the next gated call still returns its result.
@@ -1600,7 +1602,7 @@ the lines item 18 names.
      id and a check's name are at most 64 characters of `[A-Za-z0-9._-]`, checked on the name as
      written (the check's name was trimmed before; a padded one is now invalid). The existing rules
      (required, unique, not a shipped id, not a big-operation check name) stay. A file that breaks it is
-     invalid and ignored whole, like any other error. The ids the mod writes itself (`suggest.ts`) are
+     invalid, like any other error (the file is then partly applied, §16 item 21). The ids the mod writes itself (`suggest.ts`) are
      within it. The rule id is the one project string that reaches Claude in the nobody-to-ask refusal,
      so it can no longer carry text there.
    - **A project rule's reason is introduced as the project's** (`refusal.ts`). In the refusal and in
@@ -2087,3 +2089,97 @@ the lines item 18 names.
     too, after its review.") instead of `escalate.askTier`; `/council rules` lists the paths protected
     against writes (`cmd.list.writeProtected`, "Protected against writes") apart from the protected
     paths.
+
+21. **A rules file with errors keeps what can only tighten** (a tightening). Before, a file with any
+    validation error was ignored whole: its own block and ask rules and protected paths vanished with
+    one transcript line and a toast, and where nothing draws nobody was told. Now, in
+    `loadConfig` (`config/schema.ts`):
+    - **Readable but invalid** (a JSON object with `schemaVersion` 1, one or more errors).
+      `inspectOverrides` validates every entry on its own and leaves an invalid one out (a rule with a
+      bad tier, a duplicate or shipped id, a regex that does not compile or is too long; a bad
+      production pattern; a bad big-operation entry). What is left is split by the same table as a
+      file nobody confirmed (`splitByTrust`: `FIELD_TRUST`, `TIER_TRUST`) and only its `always` part is
+      used: `protectedPaths`, `protectedBranches`, valid `productionPatterns` and `bigOperations`, and
+      valid `block`, `ask` and `review` rules. Those rules are marked unconfirmed whatever the file's
+      trust and the `trustProjectRules` option, so they only add to the shipped decision (item 10): a
+      broken file is never read as confirmed and never weaker than no file. Allow rules, `disableRules`,
+      `models`, `gollum.patterns`, `gollum.allowlist` and `gimli.commands` are ignored, as are all
+      invalid entries. The errors stay in `errors`, and the config origin reads `shipped+project
+      (partly applied)`. Nothing of it waits for confirmation (`needsTrust` is not set): there is
+      nothing to confirm from a file with errors, so `/council trust` does not list it.
+    - **Not readable** (not JSON, not an object, another `schemaVersion`, or a file that could not be
+      read): the shipped defaults, as before.
+    - **The person is told, both ways.** The transcript line and the toast are as before, with
+      their own words for "partly applied". Where nothing draws, one row goes through the relay
+      (`relay.ts`, `brokenNotice`, as `untrustedNotice` does) with the number of errors and nothing from
+      the file, once per file content (the key is the file's real path and its hash; reading the rules
+      again does not repeat it). `/council status` and `/council rules` show the state ("partly
+      applied: N error(s)", "ignored: not readable") as counts, and `/council rules` lists the errors
+      as before.
+    - **The checks are held back.** A broken file that names project checks (`gimli.commands`, valid or
+      not: the raw count) has them counted as checks that could not be started
+      (`LoadedConfig.broken.checks`, `brokenChecksOf`, `ignoredChecksOf`): a big operation's council
+      blocks with "not run: the project rules file has errors", the same path an unconfirmed file's
+      checks take. A file that cannot be read at all names no checks the mod can count, so none are
+      counted for it (the shipped defaults carry none).
+    - **Decided where the brief left a choice (the safer one).** A list over its cap (item 22) is read
+      up to the cap, so the first 200 rules still apply and the rest are dropped with the error; a
+      rule's cross-checks (a duplicate id, a shipped id, a big-operation check's name) drop the later
+      rule and keep the first.
+22. **Validation caps** (a tightening; denial of service only). A regex source in a rules file (a rule's
+    `command`, `path` and `input`, a `/regex/` in `tools` or `bigOperations`, a production pattern, a
+    secret pattern's `regex`) is at most 1,000 characters; a file holds at most 200 rules and 200
+    secret patterns. Over a cap is a validation error like any other, so by item 21 the rest of the
+    file's tightening entries still apply. The cap is checked before the regex is compiled.
+23. **`/council reload` needs a person** (a tightening; amends §13.4 a). `reload` reads the rules file
+    again, so a file changed since the session began, and, where the option trusts files, every setting
+    in it, takes effect. It is in `needsPerson` with `trust`, so from `sdk`, `peer`, `plugin`,
+    `scheduled-trigger` and `task-notification` it is refused with `cmd.needsPerson`; `composer` and
+    `bridge` run it (`HUMAN_ORIGINS`, §14.3).
+24. **A command that ran and failed is not read as a permission denial** (a tightening; amends §6
+    item 14, ROADMAP decision 12). `outcomeOf` matched the automatic-denial wordings anywhere in a
+    failed call's text, so a shell command that ran and failed with such a wording in its own output
+    was recorded as `denied-by-permission`, which is not a failed attempt, and escaped the retry
+    count. A denial is the engine's whole message, so its words open the text, while a command's own
+    output follows an exit-code line or its earlier output. The wording is now anchored at the start
+    of the text (whitespace allowed) where the recorded wording is documented as opening it: the
+    deny-rule wording "Permission to use|edit|read … has been denied" (§6.14, §12.4).
+    **Kept as they were, anywhere in the text:** the wordings recorded with something before the
+    phrase, so no start can be named for them (§12.5, §12.7, §14.2): "<subject> needs approval"
+    ("rm in '<path>' needs approval", "Bash needs approval (asked by plugin …)", "… needs approval in
+    this session …"), "This command requires approval" and "The <name> connector requires
+    approval …", "Permission for this tool use was denied. It requires approval …", "<who> requested
+    permissions to … but you haven't granted it yet". Those are still read from their phrase alone, so
+    a failed command that prints one of them is still recorded as a denial; narrowing them needs a
+    decision on how much of the text may come before the phrase, which is open (reported at the
+    checkpoint). The user-refusal patterns are untouched (narrowing them would count fewer attempts
+    in one configuration). §12.7 records "… has been denied" wordings from 2.1.322 that name a
+    command, a clamp or a listing scope without saying how they open; they are matched by the
+    deny-rule pattern, which is now anchored, and a wording of that family that does not open with
+    "Permission to" would read as an error (counted) until it is recorded.
+25. **The audit log says when it fails** (neutral). Two things were silent: the folder's `.gitignore`
+    was marked as looked at before it was written, so a failed write was never tried again, and a
+    failed append went only to the debug log. Now the folder is marked after the `.gitignore` exists
+    or was written, so the next line tries again; the first failed audit write of the session shows
+    one transcript line and a toast (`notice.auditFailedFirst`, `warnOnce`); every failure is counted,
+    and `/council status` shows the count since the session began ("Audit lines that could not be
+    written this session: N"). The count is module state beside `gitignoreChecked` and `warned`
+    (it starts over with the module, as they do), not a field of the `$.state` session record, so the
+    record's shape and version are unchanged. Writes stay unawaited (§13.4 d); a failed `.gitignore`
+    write still costs that line.
+26. **The names a call supplies sit inside the fence** (a tightening). The reviewers' prompts printed the
+    tool name and the file, script and SQL labels in the prompt's own voice, outside the nonce-fenced
+    blocks. `label()` cleaned and capped them, but a one-line path can still carry instruction-like text.
+    Now one block of kind `call-names` (`callNames` in `members/shared.ts`, built with `fenced`) holds
+    them, one `Tool:`, `File:`, `Changes:`, `Script n:` or `SQL n:` line each, cleaned to one line and
+    capped at 200 characters, and redacted with the call's patterns where `briefOf` builds the context.
+    The prompt's own lines refer to a name by its role and number only ("Script 1 it runs, written in
+    this session (named in the call-names block)"). `untrustedRules`, which every reviewer's system
+    prompt carries, gains one sentence saying that the names in that block are data. Shipped rule
+    reasons and the mod's own notes stay outside, as they were. Not call-supplied, and so left as they
+    are: the protected branches line (the project's configuration) and the production hits.
+27. **Strings, dead code, documents** (no change in what is decided). `reason.allowlistNotWritten`,
+    text Claude reads, says "The user chose…" and not "You chose…"; the comment by the report strings
+    says the relay sends the report where nothing draws; four unused definitions were removed
+    (`reason.failure`, `WHO_OF_SLOT`, `longestTimeout`, `stricter`); the developer guide's layout list
+    names every module and test file.

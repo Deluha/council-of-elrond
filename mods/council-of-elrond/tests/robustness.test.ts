@@ -313,6 +313,59 @@ describe('the audit log (DESIGN §13.4 c, d)', () => {
     expect(w.logs.filter(line => line.startsWith('Council: audit write failed'))).toHaveLength(2)
   })
 
+  test('the first failed line of the session is said once, in the transcript and as a toast; every one is counted in /council status (DESIGN §16)', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], surfaces: [] })
+    w.writeFails = path => path.endsWith('audit.jsonl')
+    await $.tool.call(REVIEWED)
+    await settled(w)
+    const said = (): string[] => w.logs.filter(line => line.startsWith('Council: an audit line could not be written'))
+    expect(said()).toHaveLength(1)
+    expect(said()[0]).toContain('EIO')
+    expect(w.toasts.filter(toast => toast.includes('audit log could not be written'))).toHaveLength(1)
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build/out' })
+    await settled(w)
+    expect(said()).toHaveLength(1)
+    expect(w.toasts.filter(toast => toast.includes('audit log could not be written'))).toHaveLength(1)
+    w.logs.length = 0
+    await council($, 'status')
+    expect(w.logs.join('\n')).toContain('Audit lines that could not be written this session: 2')
+    // Once they write again the count stays (it is since the session began) and nothing more is said.
+    w.writeFails = () => false
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build/tmp' })
+    await settled(w)
+    expect(said()).toHaveLength(0)
+    expect(await auditLines(w)).toHaveLength(1)
+  })
+
+  test('with no failure the status line is not there, and no notice is shown', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], surfaces: [] })
+    await $.tool.call(REVIEWED)
+    await settled(w)
+    await council($, 'status')
+    expect(w.logs.join('\n')).not.toContain('Audit lines that could not be written')
+    expect(w.logs.join('\n')).not.toContain('audit line could not be written')
+    expect(w.toasts.filter(toast => toast.includes('audit log'))).toEqual([])
+  })
+
+  test('a .gitignore that could not be written is tried again with the next line, not given up for the session', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    const IGNORE = `${ROOT}/.claude/council-of-elrond/audit/.gitignore`
+    w.writeFails = path => path === IGNORE
+    await $.tool.call(REVIEWED)
+    await settled(w)
+    expect(w.files.has(IGNORE)).toBe(false)
+    w.writeFails = () => false
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build/out' })
+    await settled(w)
+    expect(w.files.get(IGNORE)).toContain('*')
+    expect(await auditLines(w)).toHaveLength(1)
+    // Written once it exists: a later line does not write it again.
+    w.files.set(IGNORE, 'mine\n')
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build/tmp' })
+    await settled(w)
+    expect(w.files.get(IGNORE)).toBe('mine\n')
+  })
+
   test('a write that never returns holds up nothing: the next gated call gets its result, and the lines behind it wait', async ($, on) => {
     const w = world(on, { replies: [APPROVE] })
     w.writeHangs = path => path.endsWith('audit.jsonl')

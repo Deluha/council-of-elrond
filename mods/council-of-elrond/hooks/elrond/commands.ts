@@ -111,11 +111,18 @@ export function parseCouncil(args: string): CouncilCommand {
 /**
  * Whether a subcommand loosens the gate (bypass on, shadow on, a model switch,
  * confirming a rules file or listing what confirming would enable), so only a
- * person typing it may run it. `models` (the listing), `on`, `shadow off`,
- * `untrust` and the rest change nothing that lets more through.
+ * person typing it may run it. `reload` is one too: it reads the rules file
+ * again, so a file changed since the session began (and, where the option
+ * trusts files, every setting in it) takes effect, and only a person may ask
+ * for that (DESIGN §16). `models` (the listing), `on`, `shadow off`, `untrust`
+ * and the rest change nothing that lets more through.
  */
 export const needsPerson = (command: CouncilCommand): boolean =>
-  (command.kind === 'bypass' && command.on) || (command.kind === 'shadow' && command.on) || command.kind === 'model' || command.kind === 'trust'
+  (command.kind === 'bypass' && command.on) ||
+  (command.kind === 'shadow' && command.on) ||
+  command.kind === 'model' ||
+  command.kind === 'trust' ||
+  command.kind === 'reload'
 
 /**
  * Whether a prompt submission runs the `/council` command (`name`): it never asks
@@ -124,13 +131,6 @@ export const needsPerson = (command: CouncilCommand): boolean =>
 export const isCouncilCommand = (command: { name: string } | undefined, name: string): boolean => command?.name === name
 
 export const isSlot = (value: string): value is ModelSlot => (MODEL_SLOTS as readonly string[]).includes(value)
-
-export const WHO_OF_SLOT: Readonly<Record<ModelSlot, StringKey>> = {
-  gandalf: 'who.gandalf',
-  legolas: 'who.legolas',
-  aragorn: 'who.aragorn',
-  council: 'who.council',
-}
 
 export type StatusInput = {
   session: CouncilSession
@@ -143,6 +143,8 @@ export type StatusInput = {
   tokenBudget: number
   /** How the project rules file stands (`trustLines`); counts only. */
   trust?: readonly string[]
+  /** Audit lines that could not be written since the session began. */
+  auditFailures?: number
 }
 
 const ZERO_COUNTS = { approved: 0, revised: 0, blocked: 0, failed: 0 }
@@ -189,6 +191,7 @@ export function statusOutput(input: StatusInput): Output {
         ? text('cmd.noReviews')
         : text('cmd.median', { time: `${(typical / 1000).toFixed(1)} s`, reviews: session.reviewMs.length }),
       ...(input.trust ?? []),
+      ...((input.auditFailures ?? 0) > 0 ? [text('cmd.auditFailures', { n: input.auditFailures ?? 0 })] : []),
     ],
   }
 }
@@ -225,18 +228,22 @@ export function logOutput(logText: string, count: number): Output {
   }
 }
 
+/** The rules file's problems as one line: whether the file is partly applied or ignored whole. */
+export const errorsLine = (errors: readonly string[], isPartial: boolean): string =>
+  text(isPartial ? 'cmd.configPartial' : 'cmd.configErrors', { errors: errors.join('; ') })
+
 /**
  * An exact-string allowlist entry shows no character of itself, in the person's copy as in the one relayed through
  * Claude (relay.ts): it may be a secret. A fingerprint (`sha256:`) is shown.
  */
-export function rulesOutput(compiled: CompiledConfig, origin: string, errors: readonly string[], trust: readonly string[] = []): Output {
+export function rulesOutput(compiled: CompiledConfig, origin: string, errors: readonly string[], trust: readonly string[] = [], isPartial = false): Output {
   const rules = [...compiled.rules].sort((a, b) => TIERS.indexOf(b.tier) - TIERS.indexOf(a.tier))
   const list = (key: StringKey, items: readonly string[]): string[] =>
     items.length === 0 ? [] : [text('cmd.listLine', { name: text(key), items: items.join(', ') })]
   return {
     title: text('cmd.rulesTitle', { origin }),
     lines: [
-      ...(errors.length > 0 ? [text('cmd.configErrors', { errors: errors.join('; ') })] : []),
+      ...(errors.length > 0 ? [errorsLine(errors, isPartial)] : []),
       ...trust,
       ...rules.map(rule => text('cmd.ruleLine', { tier: rule.tier.padEnd(6), id: rule.id, source: rule.source, reason: rule.reason })),
       ...list('cmd.list.protectedPaths', compiled.config.protectedPaths),
@@ -269,6 +276,8 @@ export type CouncilPreview = {
   isBranchAssumed: boolean
   /** Project checks held back because their rules file is not trusted: they would not run, and the council would block. */
   ignoredChecks?: number
+  /** Of those, the checks of a rules file with errors. */
+  brokenChecks?: number
 }
 
 const seatLine = (seat: CouncilSeat): string =>
@@ -286,7 +295,8 @@ function councilLines(council: CouncilPreview): string[] {
       : (council.ignoredChecks ?? 0) === 0
         ? [text('cmd.testCouncilNoChecks')]
         : []),
-    ...((council.ignoredChecks ?? 0) > 0 ? [text('cmd.testCouncilChecksUntrusted', { who: text('who.gimli') })] : []),
+    ...((council.ignoredChecks ?? 0) > (council.brokenChecks ?? 0) ? [text('cmd.testCouncilChecksUntrusted', { who: text('who.gimli') })] : []),
+    ...((council.brokenChecks ?? 0) > 0 ? [text('cmd.testCouncilChecksBroken', { who: text('who.gimli') })] : []),
     ...(council.isBranchAssumed ? [text('cmd.testCouncilBranch', { who })] : []),
   ]
 }
@@ -358,7 +368,9 @@ export function countsText(counts: TrustCounts, mode?: Mode): string {
 }
 
 /** How a loaded file stands, for `/council rules` and `status`: counts only, never text from the file. */
-export function trustLines(loaded: Pick<LoadedConfig, 'file' | 'needsTrust'>, mode?: Mode): string[] {
+export function trustLines(loaded: Pick<LoadedConfig, 'file' | 'needsTrust' | 'broken' | 'errors'>, mode?: Mode): string[] {
+  // A broken file is never confirmed and has nothing to confirm: only how far it applies is said.
+  if (loaded.broken !== undefined) return [text(loaded.broken.kind === 'partial' ? 'config.state.partial' : 'config.state.ignored', { n: loaded.errors.length }, mode)]
   const state = loaded.file?.state
   if (state === 'confirmed') return [text('trust.state.confirmed', {}, mode)]
   if (state === 'option') return [text('trust.state.option', {}, mode)]
