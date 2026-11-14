@@ -50,15 +50,17 @@ reported.
   pointed at a "Known follow-ups" list that the roadmap no longer has. The root README repeated the
   outdated description of the scribe agent.
 - The documents and the checks disagreed on `claude plugin validate`: CI and the pre-commit hook run
-  it with `--strict`; the guides, the pull request template and the checkpoint skill did not.
+  it with `--strict`; the guides, the pull request template and the checkpoint skill did not. This
+  finding is kept as history; it was not closed everywhere when it was written: `CLAUDE.md`,
+  `docs/MAINTENANCE.md` and the `upgrade-types` skill still lacked the flag until a later pass.
 - The `checkpoint` skill named a stage table row, "Known follow-ups" and "Decisions the spec did
   not cover (Stage N)", none of which the current roadmap and design documents have.
 - The `upgrade-types` skill and `docs/MAINTENANCE.md` said to unpin CI, to run whenever versions
   differ, and that an overrunning hook "still runs `next(e)`"; since 2.1.299 the hook is cut off and
   the call refused (DESIGN §12.5). `docs/MAINTENANCE.md` also pointed its 1.0 criteria at v1
   roadmap sections ("Final deliverables", "Before 1.0", C3 to C6).
-- Several documents said 0.5.0 was released, shipped or tagged. No tag exists; 0.5.0 and 0.6.0 are
-  changelog headings on `main`.
+- Several documents said 0.5.0 was released, shipped or tagged. No tag exists; 0.5.0 is a changelog
+  heading on `main`, and the work since then is under "Unreleased" and will be released as 0.6.0 (M1).
 - `docs/INSTALL.md` did not list the chat approval route as a way to let a refused call run where
   nothing draws, which the mod's manual does.
 - The October review's banner pointed at roadmap sections that no longer exist, and the v1 roadmap's

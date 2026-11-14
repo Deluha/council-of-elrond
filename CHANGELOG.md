@@ -105,6 +105,20 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   mod does not offer an allow rule or allowlist entry for a file that waits, and after your own
   "Add the rule" or allowlist answer the file is trusted at its new content. See "Trusting a
   project's rules file" in the README.
+- **After upgrading, expect more reviews and questions.** The stricter behaviours you will meet,
+  each described under "Security":
+  - A command whose program is a variable or a substitution is reviewed (the entry "A program name
+    computed at run time is reviewed").
+  - Plugin management commands (`claude plugin install`, `update`, `disable` and the like) ask (the
+    entry "The mod protects itself").
+  - A shell command that names a path under your plugin folders asks, since they are protected
+    paths like `.claude/settings.json` (the same entry).
+  - A shell command too long to review in full is never approved by a model alone and comes to you
+    (the entry "A command too long to review is never approved by a model alone").
+  - A force push whose branch cannot be read asks (the entry "A force push of the checked-out branch
+    meets the protected-branch block").
+  - A compound command shares its retry counts with its parts, so a locked-out part locks out the
+    whole (the entry "Rounds, failed attempts and lockouts follow each part of a compound command").
 - **A project rule's reason is shown as the project's text.** In a reviewer's prompt it sits inside a
   data block under a lead-in that says so (not after "Flagged because"), and in the dialog it is
   shown after the `|` bar, on one line of at most 200 characters. A shipped rule's reason is as it

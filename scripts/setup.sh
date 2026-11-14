@@ -2,6 +2,8 @@
 # One-time contributor setup: checks the tools, installs the git hooks, runs the gates once.
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 2
+# shellcheck source=scripts/pinned-claude.sh
+. scripts/pinned-claude.sh
 
 ok=1
 need() {
@@ -12,7 +14,7 @@ need() {
   fi
 }
 echo "Tools"
-need claude "install Claude Code 2.1.287 or later (https://code.claude.com/docs/en/setup)"
+need "${COUNCIL_CLAUDE:-claude}" "install the Claude Code build CI pins (see .github/workflows/ci.yml; https://code.claude.com/docs/en/setup)"
 need tsc    "npm install -g typescript"
 need git    "install git"
 need python3 "needed only for the markdown link check"
@@ -24,6 +26,8 @@ git config core.hooksPath .githooks
 echo "  core.hooksPath = .githooks (pre-commit runs the gates; commit-msg checks the summary)"
 
 echo "Gates"
-claude plugin test mods/council-of-elrond && tsc -p mods && claude plugin validate --strict mods/council-of-elrond \
+check_pinned_claude || echo "Warning: the gates below are not running on the pinned build, so a failure may come from the build."
+claude="${COUNCIL_CLAUDE:-claude}"
+"$claude" plugin test mods/council-of-elrond && tsc -p mods && "$claude" plugin validate --strict mods/council-of-elrond \
   && echo "All gates pass. Read docs/DEVELOPMENT.md next." \
   || { echo "A gate failed on a clean checkout; see CONTRIBUTING.md and docs/MAINTENANCE.md (Claude Code version drift)."; exit 1; }

@@ -36,7 +36,7 @@ Public, MIT-licensed, open-source repository.
 - Never load the mod into the session that is developing it. Test with `claude plugin test`, and
   run live checks headless in a throwaway repository with `claude -p --plugin-dir` (`/live-check`).
 - Before every commit: `claude plugin test mods/council-of-elrond`, `tsc -p mods` and
-  `claude plugin validate mods/council-of-elrond` all pass, run with the Claude Code build CI pins.
+  `claude plugin validate --strict mods/council-of-elrond` all pass, run with the Claude Code build CI pins.
 - A behaviour change needs a test that fails without it. For a path that decides whether a call
   runs, break the code on purpose and confirm the test fails.
 - Keep user-visible changes in the user manual and `CHANGELOG.md` ("Unreleased").

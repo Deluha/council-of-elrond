@@ -15,8 +15,8 @@ the mod never takes part in Claude Code's own permission decision.
 > [user manual](mods/council-of-elrond/README.md#what-it-does-not-protect-against).
 
 **Status:** pre-release. The original build stages are done; no version has been tagged yet (0.5.0
-and 0.6.0 are headings in the changelog on `main`, and the first tag will be 0.6.0). The
-road to the first release and to 1.0 is in
+is a changelog heading on `main`; the work since then is under "Unreleased" and will be released as
+0.6.0, M1). The road to the first release and to 1.0 is in
 [ROADMAP.md](mods/council-of-elrond/ROADMAP.md), milestones M0 to M7.
 
 ## Quick start

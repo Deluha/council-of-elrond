@@ -16,9 +16,9 @@ developer guide is [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Setup
 
-You need Claude Code 2.1.287 or later (the version it was built and checked on is at the top of
-[`DESIGN.md`](mods/council-of-elrond/DESIGN.md)) and a
-TypeScript compiler (`npm install -g typescript`, or use `npx tsc`). There are no runtime
+You need the Claude Code build CI pins (see `.github/workflows/ci.yml`; the setup script and the
+pre-commit hook check it, and [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md#the-pinned-build) says how
+to install it) and a TypeScript compiler (`npm install -g typescript`, or use `npx tsc`). There are no runtime
 dependencies and no `node_modules`.
 
 ```sh
@@ -36,7 +36,8 @@ tsc -p mods                                    # strict typecheck
 claude plugin validate --strict mods/council-of-elrond  # manifest, hooks and the calls the module makes
 ```
 
-All three must pass before every commit. They run in CI too, along with `scripts/check-hygiene.sh`
+All three must pass before every commit, on the pinned build ([how to get
+it](docs/DEVELOPMENT.md#the-pinned-build)). They run in CI too, along with `scripts/check-hygiene.sh`
 (no generated files committed, no personal data, links resolve). The hooks live in `.githooks/`;
 `setup.sh` points `core.hooksPath` at them. `git commit --no-verify` skips them when you must, and
 CI catches what you skipped.
@@ -82,7 +83,8 @@ The full conventions, with the reasons behind them, are in
 5. Fill in the pull request template. Say what you verified live, if anything, and what you did
    not. Label it (`rules`, `reviewers`, `pipeline`, `ui`, `docs`, `bug`, `ci`); the labels feed the
    release notes.
-6. A change under `hooks/rules/`, `config/defaults.ts`, `redact.ts` or `register.ts` needs the
+6. A change under `hooks/rules/` (including `rules/push.ts`), `config/defaults.ts`, `config/trust.ts`,
+   `elrond/operations.ts`, `members/shared.ts`, `redact.ts` or `register.ts` needs the
    code owner's review (CODEOWNERS). If it fixes a bypass, keep the triggering input out of the
    title and description; put it in a test with a neutral name.
 

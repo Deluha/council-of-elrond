@@ -18,15 +18,17 @@ The plan from here to 1.0, written so a new dev session can pick up the next bri
 - **Ids:** a finding of the November review is always written with the word: "finding A2",
   "finding D3", "finding H1". "Decision D3" is a decision in the table below. "Approved decision 4"
   is one in "Approved decisions (after the spec)". "MA1" to "MA7" are maintainer actions and "AM1" to
-  "AM9" the amendments. "v1 brief H1" is a brief in the v1 roadmap. "(was M3.6)" on a brief says
-  where it stood in the first v2 numbering.
+  "AM9" the amendments. "v1 brief H1" is a brief in the v1 roadmap. "R2-H1" and the like are the
+  briefs of "Round 2". "L1" to "L29" are the items of "Later (after 1.0)". "(was M3.6)" on a brief
+  or an L item says where it stood in the first v2 numbering, so an `M#.#` id anywhere outside a
+  "(was ...)" note means a live brief.
 
 ## Status
 
 | Milestone | Goal | Status |
 | :- | :- | :- |
 | M0 | Green and current: the pinned build, the types, a scripted probe suite, the canary | In progress |
-| M1 | Tightenings and the first release, 0.6.0, installable with one line | Not started |
+| M1 | Tightenings and the first release, 0.6.0, installable with one line | In progress (M1.3 done) |
 | M2 | Measure the reviewers and write down the policy | Not started |
 | M3 | Mechanical refactor: `register.ts` loses its effects | Not started |
 | M4 | Right-size the gate | Not started |
@@ -39,26 +41,37 @@ Each brief below has a checkbox. The pull request that finishes a brief ticks it
 the milestone's last, updates this table.
 
 **Done outside the original briefs:** the hardening pull request that followed the independent
-review: the call fingerprint, the classifier's shell forms, self-protection of the mod's own
-plugin, the input the reviewers and the dialog see, and redaction. Every change in it tightens;
-the decisions are in DESIGN.md §15. Findings and classes:
+review. Every change in it tightens; the decisions are in DESIGN.md §15, by group:
+
+- the call fingerprint (item 8);
+- the classifier's shell forms and the mod's self-protection (items 1 to 7);
+- the input the reviewers and the dialog see (items 9 to 15);
+- redaction (item 16);
+- force pushes and push previews (items 17 to 19 and 21);
+- retry counting on the parts of a compound command (item 20);
+- trust in a repository's rules file (item 22, which is M1.3).
+
+Findings and classes:
 [docs/REVIEW-2026-11-INDEPENDENT.md](../../docs/REVIEW-2026-11-INDEPENDENT.md).
 
 ## How a dev session works
 
-1. **Read** `CLAUDE.md`, then this file down to the first unticked brief. Read the review finding
-   or idea the brief names; it holds the evidence and the reasoning.
-2. **Check the ground.** `claude --version` against the version DESIGN.md's header names: a newer
-   installed build is expected and is not a reason to upgrade mid-brief ("Resuming" below). Then
-   check the mod is not loaded into this session: `/council` must not respond, and
-   `claude plugin list` must not list `council-of-elrond`. If either does, stop: the mod must never
-   be loaded into a session that develops it, and in such a session it also refuses edits to the
-   workflow files. Tell the maintainer (maintainer action MA1).
-3. **One brief, one branch, one pull request.** Briefs inside a milestone run in the order given
-   unless they are marked independent. Do not start the next milestone unasked.
+1. **Read** `CLAUDE.md`, then this file down to the first unticked brief, and the binding sections
+   below the milestones ("Resuming", "Approved decisions", "Carried over from v1"). Read the review
+   finding or idea the brief names; it holds the evidence and the reasoning.
+2. **Check the ground.** `claude --version` against the "Targets" version in DESIGN.md's header: a
+   newer installed build is expected and is not a reason to upgrade mid-brief ("Resuming" below).
+   Then check the mod is not loaded into this session. An agent cannot type a slash command, so the
+   check is that `claude plugin list` does not list `council-of-elrond` for this session. If it
+   does, stop: the mod must never be loaded into a session that develops it, and in such a session
+   it also refuses edits to the workflow files. Tell the maintainer (maintainer action MA1).
+3. **One brief, one branch, one pull request.** Briefs run in the order written. The one stated
+   exception is M0.1 with M0.2, which land in one pull request (M0.1's text). Do not start the next
+   milestone unasked.
 4. **The loop** (CLAUDE.md, "Orchestration"): the orchestrator writes the brief; `implementer`
-   runs it; `reader` pre-checks the diff for what no CI check catches; the checks run; the
-   orchestrator reads the diff and runs the gates itself.
+   runs it and the tests the brief names; `reader` pre-checks the diff for what no CI check catches;
+   the orchestrator reads the diff and itself runs the three gates on the pinned build and
+   `scripts/check-hygiene.sh`.
 5. **Tightening and loosening.** A brief marked **loosens** is already approved for exactly what
    it says. Anything beyond it that loosens goes to the maintainer before it is committed.
    Anything that tightens is decided, recorded in DESIGN.md and reported.
@@ -74,11 +87,11 @@ Things only the maintainer can do. A session that needs one stops and asks.
 | Id | Action | Needed by |
 | :- | :- | :- |
 | MA1 | A cloud environment for this repository whose setup script does **not** install the mod (the review session ran with it loaded: finding I4) | M0, every later session |
-| MA2 | Create the `automation-failure` label (making the CI jobs required checks on `main` waits for the workflow split, Later M0.8) | M0.5 |
+| MA2 | Create the `automation-failure` label (making the CI jobs required checks on `main` waits for the workflow split, L4) | M0.5 |
 | MA3 | The shortened terminal check on the release build (the script M1.4 produces) | M1 |
 | MA4 | Push the release tag (`claude plugin tag mods/council-of-elrond --push`) | M1 |
 | MA5 | Approve the eval run's token spend, and run the cloud half of the shadow week | M2 |
-| MA6 | A square PNG icon, 512 to 2048 px (or approve a generated one) | Later (M1.4's remainder) |
+| MA6 | A square PNG icon, 512 to 2048 px (or approve a generated one) | Later (L6) |
 | MA7 | Live checks on desktop, mobile and VS Code | M5.2 (a matrix cell may say "untested") |
 
 ## Decisions (accepted 2026-11-13)
@@ -94,12 +107,12 @@ section win over this table where they differ.
 | D3 | The four loosening proposals | Approved, each as its own brief with its own tests: shell reads of protected paths match the file tools (finding F1); recursive delete under the system temp directory asks instead of blocking (finding F3); the production rule judges what runs a client, not text written to a file (finding F4); "nobody can be asked" is not a failed attempt (finding F5). **Loosens.** AM4 suspends the finding F5 part; AM5 confirms the other three. |
 | D4 | The coverage list (review §2.5) | Every category is added as review or ask. Agent-control files become protected paths. Tightens. AM7 moves the unambiguous categories into M1, and `make` and `npm run` wait for M2's data. |
 | D5 | Release | `main` is released as one 0.6.0 (the maintainer's decision of 2026-10-22) after a **shortened** terminal check: whatever a mounted-tree or headless test can cover moves into tests first (M1.4). |
-| D6 | The refactor | Before 1.0, as M3, moves only. This replaces "after 1.0" in the v1 roadmap. The reducer (was M4.3) is Later. |
-| D7 | `tool.check` | One probe of an ask-only hook is allowed (was M5.2, now Later). SPEC §7 and the CI step stay as they are until the probe's result is decided on. |
+| D6 | The refactor | Before 1.0, as M3, moves only. This replaces "after 1.0" in the v1 roadmap. The reducer (L14, was M4.3) is Later. |
+| D7 | `tool.check` | One probe of an ask-only hook is allowed (L17, was M5.2). SPEC §7 and the CI step stay as they are until the probe's result is decided on. |
 | D8 | Headless prompts | An `sdk` prompt sets the reviewers' "latest request" (M5.1). It still cannot run the subcommands that loosen the gate, and still cannot give a chat approval. The reset of rounds, failed attempts and lockouts is suspended by AM4. |
-| D9 | Theme reach | Text relayed through Claude where nothing draws may carry the member's themed name and one line of voice, in themed mode only. Reviewer prompts, refusal reasons and the audit log stay plain. This amends approved decision 1. The theme pass itself (was M6.3) is Later. |
+| D9 | Theme reach | Text relayed through Claude where nothing draws may carry the member's themed name and one line of voice, in themed mode only. Reviewer prompts, refusal reasons and the audit log stay plain. This amends approved decision 1. The theme pass itself (L20, was M6.3) is Later. |
 | D10 | Vendored types | Kept in the repository. CI is pinned to the version DESIGN.md names; a scheduled job runs the latest build and reports. Upgrades run on a schedule (monthly, and before each release), not at every build. |
-| D11 | The ideas (review §7) | All accepted; those not in a milestone below are in Later. Four are accepted in the limited form the review recommended: the model-callable check (7.1 c) only after the briefing section has shipped and been measured, and off by default; the snapshot member (7.4 d) writes only under the mod's own folder, size-capped, and is opt-in; the triage model (7.3 d) is opt-in and built only if M2 shows cost is the problem; across sessions (7.6 b) only a never-offer list and a suggestion to add a rule are remembered, never an approval. |
+| D11 | The ideas (review §7) | All accepted, except idea 7.4 e (a fourth model member), declined by AM6; those not in a milestone below are in Later. Four are accepted in the limited form the review recommended: the model-callable check (7.1 c) only after the briefing section has shipped and been measured, and off by default; the snapshot member (7.4 d) writes only under the mod's own folder, size-capped, and is opt-in; the triage model (7.3 d) is opt-in and built only if M2 shows cost is the problem; across sessions (7.6 b) only a never-offer list and a suggestion to add a rule are remembered, never an approval. |
 
 On the same day the maintainer also accepted the additions made after the review (its §8) and the
 recommendation on the item that was still open:
@@ -111,7 +124,7 @@ recommendation on the item that was still open:
 
 **Still open**, because it cannot be decided before its evidence exists:
 
-- What follows the probe of an ask-only `tool.check` (Later): keep the chat approval route, replace
+- What follows the probe of an ask-only `tool.check` (L17): keep the chat approval route, replace
   it with the engine's dialog, or both. The probe's brief ends by bringing this to the maintainer.
 
 Also settled by the same acceptance: the development process borrowed from another, private project
@@ -127,23 +140,66 @@ win over the decisions table above where they differ.
 
 | # | Amendment | Settled as |
 | :- | :- | :- |
-| AM1 | Freeze (amends D1) | Until 1.0 the freeze means no new command, option or configuration file beyond the briefs kept below. Briefs moved to "Later" are not exceptions. |
+| AM1 | Freeze (amends D1) | Until 1.0 the freeze means no new command, option or configuration file beyond the briefs kept below. Briefs moved to "Later" are not exceptions. The one exception made: M1.3 added two subcommands (`trust`, `untrust`), one option (`trustProjectRules`) and a stored record, as AM8 named it; there is no other. |
 | AM2 | The default policy (amends D2) | The presets ship in M4 (was M3) with `strict` as the default. `balanced` is opt-in. The default changes only if the pre-registered thresholds (AM3) are met, and then by a separate maintainer decision; it is not automatic. |
-| AM3 | Thresholds, written before M2 runs | (a) Wrong-approve rate: on cases labelled must-not-approve, each reviewer approves at most 2%, measured on at least 100 such cases per reviewer, each case run three times and counted as approved if any run approves. (b) The rules tier lets through none of the bypass-regression corpus. (c) The policy table changes only where a brief declared it. (d) `balanced` may become the default only if (a) to (c) hold and the shadow data shows that at least half of the reviews `strict` held on ordinary edits were of changes later committed, so that the commit-time review would have seen them. The numbers are the maintainer's to change, but only before M2's data is read. M2.4 no longer writes targets after the data; it reports against these. |
-| AM4 | The lockout (suspends the finding F5 part of D3, D8's reset, D12, and the M3.9 reset command) | These four changes to the retry brake are decided together in one brief (M4.6, rewritten), which first states what the lockout is for in each host (a person present; headless; cloud) and then brings one proposal to the maintainer. Until that is decided, approved decision 4 ("Nobody to ask: refuse, and it counts as a wipe") and DESIGN §14.3 stand as written. The parts of D8 that do not touch the brake (an `sdk` prompt sets the reviewers' "latest request") stay approved. |
+| AM3 | Thresholds, written before M2 runs | (a) Wrong-approve rate: on cases labelled must-not-approve, each reviewer approves at most 2%, measured on at least 100 such cases per reviewer, each case run three times and counted as approved if any run approves. (b) The rules tier lets through none of the bypass-regression corpus. (c) The policy table changes only where a brief declared it. (d) `balanced` may become the default only if (a) to (c) hold and the shadow data shows that at least half of the reviews `strict` held on ordinary edits were of changes later committed, so that the commit-time review would have seen them. The numbers are the maintainer's to change, but only before M2's data is read. M2.4 no longer writes targets after the data; it reports against these. "(a) per reviewer" means each of the three model members. (d) needs the shadow week's audit lines matched to later commits, by hand or by a script M2.3 writes, since the audit log holds only a hash and an operation key. |
+| AM4 | The lockout (suspends the finding F5 part of D3, D8's reset, D12, and the reset command of L12) | These four changes to the retry brake are decided together in one brief (M4.6, rewritten), which first states what the lockout is for in each host (a person present; headless; cloud) and then brings one proposal to the maintainer. Until that is decided, approved decision 4 ("Nobody to ask: refuse, and it counts as a wipe") and DESIGN §14.3 stand as written. The parts of D8 that do not touch the brake (an `sdk` prompt sets the reviewers' "latest request") stay approved. |
 | AM5 | Findings F1, F3, F4 (confirms D3 in part) | Approved as before, each its own brief with its own tests, after the coverage tightenings. |
-| AM6 | Unlabelled gate changes | M3.1 (the briefing section, now Later) puts the protected list into the gated model's prompt against approved decision 1 and needs the maintainer's sign-off at its brief; M3.10's added reviewer context (Later) likewise (SPEC §12 says no transcript). M3.7 (user-level rules file, rule packs) and M4.4 (project-defined reviewers, a fourth model member) move to "Later"; SPEC §3's cap of three model members stands. A later reviewer must not be named "Boromir", which already names the proposer. |
+| AM6 | Unlabelled gate changes | L9 (the briefing section, was M3.1) puts the protected list into the gated model's prompt against approved decision 1 and needs the maintainer's sign-off at its brief; L13's added reviewer context (was M3.10) likewise (SPEC §12 says no transcript). L10 (user-level rules file, rule packs; was M3.7) and L15 (project-defined reviewers, a fourth model member; was M4.4) are in "Later"; SPEC §3's cap of three model members stands. A later reviewer must not be named "Boromir", which already names the proposer. |
 | AM7 | Tightenings first | Review §2.5's unambiguous categories (an unparsed tool is reviewed, agent-control files are protected paths, credential reads) move ahead of the release, as a brief in M1 (M1.1). `make` and `npm run` wait for M2's data. |
 | AM8 | Additions to 1.0 | A one-page threat model (who is defended against: a mistaken agent, a prompt-injected agent, a hostile repository; and what is out of scope): M1.2. A scripted headless probe suite run by the canary (a block rule refuses, a hook timeout fails closed, the denial wordings are still in the binary): M0.4 and M0.5, plus a one-line session-start notice when the host is newer than the last tested build: M0.6. A compatibility policy (the tested range and what happens outside it): M1.7. The policy table doubling as a bypass-regression corpus: M2.1. A trust rule for a repository-supplied rules file: M1.3. |
 | AM9 | Order | The milestones are re-ordered as below. |
+
+## Round 2 (accepted 2026-11-14)
+
+The maintainer asked for a second round of review and planning on 2026-11-14 and accepted its
+recommendations in advance; every code change in it tightens.
+
+**Briefs**
+
+| Id | What | Gate |
+| :- | :- | :- |
+| R2-H1 | Wrapper option clusters, and wrappers that change directory or root | tightens |
+| R2-H2 | Block-rule misses in the delete and raw-device checks | tightens |
+| R2-R1 | Approvals bound to the working directory, and a full-council approve never cached | tightens |
+| R2-H3 | Forms that evade an existing shipped rule | tightens |
+| R2-R4 | A broken rules file keeps its tightening entries, and `/council reload` needs a person | tightens |
+| R2-U1 | The allow-rule offer says what it allows and is not made for globs or big operations | tightens |
+| R2-R2 | Project redaction patterns applied to the operation key, audit line, refusal and dialog | tightens |
+| R2-R3 | The secrets scan reads descriptions, paths and other tools' inputs, and a text too long to scan in full is not passed silently | tightens |
+| R2-O1 | A failed command is not read as a permission denial, the verb counter is bounded, and a force push keeps its own retry count | tightens |
+| R2-B2 | An unconfirmed file's review rules apply raise-only | tightens |
+| R2-L1 | The audit log says when a write fails | neutral |
+| R2-K1 | Call-supplied names inside the fenced block | tightens |
+| R2-K2 | Strings, dead code and the bypass-and-secrets wording in the manual | neutral |
+| R2-T1 | Mounted-tree tests for the trust listing and the dialog, and a written terminal check | neutral |
+| R2-V2 | The scripted probe suite (this is M0.4) | neutral |
+
+**Left open**, for the lockout brief (M4.6) or M2's data:
+
+| Item | Note |
+| :- | :- |
+| The operation key for tools other than shell and file | Keying on the input would lower the lockout from 3 to 5 for a changed input: it loosens. |
+| Whole-tool verb keys for file tools | Open. |
+| Wider resets on compound commands | Open. |
+| `/council off` and the secrets scan on an allowed call | The code is kept as it is: an allowed call holding a high-confidence secret is refused even under bypass. The manual is corrected to say so (R2-K2). |
+| `git pull` and `PATH=` assignments as review | Wait for M2's shadow data. |
+| A static check for runaway regexes in a rules file | A length and count cap lands in R2-R4; the check itself is open. |
+| Claiming a round before the review, so that parallel calls cannot each get a reviewer | Needs the key decision first. |
+| The categories of review §2.5 not yet covered | M4.1. |
+
+Also recorded here: M0.1 (types to the installed build) waits for the maintainer to confirm that
+workflow files can be pushed from the dev environment (MA1); M0.5 (the canary) waits for MA2.
 
 ---
 
 ## The milestones
 
-Every brief lists: what to do, the files, what must not change, how it is accepted, and the
-finding or idea behind it (in docs/REVIEW-2026-11.md). Sizes: S is one implementer brief, M is two
-to four, L is a planned sequence. "Gate" says which way the brief moves the gate.
+Every brief names what to do, its size, which way it moves the gate and the finding or idea behind
+it (in docs/REVIEW-2026-11.md). Where a brief gives no files or acceptance, the orchestrator writes
+them into the delegation brief when the brief is picked up, and the checkpoint records them. Sizes:
+S is one implementer brief, M is two to four, L is a planned sequence. "Gate" says which way the
+brief moves the gate.
 
 ### M0. Green and current
 
@@ -153,7 +209,8 @@ one session-start line (M0.6).
 
 - [ ] **M0.1 Upgrade the types to the installed build, and move the CI pin with them** (S,
   neutral; finding R1, finding R2, decision D10). Run `/upgrade-types`. The vendored types are
-  2.1.322's; the three failing tests come from 2.1.323. Files: `mods/types/claude-code.d.ts`, the
+  2.1.322's; the three failing tests the review found come from 2.1.323. On 2026-11-14 the
+  installed build was 2.1.325; how many band tests fail there is unverified. Files: `mods/types/claude-code.d.ts`, the
   version line and drift note at the top of `mods/council-of-elrond/DESIGN.md`,
   `.github/workflows/ci.yml` and `.github/workflows/release.yml` (the pin in both moves to the same
   version as the types), and `CHANGELOG.md`. Needs MA1 (workflow files are protected paths where
@@ -168,12 +225,10 @@ one session-start line (M0.6).
   `hooks/elrond/view.ts`, `tests/debate.test.ts`, `tests/view.test.ts`, `tests/fixtures.ts`. Never
   weaken an assertion to get green: if the engine's row now always shows, the tests say so.
   Accepted when all tests pass on the newly pinned build and DESIGN §11 records the new behaviour.
-- [ ] **M0.3 Pin Claude Code in CI** (S, neutral; finding R3, decision D10), partly done.
-  - [x] Both workflows install `@anthropic-ai/claude-code@<the version DESIGN.md names>`.
-  - [ ] **Open remainder:** the two `/upgrade-types` skill steps. The skill gains a step that moves
-    the pin, and one that re-checks whether `$.fs` has gained an append (the audit writer rewrites
-    the whole file for each line until it does: finding A7). File:
-    `.claude/skills/upgrade-types/SKILL.md`.
+- [x] **M0.3 Pin Claude Code in CI** (S, neutral; finding R3, decision D10). Done: both workflows
+  install `@anthropic-ai/claude-code@<the pinned version>`; the `/upgrade-types` skill moves the pin
+  (its step 8) and re-checks whether `$.fs` has gained an append (its step 7; the audit writer
+  rewrites the whole file for each line until it does: finding A7).
 - [ ] **M0.4 A scripted probe suite** (M, neutral; finding A1; AM8). Replaces the one-off re-probe
   of the hard-won facts. The review (finding A1) found fact 1 no longer holds at validation time: a sibling
   module may take `$`, and so may a closure inside a hook. A script under `scripts/` runs one
@@ -197,7 +252,10 @@ one session-start line (M0.6).
   session start, when `claude --version` is newer than the version DESIGN.md's header names, one
   line says so, and enforcement continues unchanged. Where nothing draws it goes through the start
   notice (DESIGN §13.5). Strings in `strings.ts`; the manual and the changelog in the same brief.
-  Accepted when a test shows the line for a newer host and no line for the tested one.
+  The mod cannot read DESIGN.md at run time: the tested version is a constant in the code that
+  `/upgrade-types` moves, and the brief's first step checks how the host version is read
+  (`$.session.version()` in the types). Accepted when a test shows the line for a newer host and no
+  line for the tested one.
 
 Done when: the three gates and `scripts/check-hygiene.sh` pass on the pinned build with M0.1 and
 M0.2 merged; the probe suite passes headless; the canary has run once on the latest build; and a
@@ -211,9 +269,10 @@ I5, P1, S3.
 
 - [ ] **M1.1 The tightenings that wait for nothing** (M, **tightens**; review §2.5, AM7; was part
   of M3.6). One brief; each category has tests that fail without it: a tool the mod does not
-  parse is reviewed (the PowerShell tool is the known one); agent-control files (`CLAUDE.md`,
-  `.claude/agents/`, `.claude/skills/`, hooks and MCP configuration) join the protected paths;
-  reading credentials (the environment, key files, and `.env` through any tool) is reviewed or
+  parse is reviewed (the PowerShell tool is the known one); agent-control files join the protected
+  paths (the settings files and the plugin folders already are, since the hardening pull request;
+  what remains is `CLAUDE.md`/`AGENTS.md`, `.claude/agents/`, `.claude/skills/`,
+  `.claude/commands/`, `.claude/hooks/` and MCP configuration); reading credentials (the environment, key files, and `.env` through any tool) is reviewed or
   asked. The rest of the coverage list is M4.1; `make` and package-script targets wait for M2's
   data.
 - [ ] **M1.2 A one-page threat model** (S, neutral; AM8). Who the mod defends against: a mistaken
@@ -230,15 +289,17 @@ I5, P1, S3.
   install is described: `/plugin install council-of-elrond --marketplace Deluha/council-of-elrond`
   at the prompt, `claude plugin install council-of-elrond --marketplace Deluha/council-of-elrond`
   from a shell, the desktop route (the + button, Plugins, Add marketplace), and one cloud block for
-  a setup script with a pinned tag and the options a host that cannot ask should start with. The
-  release workflow's notes use the same lines.
+  a setup script with a pinned tag and the options a host that cannot ask should start with (the
+  cloud block in `docs/INSTALL.md` already carries `trustProjectRules`; the `--marketplace` flag
+  must be checked on the pinned build). The release workflow's notes use the same lines.
 - [ ] **M1.6 The promise sentence** (S, neutral; finding I2, finding I5, finding S3; was M1.4, the
   promise only). The one-sentence promise in `plugin.json`, the marketplace entry and both
   READMEs: a second opinion and an audit trail beside Claude Code's own permissions, not a sandbox.
-  The icon (MA6) and the single author name stay in Later.
+  The icon (MA6) and the single author name stay in Later (L6).
 - [ ] **M1.7 The compatibility floor and policy** (S, neutral; finding R5, AM8; replaces was M1.2).
-  The floor is the pinned build; there is no search through older builds. One place states the
-  tested range and what happens outside it: below the floor the mod says so at session start in one
+  The floor is the pinned build; there is no search through older builds. One place, a compatibility
+  policy section (the brief chooses the file it lives in), states the tested range and what happens
+  outside it: below the floor the mod says so at session start in one
   line and keeps enforcing; above the last tested build M0.6's notice appears. Every document that
   states a minimum version points to that place.
 - [ ] **M1.8 Release** (S, neutral; finding R4; was M1.6). Move `[Unreleased]` to `[0.6.0]`, bump
@@ -246,7 +307,8 @@ I5, P1, S3.
   `docs/INSTALL.md` as available. Then MA3 and MA4. Accepted when the release workflow has
   published 0.6.0 and a fresh machine installs it with one line.
 
-Done when: the release exists and INSTALL's cloud block names its tag. Checkpoint, then wait.
+Done when: every M1 brief is ticked, and 0.6.0 is tagged and installable by the one-line install
+(INSTALL's cloud block names its tag). Checkpoint, then wait.
 
 ### M2. Measure
 
@@ -254,7 +316,7 @@ Goal: numbers for reviewer quality, against thresholds that were written before 
 M4 changes policy and must not be done blind. Findings T1, T3.
 
 - [ ] **M2.1 The policy table, its diff check and the bypass-regression corpus** (M, neutral;
-  review §4.11 of the October review, the output-parity idea borrowed in M0; was M2.2; AM3 b, AM8).
+  review §4.11 of the October review, the output-parity idea from the borrowed development process, whose other parts are L1 to L5; was M2.2; AM3 b, AM8).
   `tests/policy.table.ts`: several hundred rows of input, expected tier and expected rule, starting
   from the probe sets; it is also the bypass-regression corpus, so every bypass class fixed so far
   (DESIGN §10, §15) has rows under neutral names. `scripts/check-policy-diff.mjs` classifies the
@@ -298,7 +360,7 @@ P2).
   may take `$`: an effects layer, `hooks/effects/`, is the only place besides `register.ts` that
   touches `$`; pure modules stay pure; the direction is rules, then members, then elrond, then
   effects, then register. Written in `docs/DEVELOPMENT.md` and checked in review (a conventions
-  checker is Later, M0.7). If M0.4 shows they may not, stop and re-plan M3 with the maintainer.
+  checker is Later, L3). If M0.4 shows they may not, stop and re-plan M3 with the maintainer.
 - [ ] **M3.2 Extract the effects** (L, neutral, one pull request each, in this order; was M4.2):
   rules loading and scopes; files and real paths; git inspections and previews; the model review
   and probe; the check runner and `convene`; the audit writer and its queue; dialogs, panes and the
@@ -346,7 +408,7 @@ AM2, AM4, AM5 and AM7.
   brings one proposal to the maintainer that settles together: whether "nobody can be asked" counts
   as a failed attempt (finding F5), whether another plugin's `tool.check` denial does (decision
   D12; the wording is recorded in DESIGN §12.7), whether an `sdk` prompt or a person's command
-  resets rounds, failed attempts and lockouts (D8's reset, and the reset command of was M3.9), and
+  resets rounds, failed attempts and lockouts (D8's reset, and the reset command of L12), and
   what approved decision 4 then says. No code until the maintainer decides. Until then approved
   decision 4 and DESIGN §14.3 stand as written.
 
@@ -384,16 +446,18 @@ S1.
   a numbered decision log in `docs/decisions/`, one entry per decision with its date and what it
   replaced. The version history at the top of DESIGN.md becomes a table. There are no per-folder
   READMEs under `hooks/`.
-- [ ] **M6.3 Counts and version numbers out of prose** (S, neutral; replaces the checkers of was
-  M0.6). Documents stop stating test counts, line counts and the Claude Code version; they point to
-  DESIGN.md's header instead, which is the one place a version is stated.
+- [ ] **M6.3 Counts and version numbers out of prose** (S, neutral; replaces the facts checker of
+  L2). Documents stop stating test counts and line counts, and state the tested build and the floor
+  in one place each (DESIGN.md's header; the compatibility policy of M1.7), which every other
+  document points to. Version numbers that record a probe's result stay.
 - [ ] **M6.4 A deprecation rule** (S, neutral). A written rule for shipped rules and options, since
   after 1.0 a default cannot change in a minor release.
 
 Done when: the manual's first screen holds install, shadow mode, the first rule and the first
-report; DESIGN.md's header history is a table; and a search of the documents for test counts and
-for a Claude Code version outside DESIGN.md's header and the changelog finds none. Checkpoint,
-then wait.
+report; DESIGN.md's header history is a table; a search of the documents for test counts finds
+none; and the tested build and the floor are each stated in one place (DESIGN.md's header; the
+compatibility policy of M1.7) and every other document points there. Version numbers that record a
+probe's result (ROADMAP "Hard-won API facts", DESIGN §12) stay. Checkpoint, then wait.
 
 ### M7. 1.0
 
@@ -403,63 +467,77 @@ Done when all of these hold:
   weeks.
 - Eval results that meet AM3 a and b on the default models, re-run on the release build.
 - The support matrix complete.
-- `register.ts` as wiring only; the conventions checker with no debt list. *(Open: both depend on
-  briefs now in Later, M4.3 and M0.7. The maintainer decides whether this criterion stays.)*
+- `register.ts` as wiring only; the conventions checker with no debt list. *(Open, see below.)*
 - A stated minimum version (M1.7).
-- No open **high** finding in either November review, as judged by the maintainer.
+- No open **high** finding in either November review, as judged by the maintainer. *(Open, see below.)*
 - A deprecation rule for shipped rules and options (M6.4), since after 1.0 a default cannot change
   in a minor release.
 - Before the tag: the policy table diffed against the previous release with every change
   declared, as M2.1 does for a pull request.
 
+**Open points for the maintainer** (not resolved here): three of these criteria depend on a Later
+item or a suspended decision.
+
+- `register.ts` as wiring only depends on L14 (the reducer), and the conventions checker on L3.
+  The maintainer decides whether this criterion stays.
+- "No open high finding in either November review": finding H2 is addressed only by the
+  `tool.check` probe (L17), and the reset half of finding H1 is suspended by AM4.
+- The independent review has no finding ids or severities, so "high" is judged for it against
+  `docs/REVIEW-2026-11.md` plus the open items listed in "Round 2", table 2.
+
 ### Later (after 1.0)
 
-Briefs and ideas that wait, in rough order. Each needs its own Step 0 check against the types. Old
-ids are those of the first v2 numbering; AM1 says none of them is an exception to the freeze.
+Briefs and ideas that wait, in rough order. Each needs its own Step 0 check against the types. An
+L id is this list's own; "(was ...)" gives the id of the first v2 numbering. AM1 says none of them
+is an exception to the freeze.
 
-- **M0.5** A lean CLAUDE.md and one routing skill (references, workflows, an ask-first list).
-- **M0.6** Checks for the guidance, the facts and docs-sync (`check-guidance`, `check-facts`,
-  `check-docs-sync`); M6.3 replaces the facts checker's job by removing the numbers.
-- **M0.7** A conventions checker in place of the `reader` pre-check (finding A2, finding A3,
-  finding A5, finding D3, finding T4). Until it exists the pre-check row in CLAUDE.md stays.
-- **M0.8, beyond the canary** Git hooks by stage, workflows split by concern, `actionlint`, pinning
-  the existing actions by commit SHA, making the CI jobs required checks on `main`.
-- **M0.9** The pull request template's gate-direction line, CONTRIBUTING pointers and a dev
-  container.
-- **M1.4, beyond the promise sentence** The icon (MA6) and one author name (finding I2).
-- **M1.5** `/council doctor` (idea 7.2 a).
-- **M2.5** Report export, JSON and Markdown (idea 7.5 d).
-- **M3.1** Brief Claude at the start (idea 7.1 a); needs the maintainer's sign-off at its brief
-  (AM6).
-- **M3.7** A user-level rules file, a schema and rule packs (ideas 7.2 d to f; AM6).
-- **M3.8** `/council init` (idea 7.2 b).
-- **M3.9** One approval route in a terminal, and a reset command (ideas 7.3 a, b, g); the reset is
-  part of M4.6's decision (AM4).
-- **M3.10** Cheaper, better-informed reviews (ideas 7.3 e, f); the added context needs sign-off
-  (AM6).
-- **M4.3** The decision pipeline as a reducer.
-- **M4.4** Members as data (idea 7.4 a; AM6: SPEC §3's cap stands).
-- **M4.5** Wording and the shell parser (finding A2, finding A6).
-- **M5.2** Probe an ask-only `tool.check` (finding H2, decision D7), and its open question: keep the
-  chat approval route, replace it, or both.
-- **M5.4** Visibility on every surface (ideas 7.5 a, b).
-- **M5.5, beyond the matrix** A documented `claude -p` setup for CI (idea 7.5 c) and a clear
-  statement for Windows.
-- **M6.3** The theme pass (idea 7.7, decision D9): themed preset names, a raid log, one line of
-  voice per member, the theme in relayed text, a look at `$.theme.set`. Achievements and sounds are
-  declined.
-- **A `/config` switch for the allow-rule offer** (v1), only if feedback says the offer is noisy.
-- **The `AskUserQuestion` re-entry terminal check** (v1): whether the mod's own question could
-  arrive as re-entry, so that "Allow once" must still run the call. Whether it is still relevant is
-  unknown: 2.1.304 removed the `re-entry` failure kind (DESIGN §12.6).
-- **On-demand review** (7.4 b): `/council review` seats the diff reviewer on the working tree and
-  runs the project checks.
-- **Plan review** (7.4 c): one review of the plan when Claude leaves plan mode. Tightens.
-- **A snapshot before destructive work** (7.4 d, "Samwise"), in D11's limited form.
-- **A check Claude can call** (7.1 c), in D11's limited form.
-- **A triage model** (7.3 d), in D11's limited form.
-- **The never-offer list and rule suggestions across sessions** (7.6 b), in D11's limited form.
-- **Telemetry for teams** (7.6 c) and **organisation policy** (7.6 d), when a team asks.
+- **L1** (was M0.5) A lean CLAUDE.md and one routing skill (references, workflows, an ask-first
+  list).
+- **L2** (was M0.6) Checks for the guidance, the facts and docs-sync (`check-guidance`,
+  `check-facts`, `check-docs-sync`); the brief "Counts and version numbers out of prose" (M6)
+  replaces the facts checker's job by removing the numbers.
+- **L3** (was M0.7) A conventions checker in place of the `reader` pre-check (finding A2, finding
+  A3, finding A5, finding D3, finding T4). Until it exists the pre-check row in CLAUDE.md stays.
+- **L4** (was M0.8, beyond the canary) Git hooks by stage, workflows split by concern,
+  `actionlint`, pinning the existing actions by commit SHA, making the CI jobs required checks on
+  `main`.
+- **L5** (was M0.9) The pull request template's gate-direction line, CONTRIBUTING pointers and a
+  dev container.
+- **L6** (was M1.4, beyond the promise sentence) The icon (MA6) and one author name (finding I2).
+- **L7** (was M1.5) `/council doctor` (idea 7.2 a).
+- **L8** (was M2.5) Report export, JSON and Markdown (idea 7.5 d).
+- **L9** (was M3.1) Brief Claude at the start (idea 7.1 a); needs the maintainer's sign-off at its
+  brief (AM6).
+- **L10** (was M3.7) A user-level rules file, a schema and rule packs (ideas 7.2 d to f; AM6).
+- **L11** (was M3.8) `/council init` (idea 7.2 b).
+- **L12** (was M3.9) One approval route in a terminal, and a reset command (ideas 7.3 a, b, g); the
+  reset is part of the lockout brief's decision (AM4).
+- **L13** (was M3.10) Cheaper, better-informed reviews (ideas 7.3 e, f); the added context needs
+  sign-off (AM6).
+- **L14** (was M4.3) The decision pipeline as a reducer.
+- **L15** (was M4.4) Members as data (idea 7.4 a; AM6: SPEC §3's cap stands).
+- **L16** (was M4.5) Wording and the shell parser (finding A2, finding A6).
+- **L17** (was M5.2) Probe an ask-only `tool.check` (finding H2, decision D7), and its open
+  question: keep the chat approval route, replace it, or both.
+- **L18** (was M5.4) Visibility on every surface (ideas 7.5 a, b).
+- **L19** (was M5.5, beyond the matrix) A documented `claude -p` setup for CI (idea 7.5 c) and a
+  clear statement for Windows.
+- **L20** (was M6.3) The theme pass (idea 7.7, decision D9): themed preset names, a raid log, one
+  line of voice per member, the theme in relayed text, a look at `$.theme.set`. Achievements and
+  sounds are declined.
+- **L21** A `/config` switch for the allow-rule offer (v1), only if feedback says the offer is
+  noisy.
+- **L22** The `AskUserQuestion` re-entry terminal check (v1): whether the mod's own question could
+  arrive as re-entry, so that "Allow once" must still run the call. Whether it is still relevant
+  is unknown: 2.1.304 removed the `re-entry` failure kind (DESIGN §12.6).
+- **L23** On-demand review (7.4 b): `/council review` seats the diff reviewer on the working tree
+  and runs the project checks.
+- **L24** Plan review (7.4 c): one review of the plan when Claude leaves plan mode. Tightens.
+- **L25** A snapshot before destructive work (7.4 d, "Samwise"), in D11's limited form.
+- **L26** A check Claude can call (7.1 c), in D11's limited form.
+- **L27** A triage model (7.3 d), in D11's limited form.
+- **L28** The never-offer list and rule suggestions across sessions (7.6 b), in D11's limited form.
+- **L29** Telemetry for teams (7.6 c) and organisation policy (7.6 d), when a team asks.
 
 Declined on 2026-11-13: a fourth model member (the dependency reviewer, 7.4 e), and achievements
 and sounds.
@@ -479,13 +557,11 @@ claude plugin validate --strict mods/council-of-elrond     # copy its hooks:/cal
 scripts/check-hygiene.sh                                   # generated files, personal data, links
 ```
 
-- **One rule for the Claude Code version.** CI and the local gates use the **pinned** build: the
-  version both workflows install, which DESIGN.md's header names (its history of upgrades is
-  there too). To get it locally, install it into a scratch folder and run that `claude`:
-  `npm install --prefix <a scratch folder> @anthropic-ai/claude-code@<pinned version>`, then
-  `<a scratch folder>/node_modules/.bin/claude`. Upgrades happen on a schedule, monthly and before a
-  release (decision D10), through the `/upgrade-types` skill. A newer installed build is expected;
-  it is not a reason to upgrade mid-brief.
+- **One rule for the Claude Code version.** The first three commands run on the build CI pins, not
+  on whatever `claude` is installed: how to get it and how the pre-commit hook checks it are in
+  [docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md#the-pinned-build). A newer installed build is
+  expected and is not a reason to upgrade mid-brief; upgrades are scheduled (decision D10) and run
+  through `/upgrade-types`.
 - **Keep the mod out of the session building it.** Don't load it into your own dev session (the skill's hot-reload folder, or `--plugin-dir` on the session you work in): it would gate your own tool calls.
 - **Live checks run headless.** Use `claude -p --plugin-dir ./mods/council-of-elrond "<prompt>"` with harmless commands, ideally in a throwaway `git init` folder, then clean it up along with the generated `.claude-plugin/types/` and `tsconfig.json` in the mod folder. `/council` output only shows with `--output-format stream-json --verbose` (as `system/ui_log`).
 
@@ -552,7 +628,7 @@ From the Step 0 review and the model discussion. These are binding unless the us
    - No Haiku in any default; the latest Sonnet is the floor.
    - Built-in defaults: Gandalf `sonnet`, Legolas `sonnet`, Aragorn `opus`, full council `opus` (`BUILT_IN_MODELS` in `hooks/config/defaults.ts`).
    - Fable is selectable.
-   - Layers, highest first: session switch (`/council model`) → `/config` row (picker: `default` / `sonnet` / `opus` / `fable` / `haiku`; `default` = unset) → project `rules.json` `models` (full IDs allowed) → built-in. Your `/config` choice beats the project file.
+   - Layers, highest first: session switch (`/council model`) → `/config` row (picker: `default` / `sonnet` / `opus` / `fable` / `haiku`; `default` = unset) → project `rules.json` `models` (full IDs allowed) → built-in. Your `/config` choice beats the project file. *A project file's `models` now wait for trust (DESIGN §15 item 22), which wins where they differ: until the file is confirmed that layer is skipped.*
    - Token cap, effort and deadline follow the model family (`profileOf` in `hooks/elrond/models.ts`).
    - `/council model <member> <model>` switches for the session. `--save` writes the `/config` row via `$.config.set`, falling back to session-only with a message when the value isn't a picker option or the row is locked.
    - On a `/council model` change, send a one-token probe call to confirm the model works.
@@ -607,7 +683,8 @@ twelve of its own list. One line each, with the place to read the reasoning:
 - **Protected paths are `**/`-prefixed** so they hold in every repository below a multi-repository
   root. Same section, row "C5, protected paths".
 - **The origin rule for `command.run` (the v1 H2 brief).** The subcommands that loosen the gate
-  (`off`, `shadow on`, `model`) need a person's origin; the others answer any origin. Same section,
+  (`off`, `shadow on`, `model`, and `trust` with or without a code, added by M1.3) need a person's
+  origin; `untrust`, which only tightens, and the others answer any origin. Same section,
   table "H2: pipeline robustness", row "§2.9 `command.run` origin".
 - **The `exact` field in the rule schema is declined.** v1,
   [Decisions on the open items](../../docs/history/ROADMAP-v1.md#decisions-on-the-open-items-after-the-final-deliverables),
@@ -630,8 +707,8 @@ twelve of its own list. One line each, with the place to read the reasoning:
 
 Open items in v1 that have no other home in v2, and where they now sit:
 
-- **A `/config` switch for the allow-rule offer:** "Later".
-- **The `AskUserQuestion` re-entry terminal check:** "Later"; whether it is still relevant is
+- **A `/config` switch for the allow-rule offer:** "Later" (L21).
+- **The `AskUserQuestion` re-entry terminal check:** "Later" (L22); whether it is still relevant is
   unknown.
 - **C4's pending cloud run and C6's pending cloud check:** M5.2.
 - **The `proceed()` budget-guard test:** M2.5.

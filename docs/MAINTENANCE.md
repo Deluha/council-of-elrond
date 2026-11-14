@@ -26,7 +26,9 @@ drift. The `/upgrade-types` skill in this repository walks through it.
    §2's `calls:` line. Classify the drift: additive (nothing the mod calls changed), changed
    signature, or removed method.
 3. **Typecheck and test.** `tsc -p mods`, `claude plugin test mods/council-of-elrond`,
-   `claude plugin validate mods/council-of-elrond`.
+   `claude plugin validate --strict mods/council-of-elrond`, on the build you are upgrading to
+   (the pre-commit hook needs `COUNCIL_ALLOW_UNPINNED=1` for this brief only; see
+   [DEVELOPMENT.md](DEVELOPMENT.md#the-pinned-build)).
 4. **Re-verify the binary-derived wording.** Search the installed binary for the strings in
    DESIGN.md §6.14 and ROADMAP API fact 13:
    ```sh
@@ -103,7 +105,13 @@ Beyond the template's checklist, read for these:
 
 ## Data the mod keeps
 
-The audit log is the only data the mod accumulates. It holds hashes, tiers, rule ids, verdicts
+Two things are kept. The trust record is the plugin's own store (under the Claude Code
+configuration folder, never in a repository): for each rules file a person confirmed with
+`/council trust`, its real path and the SHA-256 of its content, at most 200 entries. `/council
+untrust` removes the entries for the files in scope; uninstalling the plugin's data removes the
+rest. It holds no file content.
+
+The audit log is the only data the mod accumulates besides that. It holds hashes, tiers, rule ids, verdicts
 and reasons (redacted), tokens and timings, your decisions, and for a full council each voice and
 each check's status. It never holds file contents, diffs, check output or secrets. Three files of
 1 MiB by default, rotated, gitignored by a file the mod writes. Users can delete the folder at any

@@ -42,10 +42,14 @@ the mod relies on is unchanged. Classify the drift: **additive** (nothing the mo
 
 ## 4. Gates
 
+Run them on the build you are upgrading to. The pre-commit hook refuses a build other than the pin
+unless `COUNCIL_ALLOW_UNPINNED=1`, for this brief only; the full explanation is in
+`docs/DEVELOPMENT.md`, "The pinned build".
+
 ```sh
 tsc -p mods
 claude plugin test mods/council-of-elrond
-claude plugin validate mods/council-of-elrond
+claude plugin validate --strict mods/council-of-elrond
 ```
 
 A `tsc` failure is the drift talking. Fix the mod to the new API; never edit the generated file.
@@ -78,10 +82,16 @@ live probes: a hook overrunning its budget is cut off (from 2.1.299: its `.catch
 `stream.return()` kills a spawned check; `/council` output arrives as `ui_log` in stream-json.
 Skip any whose cost outweighs the risk, and say which you skipped.
 
-## 7. Record
+## 7. Re-check whether `$.fs` has an append
 
-- DESIGN.md header: the new version and the drift in one sentence.
-- ROADMAP.md "Resuming": the version line.
+The audit appender reads and rewrites the whole file for each line because the types have no
+append for files (finding A7). Search the new `mods/types/claude-code.d.ts` for a file append on
+`$.fs`. If one exists, say so in the record below and open a brief to use it; if not, say that it
+still has none. (`session.append` in the types is a different call.)
+
+## 8. Record
+
+- DESIGN.md header: the new version (the "Targets" line) and the drift in one sentence.
 - CHANGELOG.md "Unreleased": "Types regenerated for Claude Code X.Y.Z; drift: …".
 - CI (`.github/workflows/ci.yml` and `.github/workflows/release.yml`): move the pin in both
   workflows to the new version (decision D10).

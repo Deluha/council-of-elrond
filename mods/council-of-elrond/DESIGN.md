@@ -1,6 +1,6 @@
 # council-of-elrond: design
 
-Status: **final deliverables** (SPEC §21–22, §12 below), after Stage 6 (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop).
+Status: built through Stage 6 (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop), the final deliverables (SPEC §21–22, §12 below), the v1 hardening and cloud work (§13, §14), and the hardening after the November review (§15). Nothing is tagged yet: 0.5.0 is a changelog heading, and the work since is under "Unreleased".
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
 Targets Claude Code **2.1.322** (built on **2.1.289**, checked on **2.1.291** from Stage 5, **2.1.294** from
 Stage 6, and **2.1.296**, **2.1.299**, **2.1.304**, **2.1.308** and **2.1.322** after it). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.322's) and
@@ -114,6 +114,12 @@ project checks the user listed in `rules.json` (`gimli.commands`, §8).
 ## 3. Data flow
 
 ```
+config load (session start, /council reload, after the mod's own write) ─► rules.json per repository
+             │ validate ─► broken: ignored whole, shipped rules enforce
+             │ confirmed (path + SHA-256 in the trust record) or trustProjectRules = always ─► in force in full
+             │ unconfirmed ─► split (pure): ask and block rules, protected lists, bigOperations apply;
+             │                allow and review rules, disables, models, patterns, allowlist and project
+             │                checks are held back, counted, told once per file (§15.22)
 tool.call ─► classify (pure, rules only; against each repository the call touches under a
              │             multi-repository root, the strictest wins: §14.5)
              │ allow ─► high secret? refuse (audited) · else next(e)     (no state read or written)
@@ -137,6 +143,7 @@ tool.call ─► classify (pure, rules only; against each repository the call to
              │              members: parallel (or one at a time) under one deadline (time left)
              │              combine (pure): strictest wins; no verdict = block; failed check = block
              │                 approve ─► cache, next(e) · revise/block ─► refuse, labelled
+             │                 approve with a cut shell command in any seat ─► the person (§15.11)
              │                 blocked only for want of verdicts ─► escalate (shadow: pass)
              │           route (pure): the rule's member and profile, else Gandalf
              │           nobody on / budget spent ─► escalate (shadow: pass)
@@ -145,6 +152,8 @@ tool.call ─► classify (pure, rules only; against each repository the call to
              │                  Aragorn database (command, SQL, production matches)
              │           review ($.model.complete, the member's own prompts, own deadline)
              │              approve ─► cache, next(e)
+             │              approve of a cut shell command ─► the person (nobody to ask: refuse), not
+             │                 cached, no round (§15.11)
              │              revise / block ─► refuse (verdict, rounds left)  round, failed attempt
              │                              (shadow: logged, next(e))
              │              error / timeout / malformed ─► escalate (shadow: pass)
@@ -155,7 +164,9 @@ tool.call ─► classify (pure, rules only; against each repository the call to
              │   review or the council sits; noteVoice / noteCheck as each answers; closeDebate with
              │   the verdict (aborted on Esc)
              └─ any throw before next ─► .catch ─► refuse
-/council ─► parse (pure) ─► output lines ─► pane (where a surface draws) or ui.log; never Claude
+/council ─► parse (pure) ─► output lines ─► pane (where a surface draws) or ui.log; not to Claude, except
+            where nothing draws: a person's status, report, rules and test go to Claude as `context`
+            to relay (redacted, fenced; §13.5, §14)
 /council debate ─► the council-debate pane (opened at any width), else its rows as ui.log lines
 ui.render Pane council-debate ─► state ─► debateRows(view.agentId) (pure) ─► Text rows   (reads only)
 ui.render AbovePrompt ─► survey? pass · state + clock ─► bandRows (pure) ─► rows, or pass when idle
@@ -172,6 +183,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | Failure | Behaviour |
 | :- | :- |
 | Hook throws before the call runs | `.catch` refuses ("fails closed"). |
+| Project checks held back for an unconfirmed rules file | Counted as a check that could not start: a big operation's council blocks ("not run: the rules file is not trusted", §15.22). |
 | A high-confidence secret in an allowed call | Refused, audited with tier `allow`; no rounds, no failed attempt, no state write. |
 | Hook throws after the call ran | `.catch` replays the real result (`next.called`); the call is not re-run and Claude isn't told a call that ran was refused. |
 | A `tool.call` raised beneath the hook's own frame (`re-entry`, from 2.1.294) | `.catch` answers with `called` false and refuses. A subagent's calls do not arrive this way, in the background or the foreground (verified live, §12.1). |
@@ -664,6 +676,7 @@ The `/upgrade-types` runs for 2.1.308 and 2.1.322 read the binary with `grep -a`
    - **Not a fourth step.** The fallback is an alternative to one step, not a step: it does not count against the three-inspection cap, so a preview starts at most one extra process. `previewOf` and `rangeDiffOf` share `runGitInspection`, which runs the first argv, then (when it exits non-zero or throws) `orElse.argv` once with the same working folder, environment and 5 s timeout. The fallback's label stands only if it succeeds; if it fails too, the outcome is as before (no commits in the preview; the diff reviewer sits out, "the changes could not be read").
    - **Legolas's brief** carries the range that was read as its `path`, so the reviewer sees `origin/HEAD...HEAD`; its prompt needed no change.
    - `/council test` runs nothing and is unchanged.
+   - *The ranges above (`<remote>/<branch>..HEAD`, `<remote>/HEAD..HEAD`) are superseded by §15 items 18 and 19: every refspec is read with its own range and fallback, and the push-argument reader is `rules/push.ts`.*
 
 2. **Allowed calls are scanned for high-confidence secrets** (the `allow` branch of the `tool.call` hook in `hooks/register.ts`). Before an allowed call passes, `scanCall` runs with the shipped and configured patterns and the allowlist; a high finding refuses the call with the same refusal as a gated one (`who.gollum`, `reason.secretHigh`, `alternative.removeSecret`). A low finding is ignored there.
    - **Why now.** The spec put the scan after the allow step so that allowed calls stay free of work. A pattern scan of the call's text is cheap, and a literal key in an allowed `curl` or `echo` reached the network or the transcript unscanned.
@@ -748,7 +761,7 @@ The `/upgrade-types` runs for 2.1.308 and 2.1.322 read the binary with `grep -a`
    - **(h) A `cd` inside the root carries its folder** (`Inspection.cwd`, `inFolder` and `planPreview` in `galadriel.ts`). A git part whose finding `cwd` differs from the session's working directory (an in-command `cd` to a folder inside the root) has its inspections tagged with that folder. A part working where the session does gets no tag, so every call without a `cd` runs git exactly where it did (`ctx.gitDir`, the deciding scope's directory). Path inspections are unchanged. The one-of-each key now includes the folder, so the same command in two folders is two inspections. `rangeDiffInspection` takes the call, the plan context and the part's folder and applies the same rule; `rangeOf` (in `elrond/council.ts`) is unchanged, so `register.ts` finds the part's finding (`classification.findings.find(finding => finding.part === range.part)`) for its `cwd`. A call that would run elsewhere gets no range inspection, and the diff reviewer sits out with `council.noRange` ("not asked: the changes could not be read"), exactly as `git -C` did. Tests: "a cd inside the root tags the git inspections with that folder; none leaves them untagged" (`galadriel.test.ts`), "a cd inside the root: the previews and the range diff run in that folder" (`gitcwd.test.ts`, which reads the folder each process ran in). Mutations: not tagging (`inFolder` returns the steps as they are) fails six tests; leaving the folder out of the key fails the first; not passing the part's folder to `rangeDiffInspection` in `holdCouncil` fails five.
    - **(i) `runGitInspection` resolves the folder** (`gitDirOf` in `hooks/register.ts`). A step with a `cwd` is first resolved with `$.fs.stat(cwd, { resolve: true })`; if that fails, or its `realPath` is not the real root or inside it (`ctx.realRoot`, as `sqlFilesOf` and `realPathOf` measure), the inspection does not run and counts as failed (no preview line, as any failure). Otherwise it, and its `orElse`, run with `cwd: realPath`; a step with no `cwd` runs in `ctx.gitDir` as before. The choice sits in `runGitInspection`, so `previewOf` and `rangeDiffOf` share it. The root itself counts as inside (`cd ..` back to the root from a subfolder), where `sqlFilesOf`'s strict `isInside` would not; `realPathOf` makes the same exception. Tests: "a cd into a link that lands outside the root: no git runs, and the diff reviewer sits out", "a cd into a link that stays inside the root runs git at its real folder" (`gitcwd.test.ts`). Mutation: running in the lexical folder without the stat fails these two and the merge test of the same name.
    - **(j) The merge's current branch follows the same rule** (`mergePlace` in `galadriel.ts`, the `needsCurrentBranch` site in `register.ts`). If any merge part of the call would run elsewhere the branch is not read: it is unknown, which already counts as a merge into a protected branch (a council sitting, `isBranchAssumed`). Otherwise it is read in the first merge part's folder: its in-command `cd`, real-path checked by `gitDirOf`, else `ctx.gitDir` when that part works where the session does. A failed real-path check is unknown. `needsCurrentBranch` and `bigOperationOf` are unchanged (`elrond/council.ts`); `/council test` still reads nothing. Tests: "read in the first merge part's folder", "a merge git would run elsewhere has an unknown branch", "one merge part that would run elsewhere is enough", "a cd into a link that lands outside the root: the branch is unknown" (`gitcwd.test.ts`). Mutation: dropping the elsewhere loop in `mergePlace` fails the second and third.
-   - **(k) Push option values are values** (`pushRange` in `galadriel.ts`). The word after any option in `PUSH_OPTIONS_WITH_ARG` (`checks.ts`, now exported: one table for the force-push rule and for the preview) is skipped, so `git push -o ci.skip origin main` reads remote `origin`, branch `main`, range `origin/main..HEAD`. `--opt=value` was already dropped as an option. Test: "the value of a push option is not the remote or the branch" (four spellings, preview and range diff). Mutation: not skipping the value fails it.
+   - **(k) Push option values are values** *(superseded by §15 items 18 and 19: the range is per refspec, and `PUSH_OPTIONS_WITH_ARG` now lives in `rules/push.ts`, read by `parsePush`)* (`pushRange` in `galadriel.ts`). The word after any option in `PUSH_OPTIONS_WITH_ARG` (`checks.ts`, now exported: one table for the force-push rule and for the preview) is skipped, so `git push -o ci.skip origin main` reads remote `origin`, branch `main`, range `origin/main..HEAD`. `--opt=value` was already dropped as an option. Test: "the value of a push option is not the remote or the branch" (four spellings, preview and range diff). Mutation: not skipping the value fails it.
    - **(l) No configured program starts in an inspection** (`GIT_ENV` in `register.ts`, the write preview in `galadriel.ts`). `git diff --stat` in the write preview gets `--no-ext-diff` and `--no-textconv` before `HEAD` (the range diff already had both). `GIT_ENV` gains `GIT_CONFIG_COUNT=2` with `core.fsmonitor=false` (a configured fsmonitor hook would run on `git status` and `git diff`) and `log.showSignature=false` (with it set, `git log` runs the configured gpg program: a tightening of the same kind). Every git process the mod runs, the previews, the range diff and the current branch, goes through `GIT_ENV` (there are two `$.process.run` sites, `runGitInspection` and `currentBranchOf`). The test kit's `process.run` hook now records each process's `env` (`World.processEnvs`). Tests: "every git process the mod runs carries the config overrides" (`gitcwd.test.ts`), "no configured program starts: the write diff turns off external diff and textconv" (`galadriel.test.ts`). Mutations: removing `GIT_CONFIG_COUNT` fails the first; removing the two flags fails the last two.
    - **(m) `unquote` dropped from the delete preview** (`planPreview`). `ShellPart.coreWords` is built from the parser's words, "every word, quotes removed" (`shell.ts`: the scanner appends a quoted span's content without its quotes, for `'...'`, `"..."`, `$'...'` and `$"..."`), so the second strip only ever removed quote characters that were part of the text (`rm -r '"x"'` now previews the folder named `"x"`, which is what the shell removes). No word source keeps quotes, so `unquote` is gone. Test: "a quoted delete target is the same as an unquoted one" (`rm -r "build dir"`, `rm -r 'x'`), which passes before and after, as a regression guard.
    - **(n) Inline SQL is not a target** (`sqlTargets` in `hooks/elrond/operations.ts`, `CLIENT_OPTIONS` in `hooks/members/aragorn.ts`; REVIEW §3.4). The key of a SQL client read the first positional when no option named a database, so for `psql -c "DELETE FROM users"` the target was the statement itself and every rephrase (`delete from users where 1=1`) was a new operation, with its own rounds and its own failed attempts. `sqlTargets` now drops the value of each inline-SQL option of the client before it looks for a target, in both forms (`-c "…"` and `--command=…`). The options come from Aragorn's `CLIENT_OPTIONS` (now exported), the table that already says which options carry SQL for the database reviewer, so there is one table and the two cannot drift. File options (`-f drop.sql`) are not skipped: a file is a thing the call names. So `psql -c "DELETE FROM users"` keys `shell:psql`, `psql -d staging -c "select 1"` still keys `shell:psql staging`, `mysql -e "…"` keys `shell:mysql`. The key is wider (more calls share it), which is the safer side: the rounds and the lockout follow the target, not the wording. Test: `operations.test.ts › operation keys: accuracy (H3) › inline SQL is not a target…`. Mutation: with the skip removed, the test fails (`shell:psql DELETE FROM users`).
@@ -1412,9 +1425,13 @@ decided; the live list of what still passes is the README's "Known gaps in shell
       (block rules are a floor), so they apply at once. With the allow and review rules removed the
       remaining project rules keep their order, and what they uncover is only ask or block.
       `loadConfig(text, shipped, isTrusted)` merges only `split.always` when `isTrusted` is false
-      and reports the rest as `needsTrust` (counts and a summary); nothing held back is compiled,
-      so no held-back pattern is ever used as a regex on call text, and no held-back model id is
-      ever sent a request.
+      and reports the rest as `needsTrust` (counts and a summary). Held-back settings are not in
+      the compiled config (`compileConfig` gets only `split.always`), so no held-back pattern is
+      ever run on call text and no held-back model id is ever sent a request. They are not
+      untouched: `validateOverrides` builds a `RegExp` from each pattern once, to report a bad one,
+      before the split, so a held-back pattern is parsed at load (a secret pattern is also matched once
+      against the empty string, to refuse one that matches empty text), but never matched against call
+      text.
     - **The record** is one value in the plugin's own store (`$.store`, key `trustedRules`):
       `{ v: 1, files: [{ path, hash }] }`, oldest first, at most 200 (`TRUST_CAP`; the oldest is
       dropped). `path` is the file's real path (`$.fs.stat` with `resolve`; the path as given when it

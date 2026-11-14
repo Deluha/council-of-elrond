@@ -7,15 +7,17 @@ Calls that need a second opinion go to a model reviewer, and anything uncertain 
 > catch what a pattern misses, but they never widen what the rules allow. This is not a sandbox or a
 > security product (see [What it does not protect against](#what-it-does-not-protect-against)).
 
-Status: **all six stages done, with the final deliverables (SPEC §21–22), after the 0.5.0
-hardening.** Available now: the rules; three model reviewers (destructive operations, diffs, and
+Status: **built through Stage 6, with the final deliverables (SPEC §21–22), the v1 hardening and
+cloud work, and the hardening after the November review (DESIGN.md §15). Nothing is tagged yet:**
+0.5.0 is a changelog heading, and the work since then is under "Unreleased". Available now: the rules; three model reviewers (destructive operations, diffs, and
 git and databases) with routing between them; the full council with your project's own checks for
 big operations; the secrets scan, read-only previews, review rounds and lockout, the approve cache,
 escalation to you, allow rules offered after "allow once", `/council` and `/council report`, shadow
 mode and bypass, fail-closed handling and the audit log, the theme (with a plain mode), and the
 debate pane, the council check band, the wipe counter, the threat meter and the epic drop. The
-0.5.0 release closed the rules-tier and pipeline findings of the Stage 5 review
-([docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md)). Headless live checks ran on Claude Code
+hardening after the Stage 5 review ([docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md)) and the
+November review ([docs/REVIEW-2026-11.md](../../docs/REVIEW-2026-11.md)) closed the rules-tier and
+pipeline findings. Headless live checks ran on Claude Code
 2.1.294; the interactive screens (the dialogs, the pane, the band, the mode label) still await a
 check in a terminal.
 See [ROADMAP.md](./ROADMAP.md) for what's left, [SPEC.md](./SPEC.md) for the original spec and
@@ -596,7 +598,7 @@ you only on a gated call: an allowed call never gets a question.
 - **High confidence** (private keys, PGP private key blocks, AWS, GitHub, GitLab, npm, Anthropic, OpenAI, Slack, Google and Stripe keys, Google OAuth client secrets, Slack webhook URLs, passwords in connection strings): refused without asking you, on an allowed call too (it is logged, with tier `allow`). Claude is told to remove the secret.
 - **Low confidence** (`password=…`-style assignments, including compound names such as `DB_PASSWORD`, `PGPASSWORD` and `dbPassword`; JWTs; `Authorization: Bearer …` and `Basic …` headers; a `mysql -p<password>` argument; a password in a connection string with no user, `redis://:<password>@host`; long random-looking tokens): comes to you with a redacted snippet. Allow once, keep blocked, type an instruction, or **add to allowlist**. The allowlist asks a second time, showing the exact entry: a `sha256:` fingerprint of the secret, never the secret. Only then is it written to `rules.json` under `gollum.allowlist`. The fingerprint of a short password can be guessed offline, so the allowlist is for keys and tokens: for a password finding the second question says so, and a real password is better changed.
 
-Code that only names a secret is not a finding: `process.env.API_TOKEN`, `getToken()`, a type annotation such as `password: string` and a variable reference such as `$TOKEN` (an indexed lookup such as `tokens[0]` is still a finding). Redaction is stricter than the scan: a value is left readable only when it is plainly code (a variable, a call, a dotted path, an indexed lookup, a type word); any other value after a secret keyword is redacted, even one the scan does not flag.
+Code that only names a secret is not a finding: `process.env.API_TOKEN`, `getToken()`, a type annotation such as `password: string` and a variable reference such as `$TOKEN` (an indexed lookup such as `tokens[0]` is still a finding). Redaction is stricter than the scan: a value is left readable only when it is plainly code (a variable, a call, a dotted path, an indexed lookup, a type word); any other value after a secret keyword is redacted, even one the scan does not flag. Redaction also covers shapes the scan does not flag: the password of `curl -u user:password` (and `--user`), `--password` for the `mysql`-family clients, `Authorization: Token …` and `Authorization: ApiKey …` headers, and the `X-Api-Key` and `X-Auth-Token` headers.
 
 Add your own patterns in `rules.json`:
 
@@ -745,7 +747,7 @@ command (`chrt`, `taskset`, `setarch`), multi-call binaries (`busybox`, `toybox`
 substitutions in an unquoted heredoc body. The gaps that remain:
 
 - **Variables and runtime expansions aren't resolved.** `rm -rf $DIR` has an unknown target, so review decides. A variable or substitution as the program itself is reviewed, but what it expands to is not known, so the command it would run is not classified. `cd $X` followed by a relative recursive delete is treated as if `$X` were `/`. A protected file named only through a variable (`X=.env; cat $X`) is not recognised as protected.
-- **A `cd` inside a subshell or an inline script isn't tracked.** `(cd / && rm -rf *)` and `bash -c 'cd / && rm -rf *'` resolve the target against the project root, so they are review rather than block. A `cd` in the top-level command is tracked.
+- **Only a `cd` at the top level of the command is tracked.** A `cd` or `pushd` between the top-level parts of a command (`cd src && rm -rf generated`) moves where the parts after it work, and a target the mod cannot know (`cd $X`, `cd -`) counts as `/`. A `cd` inside a subshell, a substitution, `sh -c` or `eval` moves nothing, neither the rest of that subshell nor the parts after it: `(cd / && rm -rf *)` and `bash -c 'cd / && rm -rf *'` resolve the target against the project root, so they are review rather than block. `popd` is not tracked.
 - **Code inside interpreters isn't parsed.** `python -c "shutil.rmtree('/')"` is review (script execution); the reviewer sees the code, but no rule reads it. The same holds for code fed on standard input and for a script file's contents.
 - **Encoded or downloaded payloads** (`base64 -d | sh`, `curl | sh`) are caught only as "piped into a shell" (review).
 - **Shell symbolic links aren't resolved.** File-tool paths are resolved to their real path; paths in shell commands are not.
@@ -754,6 +756,9 @@ substitutions in an unquoted heredoc body. The gaps that remain:
 - **Alternating verbs on one target are separate operations.** `rm build`, `trash build`, `find build -delete` and a script that deletes it each get their own rounds and their own failed attempts, since the key starts with the verb. Three refusals of `rm` do not lock out the fourth try with `trash`; the per-kind counter catches only retries of the same verb.
 - **A `.sql` file's content isn't read by the block rules.** The database reviewer reads a `.sql` file a command names inside the project (`psql -h prod-db -f drop.sql`), but the rules classify the command without opening any file, so a destructive file run against production is reviewed, not blocked. Put a project rule on the command if a file must never run against a database.
 - **POSIX only:** no Windows paths or PowerShell parsing. Windows is unsupported ([docs/INSTALL.md](../../docs/INSTALL.md)).
+- **A text over 600,000 characters has an unscanned middle.** The secrets scan reads the first 500,000 characters and the last 100,000 of a call's text; a secret only in the middle of a longer text is not found.
+- **A regex in a project rule runs before the file is confirmed.** The regexes of a project's `ask` and `block` rules and of `bigOperations` apply at once ([Trusting a project's rules file](#trusting-a-projects-rules-file)). A runaway one (catastrophic backtracking) stalls the hook, which then refuses the call (a hook that overruns its time fails closed: it cannot let one through). Read a repository's rules file before you open it in a session.
+- **`git push.default` and other git configuration aren't read.** A push with no refspec is treated as a push of the checked-out branch (its preview is `@{upstream}..HEAD`), whatever `push.default` would send.
 - **Long commands aren't parsed.** Commands longer than 20,000 characters, or nested more than four levels deep, go to review; and a command longer than its reviewer reads is never approved by a model alone (see [Long input](#long-input)).
 
 ## What it does not protect against
@@ -763,7 +768,7 @@ substitutions in an unquoted heredoc body. The gaps that remain:
 - **Bypass.** While `/council off` is on, every gated call passes, block-tier calls and the secrets scan included, until `/council on` or the session ends.
 - **Diffs are built from the call, not from git.** The diff reviewer sees the change the call describes against the file as it stands when the hook runs; a file over 4 MiB, or one it can't read, is shown as the call's own text only, and the prompt says so.
 - **The project checks run your project's code.** Claude can edit the tests and scripts they run (file edits go to the diff reviewer, not to you), so a passing check is only as good as the code it runs. They run as you, with your environment.
-- **A push with no range to read.** For a branch the remote doesn't have yet, the range is read against the remote's default branch, which needs `<remote>/HEAD`: `git clone` sets it, `git remote add` does not (`git remote set-head origin -a` sets it). Without it, or for a push that names no remote, the diff reviewer sits out of that council and the preview shows no commits. The same goes for a refspec the mod cannot name safely (a source or destination with spaces, `..` or a wildcard): its commits are not shown, and the reviewers are told so. A push of `--all`, `--mirror` or `--tags` still shows the current branch's commits, not every ref it sends.
+- **A push with no range to read.** For a branch the remote doesn't have yet, the range is read against the remote's default branch, which needs `<remote>/HEAD`: `git clone` sets it, `git remote add` does not (`git remote set-head origin -a` sets it). Without it, or for a push that names no remote, the diff reviewer sits out of that council and the preview shows no commits. The same goes for a refspec the mod cannot name safely (a source or destination with spaces, `..` or a wildcard): its commits are not shown, and the reviewers are told so. A push of `--all`, `--mirror` or `--tags` still shows the current branch's commits, not every ref it sends, and says so: "This push sends more branches or tags than the commits shown: only the current branch is listed, so what the others would send is unknown." The shipped rules block `--all` and `--mirror`, so in practice the note shows for `--tags`.
 - **Git pointed elsewhere.** For a push or merge that runs git in another repository (`git -C`, `GIT_DIR=`, a `cd` out of the project), the mod does not read that repository: the preview shows no commits, the diff reviewer sits out of the council, and a merge counts as one into a protected branch.
 - **The database reviewer sees only the SQL it can find**: inline `-c`/`-e` (and `sqlite3`'s `-cmd` and its statement after the database file), heredocs, and `.sql` files named in the command and inside the project. A migration tool's own migration files (`prisma migrate deploy`) are not looked up.
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.

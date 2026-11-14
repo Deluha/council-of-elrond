@@ -15,7 +15,7 @@ Type: <!-- fix / rules / reviewer / pipeline / ui / docs / ci --> · Milestone o
 - [ ] No new text in logic: strings are in `hooks/strings.ts`
 - [ ] Only `hooks/register.ts` touches `$`
 - [ ] Hooks installed (`scripts/setup.sh`) and the pre-commit hook passed, or the same checks were run by hand
-- [ ] If this touches `hooks/rules/`, `config/defaults.ts`, `redact.ts` or `register.ts`: labelled `security` or `rules`, and no bypass input is quoted in the title or description
+- [ ] If this touches `hooks/rules/` (including `rules/push.ts`), `config/defaults.ts`, `config/trust.ts`, `elrond/operations.ts`, `members/shared.ts`, `redact.ts` or `register.ts`: labelled `security` or `rules`, and no bypass input is quoted in the title or description
 
 ## Safety
 

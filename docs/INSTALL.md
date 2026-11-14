@@ -16,6 +16,15 @@ options) is in the [user manual](../mods/council-of-elrond/README.md).
 - **A POSIX system** (Linux, macOS, WSL). Windows is unsupported: the shell parser reads POSIX
   shells only, paths are resolved against `HOME`, and PowerShell is not parsed.
 
+## Upgrading from a build before the trust rule
+
+A project's rules file used to apply in full. Now its allow and review rules, disabled rules,
+models, patterns, allowlist and project checks wait until a person confirms the file. After
+upgrading, run `/council trust` once per repository that has a rules file (it shows what would be
+switched on, with a code; type `/council trust <code>`), or set `trustProjectRules` to `always` on a
+host whose owner controls which repositories it opens. Until then a big operation whose project
+checks are held back is blocked. See [Trusting a project's rules file](../mods/council-of-elrond/README.md#trusting-a-projects-rules-file).
+
 ## Try it for one session
 
 ```sh
@@ -121,15 +130,22 @@ Everything has a shipped default. The two places to change things:
    operations, the project checks (`gimli.commands`), secrets patterns and the allowlist, and
    per-reviewer models by full ID. Examples in the manual under
    [Editing rules](../mods/council-of-elrond/README.md#editing-rules). Reload with
-   `/council reload` after editing by hand.
+   `/council reload` after editing by hand. A file you edited by hand must then be confirmed
+   with `/council trust` (typed by a person: it shows what would be switched on, with a code, and
+   you type `/council trust <code>`). Until then its allow and review rules, disabled rules, models,
+   patterns, allowlist and project checks do not take effect, and a big operation whose project
+   checks are held back is blocked. See [Trusting a project's rules file](../mods/council-of-elrond/README.md#trusting-a-projects-rules-file).
 
 Recommended first week:
 
 - Turn **shadow mode** on (in `/config`, or `/council shadow on` per session).
-- Add your **project checks** (`gimli.commands`) so a push or migration runs your tests.
+- Add your **project checks** (`gimli.commands`) so a push or migration runs your tests. Then run
+  `/council trust` and confirm the file: the checks do not run, and a big operation is blocked,
+  until you do.
 - After a few days read **`/council report`**: the "stopped, then allowed by you" list is your
   false-positive candidates; add allow rules for them (or accept the offer the mod makes after an
-  "allow once").
+  "allow once"; the mod's own write is recorded as confirmed). Allow rules you write into the file
+  by hand take effect only after `/council trust`.
 - Turn shadow mode off.
 
 ## What it writes, and where
@@ -139,6 +155,7 @@ Recommended first week:
 | `.claude/council-of-elrond/rules.json` | Your project overrides. Written by the mod only when you confirm an allow rule or an allowlist entry. | Commit it: it is the team's policy. The allowlist holds fingerprints, never secrets. |
 | `.claude/council-of-elrond/audit/audit.jsonl` (`.1`, `.2`) | One line per gated call: hashes, tiers, verdicts, tokens, timings. No file contents, diffs or secrets. 1 MiB each by default, three kept. | The mod writes a `.gitignore` beside it. |
 | `~/.claude/settings.json` | Your `/config` choices, under the plugin's keys. | Personal. |
+| The plugin's own store (under your Claude Code configuration folder) | The trust record: for each rules file you confirmed with `/council trust`, its real path and the SHA-256 of its content, at most 200 entries. Never in the repository. | Not in the repository. |
 
 Delete the audit folder whenever you like; the mod recreates it. A `.gitignore` in the folder
 keeps it out of your repository.
@@ -171,7 +188,9 @@ listed in the transcript), never as a reason to drop the gate.
 - Local checkout: remove the path from `CLAUDE_CODE_PLUGIN_DIRS`.
 
 Then, if you want a clean project: delete `.claude/council-of-elrond/` (overrides and the audit
-log) and the plugin's keys from `~/.claude/settings.json`. Nothing else is written.
+log) and the plugin's keys from `~/.claude/settings.json`. The trust record sits in the plugin's own
+store: `/council untrust` removes the entries for the files in scope, and uninstalling the plugin's
+data removes the rest. Nothing else is written.
 
 ## Troubleshooting
 
@@ -189,7 +208,9 @@ out. That is the fail-closed path working. Raise "Review deadline" in `/config`,
 model with `/council model <member> sonnet`.
 
 **The rules file is ignored.** The transcript lists the errors by field; `/council rules` shows what
-is in force. Fix the file and `/council reload`. Common causes: a missing `schemaVersion: 1`, a rule
+is in force. Fix the file and `/council reload`. Common causes: the file is not confirmed, or was
+edited since it was confirmed (`/council rules` and `/council` say "not trusted" and how many settings
+are ignored; run `/council trust` and type the code); a missing `schemaVersion: 1`, a rule
 without an `id`, a regex with the `g` or `y` flag.
 
 **`/council` prints nothing in `claude -p`.** There is no pane in headless mode, and the transcript

@@ -11,9 +11,10 @@ cd council-of-elrond
 claude plugin test mods/council-of-elrond       # all tests
 tsc -p mods                                    # strict, against mods/types/claude-code.d.ts
 claude plugin validate --strict mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
+scripts/check-hygiene.sh                       # generated files, personal data, links
 ```
 
-- All three pass before every commit, on the Claude Code build CI pins (DESIGN.md's header names it).
+- All four pass before every commit; the first three run on the Claude Code build CI pins ([The pinned build](#the-pinned-build)).
 - Only `hooks/register.ts` touches `$` (re-probed in M0). Everything else is pure and tested directly.
 - Never load the mod into the session developing it. Live checks run headless (below).
 - `mods/types/claude-code.d.ts` is the API. Don't invent methods; don't edit the file.
@@ -35,7 +36,9 @@ mods/
     hooks/audit.ts               audit line shape, rotation
     hooks/redact.ts              secret redaction shared by prompts, dialogs and the log
     hooks/rules/                 shell parser, classifier, checks, globs, paths, scopes (rules per repository)
+    hooks/rules/push.ts          the one parser of `git push` arguments (checks, operation keys and previews all read it)
     hooks/config/                shipped defaults, rules.json schema, types, the writer
+    hooks/config/trust.ts        what a project rules file may do before it is confirmed; the trust record helpers
     hooks/members/               one file per member, plus brief.ts and shared.ts
     hooks/elrond/                routing, council seats, verdict combination, operations,
                                  escalation, refusal text, model choice, commands, suggest, report,
@@ -43,11 +46,32 @@ mods/
                                  view (the rows the debate pane and the band draw)
     types/index.d.ts             the $.state contract (CouncilSession, CouncilDebate, CouncilPanel)
     tests/                       *.test.ts, run by `claude plugin test`; fixtures.ts is the fake world
+    tests/trust.test.ts          the trust rule: which settings wait, the record, the commands
+    tests/omission.test.ts       what a reviewer is told when its input was cut short
     README.md DESIGN.md ROADMAP.md SPEC.md
 ```
 
 What each pure module decides, and the order they run in, is the data-flow diagram in
 [DESIGN.md §3](../mods/council-of-elrond/DESIGN.md#3-data-flow).
+
+## The pinned build
+
+The three gates run on the Claude Code build CI pins: the `@anthropic-ai/claude-code@X.Y.Z` in the
+install step of `.github/workflows/ci.yml` (the release workflow pins the same one, and DESIGN.md's
+header names it). A newer build on your PATH can fail tests the pinned one passes, so
+`scripts/setup.sh` and the pre-commit hook read the pin from `ci.yml`, compare it with
+`--version` of the binary they use and, in the hook, refuse the commit when they differ. The binary
+is `${COUNCIL_CLAUDE:-claude}`. To get the pinned build, install it into a scratch folder and point
+the variable at it:
+
+```sh
+npm install --prefix /path/to/scratch @anthropic-ai/claude-code@X.Y.Z
+export COUNCIL_CLAUDE=/path/to/scratch/node_modules/.bin/claude
+```
+
+`COUNCIL_ALLOW_UNPINNED=1` lets the hook run on another build. Use it only for a deliberate upgrade
+brief (`/upgrade-types`), which moves the pin. `tsc` has no such pin; the vendored types are the
+version. Upgrades are scheduled, not made at every new build ([MAINTENANCE.md](MAINTENANCE.md)).
 
 ## How register.ts is built
 
@@ -152,7 +176,8 @@ claude -p --plugin-dir /path/to/council-of-elrond/mods/council-of-elrond \
 - `/council …` output arrives as `system/ui_log` lines in stream-json; in plain `-p` it prints
   nothing. In `-p` nothing draws, so a start notice is appended for Claude. A `-p` prompt or
   command has origin `sdk`, which is not a person's, so `/council` returns no `context` there and
-  `off`, `shadow on` and `model` are refused, and C4's chat lines are not read: those paths are covered by unit tests only
+  `off`, `shadow on`, `model` and `trust` (with or without a code) are refused; `untrust` is not,
+  since it only tightens, and C4's chat lines are not read: those paths are covered by unit tests only
   (DESIGN §14.3).
 - Loading writes `.claude-plugin/types/` and `tsconfig.json` into the mod folder (gitignored),
   and the probe's `.claude/council-of-elrond/audit/` into the throwaway repo.
@@ -197,7 +222,9 @@ that the proposed command is never among `w.processes`.
 
 The parser is pure (`hooks/elrond/commands.ts`): add the subcommand there with a test in
 `tests/commands.test.ts`, then the output builder (pure, returning lines), then one arm in
-register.ts that gathers inputs and calls `show()`. Output goes to the pane or `ui.log`, never to
+register.ts that gathers inputs and calls `show()`. If the subcommand loosens the gate (it lets
+more through, or switches something on), add it to `needsPerson` in the same file, with a test that
+a non-person origin is refused; one that only tightens is not added. Output goes to the pane or `ui.log`, never to
 Claude (approved decision 1), except the four subcommands `hooks/elrond/relay.ts` relays where
 nothing draws (C2, DESIGN §13.5): a new one is not added to that list without the maintainer.
 

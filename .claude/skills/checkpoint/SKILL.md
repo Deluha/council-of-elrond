@@ -17,9 +17,11 @@ Run from the repository root:
 claude plugin test mods/council-of-elrond
 tsc -p mods
 claude plugin validate --strict mods/council-of-elrond
+scripts/check-hygiene.sh
 ```
 
-Run them with the Claude Code build CI pins (ROADMAP "Resuming"). All three must pass. Paste the test count. If `validate` prints new `hooks:` or `calls:` lines
+Run the first three with the Claude Code build CI pins (the explanation is in `docs/DEVELOPMENT.md`,
+"The pinned build"). All four must pass. Paste the test count. If `validate` prints new `hooks:` or `calls:` lines
 (compare with DESIGN.md §2), update that section with the new lines.
 
 ## 2. Documents
@@ -59,6 +61,6 @@ Write it for the maintainer, in this order, each part a few lines:
 3. **Known limits** introduced or discovered, and the follow-ups added to the roadmap.
 4. **What was verified live** (headless probes, with the command) and **what was not** (anything
    needing a terminal: dialogs, panes, bands, labels).
-5. **Gate results**: the test count, `tsc` clean, `validate` passed.
+5. **Gate results**: the test count, `tsc` clean, `validate` passed, hygiene exit 0.
 
 Then stop and wait for the go-ahead. Do not start the next milestone.
