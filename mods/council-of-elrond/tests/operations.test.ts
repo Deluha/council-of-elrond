@@ -2,14 +2,19 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   attemptsOf,
+  FORCE_SUFFIX,
+  hasGitPart,
+  isForcePush,
   isOutOfRounds,
   isWipeOutcome,
   lockedVerbOf,
   lockoutOf,
   MAX_PART_KEYS,
+  MAX_VERB_KEYS,
   noteRound,
   noteWipe,
   operationOf,
+  OTHER_VERBS_KEY,
   outcomeOf,
   partOperation,
   resetOperation,
@@ -445,5 +450,135 @@ describe('outcomes', () => {
       expect(isWipeOutcome('ran', { toolErrors })).toBe(false)
       expect(isWipeOutcome('error', { toolErrors })).toBe(toolErrors)
     }
+  })
+})
+
+describe('more gated parts than the keys cover (DESIGN §16)', () => {
+  const deletes = (count: number): string => Array.from({ length: count }, (_, n) => `rm -rf d${n}`).join('; ')
+
+  test('the call is marked past MAX_PART_KEYS gated parts, and not at it; the keys still name the first parts', () => {
+    expect(bash(deletes(MAX_PART_KEYS)).hasTooManyParts).toBeUndefined()
+    const nine = bash(`${deletes(MAX_PART_KEYS)}; git push -f origin feat`)
+    expect(nine.hasTooManyParts).toBe(true)
+    expect(nine.partKeys).toHaveLength(MAX_PART_KEYS)
+    // The ninth gated part, a force push, is the one the keys leave out.
+    expect(nine.partKeys.some(key => key.includes('git push'))).toBe(false)
+    expect(nine.key).toContain('git push feat origin')
+    // Parts that are not gated do not count.
+    expect(bash(`${deletes(MAX_PART_KEYS)}; echo done; ls`).hasTooManyParts).toBeUndefined()
+    // Other calls never carry it.
+    expect(opOf({ tool: 'Edit', input: { file_path: `${ROOT}/src/app.ts`, old_string: 'a', new_string: 'b' } }).hasTooManyParts).toBeUndefined()
+  })
+})
+
+describe('the verb counters are bounded (DESIGN §16)', () => {
+  const empty: OpsState = { ops: {}, verbWipes: {} }
+  const wipeVerb = (state: OpsState, verb: string): OpsState => noteWipe(state, single(`shell:${verb} x`, `shell:${verb}`))
+
+  test('250 distinct verbs leave at most 200 entries and the shared key; nothing stored is evicted', () => {
+    let state = empty
+    for (let n = 0; n < 250; n++) state = wipeVerb(state, `v${n}`)
+    const keys = Object.keys(state.verbWipes)
+    expect(keys.filter(key => key !== OTHER_VERBS_KEY)).toHaveLength(MAX_VERB_KEYS)
+    expect(keys).toHaveLength(MAX_VERB_KEYS + 1)
+    expect(state.verbWipes[OTHER_VERBS_KEY]).toBe(50)
+    // The first verbs are all still there.
+    for (let n = 0; n < MAX_VERB_KEYS; n++) expect(state.verbWipes[`shell:v${n}`], `v${n}`).toBe(1)
+  })
+
+  test('a verb already counted keeps counting on its own entry once the counters are full', () => {
+    let state = empty
+    for (let n = 0; n < 205; n++) state = wipeVerb(state, `v${n}`)
+    state = wipeVerb(wipeVerb(state, 'v0'), 'v0')
+    expect(state.verbWipes['shell:v0']).toBe(3)
+    expect(state.verbWipes[OTHER_VERBS_KEY]).toBe(5)
+  })
+
+  test('the shared key locks at the verb cap, for a verb with no entry of its own and no other', () => {
+    let state = empty
+    for (let n = 0; n < MAX_VERB_KEYS; n++) state = wipeVerb(state, `v${n}`)
+    for (let n = 0; n < 4; n++) state = wipeVerb(state, `extra${n}`)
+    const fresh = single('shell:brandnew x', 'shell:brandnew')
+    expect(lockoutOf(state, fresh)).toBeUndefined()
+    state = wipeVerb(state, 'extra4')
+    expect(state.verbWipes[OTHER_VERBS_KEY]).toBe(5)
+    expect(lockoutOf(state, fresh)).toEqual({ kind: 'verb', wipes: 5 })
+    expect(lockedVerbOf(state, fresh)).toBe(OTHER_VERBS_KEY)
+    // A verb that has its own entry is judged by it alone.
+    expect(lockoutOf(state, single('shell:rm x', 'shell:v0'))).toBeUndefined()
+    // Below the bound nothing is shared: a new verb with nothing counted is not locked.
+    expect(lockoutOf({ ops: {}, verbWipes: { 'shell:a': 1 } }, fresh)).toBeUndefined()
+  })
+
+  test('a call of several new verbs past the bound counts each on the shared key', () => {
+    let state = empty
+    for (let n = 0; n < MAX_VERB_KEYS; n++) state = wipeVerb(state, `v${n}`)
+    state = noteWipe(state, bash('rm -rf a; rmdir /work/tmp/zz'))
+    expect(state.verbWipes[OTHER_VERBS_KEY]).toBe(2)
+  })
+})
+
+describe('a force or delete push keeps its own retry count (DESIGN §16)', () => {
+  const empty: OpsState = { ops: {}, verbWipes: {} }
+  const PLAIN = 'shell:git push feat origin'
+
+  test('its part keys hold the variant; the whole key, the verb keys and a plain push are unchanged', () => {
+    for (const command of ['git push -f origin feat', 'git push --force origin feat', 'git push --force-with-lease origin feat', 'git push origin +feat', 'git push origin --delete feat', 'git push origin :feat']) {
+      const op = bash(command)
+      expect(op.partKeys, command).toEqual(expect.arrayContaining([expect.stringContaining(FORCE_SUFFIX)]))
+      expect(op.partKeys.filter(key => key.endsWith(FORCE_SUFFIX)), command).toHaveLength(1)
+      expect(op.verbKey, command).toBe('shell:git push')
+      expect(op.partVerbKeys, command).toEqual(['shell:git push'])
+    }
+    expect(bash('git push -f origin feat')).toMatchObject({ key: PLAIN, partKeys: [PLAIN, `${PLAIN}${FORCE_SUFFIX}`] })
+    expect(bash('git push origin feat')).toEqual({ key: PLAIN, verbKey: 'shell:git push', partKeys: [PLAIN], partVerbKeys: ['shell:git push'] })
+    // Inside a compound, and behind git's global options and a wrapper.
+    expect(bash('rm -rf build; git push -f origin feat').partKeys).toEqual([PLAIN, `${PLAIN}${FORCE_SUFFIX}`, 'shell:rm build'])
+    expect(bash('git -C . push -f origin feat').partKeys).toContain(`shell:git push feat origin${FORCE_SUFFIX}`)
+    expect(bash('sudo git push -f origin feat').partKeys.some(key => key.endsWith(FORCE_SUFFIX))).toBe(true)
+  })
+
+  test('isForcePush reads the parts as the shared push parser does', () => {
+    const part = (command: string) => splitShell(command).parts[0] as NonNullable<ReturnType<typeof splitShell>['parts'][0]>
+    expect(isForcePush(part('git push -f origin feat'))).toBe(true)
+    expect(isForcePush(part('git push origin feat'))).toBe(false)
+    expect(isForcePush(part('git pull -f'))).toBe(false)
+    expect(isForcePush(part('rm -f build'))).toBe(false)
+  })
+
+  test('a successful plain push does not clear the variant: rounds and failed attempts stay', () => {
+    const force = bash('git push -f origin feat')
+    const plain = bash('git push origin feat')
+    let state = noteRound(noteRound(empty, force, false), force, false)
+    expect(isOutOfRounds(state, force)).toBe(true)
+    // The plain push has the same whole key, so it is out of rounds too; once it ran, that key starts over.
+    expect(isOutOfRounds(state, plain)).toBe(true)
+    state = resetOperation(state, plain)
+    expect(isOutOfRounds(state, plain)).toBe(false)
+    expect(isOutOfRounds(state, force)).toBe(true)
+    expect(roundsLeft(state, force)).toBe(0)
+
+    let wiped = noteWipe(noteWipe(empty, force), force)
+    wiped = resetOperation(wiped, plain)
+    expect(lockoutOf(wiped, force)).toBeUndefined()
+    wiped = noteWipe(wiped, force)
+    expect(lockoutOf(wiped, force)).toEqual({ kind: 'key', wipes: 3 })
+    // The plain push is not locked by the variant.
+    expect(lockoutOf(wiped, plain)).toBeUndefined()
+    expect(wiped.ops[`${PLAIN}${FORCE_SUFFIX}`]).toEqual({ rounds: 0, wipes: 3 })
+  })
+})
+
+describe('a call with a git part (DESIGN §16)', () => {
+  test('gated or not, anywhere in the command or behind a wrapper; not the word in an argument, not another tool', () => {
+    expect(hasGitPart({ tool: 'Bash', input: { command: 'git reset --hard' } })).toBe(true)
+    expect(hasGitPart({ tool: 'Bash', input: { command: 'git status && rm -rf build' } })).toBe(true)
+    expect(hasGitPart({ tool: 'Bash', input: { command: 'rm -rf build; sudo git push origin main' } })).toBe(true)
+    expect(hasGitPart({ tool: 'Bash', input: { command: '(cd x && git checkout main)' } })).toBe(true)
+    expect(hasGitPart({ tool: 'Bash', input: { command: 'rm -rf build' } })).toBe(false)
+    expect(hasGitPart({ tool: 'Bash', input: { command: 'echo git' } })).toBe(false)
+    expect(hasGitPart({ tool: 'Write', input: { file_path: `${ROOT}/a`, content: 'git push' } })).toBe(false)
+    // Too long to split: read as text, the careful way.
+    expect(hasGitPart({ tool: 'Bash', input: { command: `echo ${'x'.repeat(21_000)}; git push` } })).toBe(true)
   })
 })

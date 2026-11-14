@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { rangeOf } from '../hooks/elrond/council.js'
-import { broadPushNote, formatPreview, MAX_INSPECTIONS, planPreview, rangeDiffInspections, unseenPushNote } from '../hooks/members/galadriel.js'
+import { broadPushNote, formatPreview, MAX_INSPECTIONS, planPreview, rangeDiffInspections, stalePushNote, unseenPushNote } from '../hooks/members/galadriel.js'
 import { classify } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
 import { APPROVE, auditLines, CONTEXT, FAKE_GITHUB_TOKEN, KEEP_BLOCKED, ROOT, SHIPPED_COMPILED, world } from './fixtures.js'
@@ -488,5 +488,53 @@ describe('in the pipeline', () => {
     const w = world(on, { replies: [APPROVE] })
     await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
     expect(w.processes).toEqual([])
+  })
+})
+
+describe('a push that follows another command of its call (DESIGN §16)', () => {
+  const FORMS = ['git commit -am x && git push origin feature', 'git checkout main && git push origin feature'] as const
+
+  test('the preview and the range diff carry the trusted note; a lone push, or one that comes first, does not', () => {
+    for (const command of FORMS) {
+      expect(noteLabels(command), command).toEqual([stalePushNote])
+      expect(rangeDiffs(command, 'push')?.notes, command).toEqual([stalePushNote])
+      // The preview is kept: the commits are still listed.
+      expect(logRanges(command), command).toEqual(['origin/feature..feature'])
+    }
+    for (const command of ['git push origin feature', 'git push origin feature && echo done', 'git push origin feature; git status']) {
+      expect(noteLabels(command), command).toEqual([])
+      expect(rangeDiffs(command, 'push')?.notes, command).toEqual([])
+    }
+    // A note is not a step against the cap.
+    expect(bash(FORMS[0]).filter(step => step.kind !== 'note')).toHaveLength(3)
+  })
+
+  test('it joins the other notes, not replaces them', () => {
+    expect(noteLabels('git commit -am x && git push --tags origin')).toEqual([broadPushNote, stalePushNote])
+  })
+
+  test('both forms: the reviewer reads it after the preview, outside any data block', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    w.processReply = argv => (argv[1] === 'log' ? { exitCode: 0, stdout: 'bbb222 A commit\n' } : { exitCode: 0, stdout: 'feature\n' })
+    for (const command of FORMS) {
+      const before = w.modelRequests.length
+      await $.tool.call({ tool: 'Bash', command })
+      const prompts = w.modelRequests.slice(before).map(request => String(request.prompt))
+      expect(prompts.length, command).toBeGreaterThan(0)
+      const note = `Note: ${stalePushNote}`
+      // Every member of the council that sat on the push is told, the preview's and the diff reviewer's alike.
+      for (const prompt of prompts) {
+        expect(prompt, command).toContain(note)
+        const preceding = prompt.slice(0, prompt.indexOf(`\n\n${note}`))
+        expect(preceding.match(/<data-\w+ /g)?.length, command).toBe(preceding.match(/<\/data-\w+>/g)?.length)
+      }
+    }
+  })
+
+  test('a lone push says nothing of the kind', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    w.processReply = argv => (argv[1] === 'log' ? { exitCode: 0, stdout: 'bbb222 A commit\n' } : { exitCode: 0, stdout: 'feature\n' })
+    await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })
+    for (const request of w.modelRequests) expect(String(request.prompt)).not.toContain('read before the earlier commands')
   })
 })

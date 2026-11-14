@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, ProcessRunResult, ProcessSpawnResult, Register, RenderElement, ToolCallResult } from 'claude-code'
 
 import type { CouncilPanel } from '../types'
-import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, isRotation, ROTATED_FILES } from './audit.js'
+import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, isRotation, placeScopeOf, ROTATED_FILES } from './audit.js'
 import type { AuditRecord, Decision } from './audit.js'
 import { OVERRIDES_PATH, SHIPPED } from './config/defaults.js'
 import { loadConfig, MODEL_ID } from './config/schema.js'
@@ -26,6 +26,7 @@ import { deadlineFor, profileOf, resolveModel } from './elrond/models.js'
 import type { ModelChoice } from './elrond/models.js'
 import {
   cacheApprove,
+  hasGitPart,
   isOutOfRounds,
   isWipeOutcome,
   lockedVerbOf,
@@ -50,7 +51,7 @@ import { route } from './elrond/routing.js'
 import type { Enabled, Seat } from './elrond/routing.js'
 import { productionHits, sqlOf } from './members/aragorn.js'
 import type { SqlPiece } from './members/aragorn.js'
-import { isCommandCut, requestOf, whoOf } from './members/brief.js'
+import { isRunCut, requestOf, whoOf } from './members/brief.js'
 import type { Brief } from './members/brief.js'
 import { formatPreviewCut, INSPECTION_TIMEOUT_MS, MAX_LISTED, mergePlace, planPreview, rangeDiffInspections, runsElsewhere, unreadCommitsNote, unseenPushNote } from './members/galadriel.js'
 import type { Inspection, InspectionResult } from './members/galadriel.js'
@@ -1815,9 +1816,13 @@ export const register: Register = (on, options) => {
     const epoch = state.promptEpoch
     const thisPrompt = (value: CouncilSession | undefined): boolean => sessionOf(value).promptEpoch === epoch
     const fingerprint = await fingerprintOf(call.tool, call.input)
-    // The verdict cache key: the fingerprint, apart per scope outside the root scope alone (the audit line keeps the plain one).
-    const cacheKey = scopeTag === '' ? fingerprint : await fingerprintOf(call.tool, call.input, scopeTag)
+    // Where an approval holds: the scope tag and the session's folder, which follows a `cd` between calls (DESIGN §14.5, §16).
+    const placeScope = placeScopeOf(scopeTag, cwd)
+    // The verdict cache key: the fingerprint, apart per scope and per folder (the audit line keeps the plain one).
+    const cacheKey = await fingerprintOf(call.tool, call.input, placeScope)
     const operation = operationOf(call, classification, where)
+    // The branch, the index and the history are not in the key: a call with a git part is never served from the cache, nor cached. Nor is one no reviewer decides (too many parts).
+    const isCacheable = !hasGitPart(call) && operation.hasTooManyParts !== true
     const decided = classification.decided
     const shadow = isShadow(state, settings.shadowMode)
     // Built on first use: a block, lockout or cached call never shows it, and a write can be megabytes.
@@ -1961,7 +1966,7 @@ export const register: Register = (on, options) => {
       if (answer === 'unavailable') {
         decision = answer
         // Chat approval (ROADMAP C4): only where nothing draws, and never for a protected path or a block rule.
-        const callKey = isOfferable(classification) ? await callKeyOf(call, scopeTag) : undefined
+        const callKey = isOfferable(classification) ? await callKeyOf(call, placeScope) : undefined
         if (callKey !== undefined) {
           // Consumed in one write, and used only if that write took it: two identical calls must not both spend one.
           const spent: { use: ChatUse } = { use: undefined }
@@ -2120,8 +2125,9 @@ export const register: Register = (on, options) => {
       return askUser('escalate.askTier', [])
     }
 
-    // Review. An identical call approved this prompt is not reviewed again.
-    if (state.cache.includes(cacheKey)) {
+    // Review. An identical call approved this prompt, in this folder, is not reviewed again. Read afresh: a call in flight beside this one may have been approved since the snapshot.
+    const cacheState = sessionOf(await read($, session))
+    if (isCacheable && cacheState.cache.includes(cacheKey)) {
       isCached = true
       verdictText = 'approve'
       reasonText = null
@@ -2235,8 +2241,8 @@ export const register: Register = (on, options) => {
       isShadowed = shadow
       const isVerdict = combined.reviewed > 0 && !combined.isFailureOnly
       verdictText = isVerdict ? combined.verdict : 'failed'
-      // An approve of a call whose command a member saw only in part is no approve (see `isCommandCut`): it goes to the person, as no verdict does.
-      const isCommandUnseen = sittings.some(sitting => sitting.brief !== undefined && isCommandCut(sitting.brief))
+      // An approve of a call whose command a member saw only in part is no approve (see `isRunCut`): it goes to the person, as no verdict does.
+      const isCommandUnseen = sittings.some(sitting => sitting.brief !== undefined && isRunCut(sitting.brief))
       isCouncilApproved = isVerdict && combined.verdict === 'approve' && !isCommandUnseen
       const debateVerdict = isVerdict ? combined.verdict : 'failed'
       await update($, session, value => closeDebate(sessionOf(value), debateId, debateVerdict)).catch(() => undefined)
@@ -2268,14 +2274,8 @@ export const register: Register = (on, options) => {
         reasonText = text('escalate.commandCut', {}, 'plain')
         return shadow ? passInShadow() : askUser('escalate.commandCut', combined.opinions)
       }
-      if (combined.verdict === 'approve') {
-        await update($, session, value => {
-          const current = sessionOf(value)
-          if (!thisPrompt(current)) return current // do not cache into a newer prompt
-          return { ...current, cache: cacheApprove(current.cache, cacheKey) }
-        })
-        return finish(await proceed())
-      }
+      // Not cached: a big operation convenes the council, and runs the project's checks, every time.
+      if (combined.verdict === 'approve') return finish(await proceed())
       if (shadow) {
         $.ui.log(text('notice.shadowVerdict', { who: text('who.fullCouncil'), verdict: combined.verdict, tool: call.tool }), { to: 'debug' })
         return passInShadow()
@@ -2284,7 +2284,14 @@ export const register: Register = (on, options) => {
     }
 
     // 9. Route: a big operation to the full council; anything else to the rule's member, else the fallback.
-    if (isOutOfRounds(state, operation) && !shadow) return askUser('escalate.rounds', [])
+    // The counters are read afresh (a parallel call's rounds may have landed since the snapshot).
+    const roundsState = sessionOf(await read($, session))
+    if (operation.hasTooManyParts && !shadow) {
+      // More gated parts than the keys cover: a locked or spent part could be among the rest, so no model decides it.
+      reasonText = text('escalate.tooManyParts', {}, 'plain')
+      return askUser('escalate.tooManyParts', [])
+    }
+    if (isOutOfRounds(roundsState, operation) && !shadow) return askUser('escalate.rounds', [])
     if (settings.councilEnabled) {
       const compiled = ctx.loaded.compiled
       // A merge that would run elsewhere (-C, GIT_DIR, a folder outside the root) has an unknown branch, which counts as protected.
@@ -2339,17 +2346,19 @@ export const register: Register = (on, options) => {
 
     verdictText = verdict.verdict.verdict
     reasonText = verdict.verdict.reason
-    if (verdict.verdict.verdict === 'approve' && isCommandCut(brief)) {
+    if (verdict.verdict.verdict === 'approve' && isRunCut(brief)) {
       // The reviewer saw only the ends of the command: its approve does not stand, and is not cached.
       reasonText = text('escalate.commandCut', {}, 'plain')
       return shadow ? passInShadow() : askUser('escalate.commandCut', [{ who, verdict: 'approve', reason: verdict.verdict.reason }])
     }
     if (verdict.verdict.verdict === 'approve') {
-      await update($, session, value => {
-        const current = sessionOf(value)
-        if (!thisPrompt(current)) return current // do not cache into a newer prompt
-        return { ...current, cache: cacheApprove(current.cache, cacheKey) }
-      })
+      if (isCacheable) {
+        await update($, session, value => {
+          const current = sessionOf(value)
+          if (!thisPrompt(current)) return current // do not cache into a newer prompt
+          return { ...current, cache: cacheApprove(current.cache, cacheKey) }
+        })
+      }
       return finish(await proceed())
     }
     if (shadow) {

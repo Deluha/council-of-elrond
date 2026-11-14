@@ -319,14 +319,16 @@ describe('the epic drop', () => {
     expect(w.toasts).not.toContain('Legendary commit acquired')
   })
 
-  test('a push that errors gets none; a cached approve gets none', async ($, on) => {
+  test('a push that errors gets none; the identical push is not served from the cache, so its council approve gets one', async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     w.toolResult = { result: 'remote rejected', isError: true, text: 'remote rejected' }
     await $.tool.call(PUSH)
     expect(w.toasts).not.toContain('Legendary commit acquired')
     w.toolResult = { result: 'ran' }
     await $.tool.call(PUSH)
-    expect(w.toasts.filter(toast => toast === 'Legendary commit acquired')).toHaveLength(0)
+    // A council approve is never cached (DESIGN §16), so the repeat sat again and the drop is its own.
+    expect(w.modelRequests).toHaveLength(6)
+    expect(w.toasts.filter(toast => toast === 'Legendary commit acquired')).toHaveLength(1)
   })
 
   test('in the plain mode there is no epic drop: no toast, no row, no state write', { options: { plainMode: true } }, async ($, on) => {

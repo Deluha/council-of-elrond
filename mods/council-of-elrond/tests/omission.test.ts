@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { questionText } from '../hooks/elrond/escalation.js'
 import { aragornDatabasePrompt, aragornDatabaseSystem, aragornGitPrompt, aragornGitSystem, ARAGORN_LIMITS } from '../hooks/members/aragorn.js'
-import { isCommandCut } from '../hooks/members/brief.js'
+import { isRunCut } from '../hooks/members/brief.js'
 import { GANDALF_LIMITS, gandalfPrompt, gandalfSystem } from '../hooks/members/gandalf.js'
 import { callDiff, LEGOLAS_LIMITS, legolasPrompt, legolasSystem } from '../hooks/members/legolas.js'
 import { addOmitted, cut, markerOf, OMISSION_RULES, parseVerdict, truncate } from '../hooks/members/shared.js'
@@ -155,20 +155,127 @@ describe('the cut note: written by the mod, outside the data, only for a real cu
   })
 })
 
-describe('isCommandCut: only the command text of a shell call', () => {
+describe('isRunCut: what a shell call runs, not what a file tool writes', () => {
   const longShell = 'x'.repeat(GANDALF_LIMITS.callChars + 1)
   test('a shell command past the reviewer limit; not a file tool, not a diff, not a short command', () => {
-    expect(isCommandCut({ member: 'gandalf', context: { tool: 'Bash', call: longShell, ruleReasons: [], latestPrompt: '', scripts: [] } })).toBe(true)
-    expect(isCommandCut({ member: 'gandalf', context: { tool: 'Bash', call: 'rm -rf build', ruleReasons: [], latestPrompt: '', scripts: [] } })).toBe(false)
+    expect(isRunCut({ member: 'gandalf', context: { tool: 'Bash', call: longShell, ruleReasons: [], latestPrompt: '', scripts: [] } })).toBe(true)
+    expect(isRunCut({ member: 'gandalf', context: { tool: 'Bash', call: 'rm -rf build', ruleReasons: [], latestPrompt: '', scripts: [] } })).toBe(false)
     // A file tool's call text is its content, which the reviewer is told about instead.
-    expect(isCommandCut({ member: 'gandalf', context: { tool: 'Write', call: longShell, ruleReasons: [], latestPrompt: '', scripts: [] } })).toBe(false)
-    expect(isCommandCut({ member: 'aragorn', profile: 'git', context: { tool: 'Bash', call: longShell, ruleReasons: [], protectedBranches: [], latestPrompt: '' } })).toBe(true)
-    expect(isCommandCut({ member: 'aragorn', profile: 'database', context: { tool: 'Bash', call: longShell, ruleReasons: [], sql: [], production: [], latestPrompt: '' } })).toBe(true)
-    expect(isCommandCut({ member: 'aragorn', profile: 'database', context: { tool: 'Write', call: longShell, ruleReasons: [], sql: [], production: [], latestPrompt: '', diff: { diff: '+x', isNew: true } } })).toBe(false)
+    expect(isRunCut({ member: 'gandalf', context: { tool: 'Write', call: longShell, ruleReasons: [], latestPrompt: '', scripts: [] } })).toBe(false)
+    expect(isRunCut({ member: 'aragorn', profile: 'git', context: { tool: 'Bash', call: longShell, ruleReasons: [], protectedBranches: [], latestPrompt: '' } })).toBe(true)
+    expect(isRunCut({ member: 'aragorn', profile: 'database', context: { tool: 'Bash', call: longShell, ruleReasons: [], sql: [], production: [], latestPrompt: '' } })).toBe(true)
+    expect(isRunCut({ member: 'aragorn', profile: 'database', context: { tool: 'Write', call: longShell, ruleReasons: [], sql: [], production: [], latestPrompt: '', diff: { diff: '+x', isNew: true } } })).toBe(false)
     const range = (call: string) => ({ member: 'legolas', context: { tool: 'Bash', path: 'a..b', range: { kind: 'push', call }, diff: { diff: '+x', isNew: false }, ruleReasons: [], latestPrompt: '' } }) as const
-    expect(isCommandCut(range('x'.repeat(LEGOLAS_LIMITS.rangeCallChars + 1)))).toBe(true)
-    expect(isCommandCut(range('git push'))).toBe(false)
-    expect(isCommandCut({ member: 'legolas', context: { tool: 'Write', path: 'a', diff: { diff: '+x', isNew: false, omitted: { lines: 9, chars: 9 } }, ruleReasons: [], latestPrompt: '' } })).toBe(false)
+    expect(isRunCut(range('x'.repeat(LEGOLAS_LIMITS.rangeCallChars + 1)))).toBe(true)
+    expect(isRunCut(range('git push'))).toBe(false)
+    expect(isRunCut({ member: 'legolas', context: { tool: 'Write', path: 'a', diff: { diff: '+x', isNew: false, omitted: { lines: 9, chars: 9 } }, ruleReasons: [], latestPrompt: '' } })).toBe(false)
+  })
+})
+
+describe('isRunCut: a script or SQL it runs (DESIGN §16)', () => {
+  const gandalf = (scripts: readonly { path: string; content: string }[], tool = 'Bash') =>
+    ({ member: 'gandalf', context: { tool, call: 'bash deploy.sh', ruleReasons: [], latestPrompt: '', scripts } }) as const
+  const database = (sql: readonly { label: string; text: string }[], tool = 'Bash') =>
+    ({ member: 'aragorn', profile: 'database', context: { tool, call: 'psql -f a.sql', ruleReasons: [], sql, production: [], latestPrompt: '' } }) as const
+  const script = (content: string) => [{ path: '/work/deploy.sh', content }]
+
+  test('a script past the line limit or the character limit; one at the limit is whole', () => {
+    expect(isRunCut(gandalf(script(numbered(GANDALF_LIMITS.scriptLines + 1))))).toBe(true)
+    expect(isRunCut(gandalf(script('x'.repeat(GANDALF_LIMITS.scriptChars + 1))))).toBe(true)
+    expect(isRunCut(gandalf(script(numbered(GANDALF_LIMITS.scriptLines))))).toBe(false)
+    expect(isRunCut(gandalf(script('x'.repeat(GANDALF_LIMITS.scriptChars))))).toBe(false)
+    // One cut script among whole ones is enough.
+    expect(isRunCut(gandalf([...script('echo ok'), { path: '/work/b.sh', content: numbered(GANDALF_LIMITS.scriptLines + 1) }]))).toBe(true)
+    expect(isRunCut(gandalf([]))).toBe(false)
+  })
+
+  test('a SQL file or inline SQL past its limit; a file tool is not a run', () => {
+    expect(isRunCut(database([{ label: 'db/a.sql', text: numbered(ARAGORN_LIMITS.sqlLines + 1) }]))).toBe(true)
+    expect(isRunCut(database([{ label: 'psql -c', text: 'x'.repeat(ARAGORN_LIMITS.sqlChars + 1) }]))).toBe(true)
+    expect(isRunCut(database([{ label: 'db/a.sql', text: numbered(ARAGORN_LIMITS.sqlLines) }]))).toBe(false)
+    expect(isRunCut(database([{ label: 'db/a.sql', text: 'x'.repeat(ARAGORN_LIMITS.sqlChars) }]))).toBe(false)
+    expect(isRunCut(database([{ label: 'db/a.sql', text: numbered(ARAGORN_LIMITS.sqlLines + 1) }], 'Write'))).toBe(false)
+    expect(isRunCut(gandalf(script(numbered(GANDALF_LIMITS.scriptLines + 1)), 'Write'))).toBe(false)
+    // The git profile carries no SQL.
+    expect(isRunCut({ member: 'aragorn', profile: 'git', context: { tool: 'Bash', call: 'git reset --hard', ruleReasons: [], protectedBranches: [], latestPrompt: '' } })).toBe(false)
+  })
+})
+
+describe('a cut script or SQL file is never approved by a model alone (DESIGN §16)', () => {
+  const SCRIPT = `${ROOT}/deploy.sh`
+  const BIG_SCRIPT = `rm -rf build\n${numbered(GANDALF_LIMITS.scriptLines + 40, '# step')}\n`
+
+  /** The script is written through a file tool (so the reviewer is shown it), then changed on disk to this. */
+  const withScript = async ($: { tool: { call: (e: never) => Promise<unknown> } }, w: ReturnType<typeof world>, content: string): Promise<void> => {
+    await $.tool.call({ tool: 'Write', file_path: SCRIPT, content: 'rm -rf build\n' } as never)
+    w.files.set(SCRIPT, content)
+  }
+
+  test('a script past the reviewer limit, approved: it goes to the person; allowed once it runs, and is not remembered', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: ALLOW_ONCE })
+    await withScript($, w, BIG_SCRIPT)
+    const requests = w.modelRequests.length
+    expect(await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh' })).toEqual({ result: 'ran' })
+    expect(w.modelRequests.length).toBe(requests + 1)
+    expect(w.asked).toHaveLength(1)
+    expect(w.asked[0]?.question).toContain('a script or SQL file it runs')
+    expect(w.asked[0]?.question).toContain('too long to review in full')
+    await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh' })
+    expect(w.asked).toHaveLength(2)
+    expect(w.modelRequests.length).toBe(requests + 2)
+    const lines = await auditLines(w)
+    expect(lines.at(-2)).toMatchObject({ member: 'gandalf', verdict: 'approve', decision: 'allow-once', outcome: 'ran' })
+    expect(String(lines.at(-2)?.reason)).toContain('a script or SQL file it runs')
+    expect(lines.at(-2)?.cached).toBeUndefined()
+  })
+
+  test('where nobody can be asked it is refused, with the reason', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], surfaces: [] })
+    await withScript($, w, BIG_SCRIPT)
+    const deny = denyOf(await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh' }))
+    expect(deny).toContain('nobody can be asked')
+    expect(deny).toContain('a script or SQL file it runs')
+    expect(w.ran.map(call => call.command)).not.toContain('bash deploy.sh')
+    expect((await auditLines(w)).at(-1)).toMatchObject({ verdict: 'approve', decision: 'unavailable', outcome: 'refused' })
+  })
+
+  test('a script within the limit with an approve runs, unasked, and is remembered', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    await withScript($, w, 'rm -rf build\necho done\n')
+    expect(await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh' })).toEqual({ result: 'ran' })
+    const requests = w.modelRequests.length
+    expect(await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh' })).toEqual({ result: 'ran' })
+    expect(w.asked).toEqual([])
+    expect(w.modelRequests).toHaveLength(requests)
+  })
+
+  test('a revise or a block of a cut script stands as it is', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    await withScript($, w, BIG_SCRIPT)
+    w.replies = [REVISE]
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh' }))).toContain('(revise)')
+    expect(w.asked).toEqual([])
+  })
+
+  test('a SQL file past the reviewer limit, approved: it goes to the person', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: KEEP_BLOCKED })
+    w.files.set(`${ROOT}/db/big.sql`, numbered(ARAGORN_LIMITS.sqlLines + 50, 'select 1; -- '))
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'psql -h prod-db -f db/big.sql' }))).toContain('(keep blocked)')
+    expect(w.modelRequests).toHaveLength(1)
+    expect(w.asked[0]?.question).toContain('a script or SQL file it runs')
+    // A small one is approved and runs.
+    w.files.set(`${ROOT}/db/small.sql`, 'select 1;\n')
+    expect(await $.tool.call({ tool: 'Bash', command: 'psql -h prod-db -f db/small.sql' })).toEqual({ result: 'ran' })
+    expect(w.asked).toHaveLength(1)
+  })
+
+  test('the full council: a member that saw a cut script leaves the approve to the person', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: KEEP_BLOCKED })
+    await withScript($, w, BIG_SCRIPT)
+    w.files.set(`${ROOT}/deploy.sh`, BIG_SCRIPT)
+    const denied = denyOf(await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh && git push origin feature' }))
+    expect(denied).toContain('(keep blocked)')
+    expect(w.asked[0]?.question).toContain('a script or SQL file it runs')
   })
 })
 

@@ -194,6 +194,10 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | Token budget spent / no enabled member can take the call (the named one and Gandalf off) | Escalate without a model call. |
 | The file a diff needs can't be read (over 4 MiB, permissions) | The diff shows the call's own text and the prompt says so; the review goes on. |
 | A `.sql` file the call names is missing, unreadable, or lands outside the project (by name or real path) | Left out of the database reviewer's context, with a one-line note in its prompt saying so (§15.13); the review goes on. |
+| A shell call with more than eight gated parts | No reviewer: the keys cover only the first eight, so a locked or spent part could be among the rest. It goes to the person (`escalate.tooManyParts`), or is refused where nobody can be asked, a failed attempt; never cached (§16 item 7). |
+| A script, `.sql` file or inline SQL the call runs was cut for its reviewer, and the verdict is an approve | The approve does not stand: the call goes to the person (`escalate.commandCut`), or is refused where nobody can be asked; never cached; the audit line keeps the approve and says why (§16 item 6). |
+| More than 200 distinct verb keys have failed | A new verb counts on one shared key (`shell:(other verbs)`), read for any verb with no entry of its own; it locks at the verb cap. Nothing stored is evicted (§16 item 7). |
+| A push follows another command of its call | The preview and range diff are kept and carry a trusted note that the commits were read before the earlier commands ran (§16 item 8). |
 | Nobody can be asked (no surface) | Refuse, naming the operation, the rule and the reviewers' names (never their reasons) and the way to let it run; a failed attempt (§13.5 e). |
 | The start notice can't be appended (`$.session.append` rejects, or resolves `{ deny }`) | A debug line (`notice.appendFailed`); `session.start` goes on and returns `next(e)`. Nothing is retried; the refusal still tells Claude why (§13.5 d). |
 | The status sync after a roster change fails (`session.attach`, `session.detach`) | Caught where it is made; the hook returns what `next(e)` gave. The status line keeps its last value until the next sync (§13.5 f). |
@@ -708,9 +712,9 @@ The `/upgrade-types` runs for 2.1.308 and 2.1.322 read the binary with `grep -a`
    - **(e) Two sessions on one log** (§2.7): documented only (README, near the audit log and in its limits; §4). `$.fs` has no lock and no append, so two sessions in one project can interleave or lose lines; `/council report` already skips lines it cannot parse.
    - **(f) The concurrency model, and one snapshot per call** (§2.5).
      - *The model.* The session is one `$.state` value changed only by `update`, which reads, applies a pure function and writes with `ifVersion`, retrying on a miss. So every counter (tokens, rounds, failed attempts, verdict counts) is exact however many calls run together. What can be a read behind is a decision made from a value read earlier.
-     - *Which checks re-read.* A gated call takes one snapshot at the top and uses it for bypass, shadow, the cache hit, the out-of-rounds check, the latest prompt, the written paths, the model switches and the prompt epoch. Two checks read again, just before they decide, and decide on the fresh value: the lockout (step 5) and each token-budget check (`holdCouncil` and the single-member review). They are the limits another call moves while this one waits (its preview and git reads sit between the snapshot and the budget check), and a miss passes a call that should have been stopped. `refuse` already read afresh for the rounds left.
-     - *Last reader wins.* Everything else stays on the snapshot: two calls with the same fingerprint running together each see the cache empty and are each reviewed (a cost, never a wrong decision); both can pass the out-of-rounds check and each verdict then adds its round; the cache and rounds are written by whichever finishes last, atomically. Nothing is locked.
-     - *A caveat.* The types say "every `get` of one dispatch reads one moment, whatever is written meanwhile". The test kit does not behave so within a call (`refuse` reads the rounds an `update` just wrote, and the tests rely on it), and `update` could not retry if it did. Whether the engine holds one moment per dispatch is not verified live; if it does, the re-read is harmless and changes nothing. A test pins the reads by number (read 2 is the lockout's, read 3 the budget's) through `watchState` in `tests/fixtures.ts`, so a change to the number of reads before them moves those tests with it.
+     - *Which checks re-read.* A gated call takes one snapshot at the top and uses it for bypass, shadow, the cache hit, the out-of-rounds check, the latest prompt, the written paths, the model switches and the prompt epoch. Two checks read again, just before they decide, and decide on the fresh value: the lockout (step 5) and each token-budget check (`holdCouncil` and the single-member review). *Amended by §16 item 5: the cache hit and the out-of-rounds check now read again too; the snapshot keeps the rest.* They are the limits another call moves while this one waits (its preview and git reads sit between the snapshot and the budget check), and a miss passes a call that should have been stopped. `refuse` already read afresh for the rounds left.
+     - *Last reader wins.* Everything else stays on the snapshot: two calls with the same fingerprint running together each see the cache empty and are each reviewed (a cost, never a wrong decision); both can pass the out-of-rounds check and each verdict then adds its round; the cache and rounds are written by whichever finishes last, atomically. Nothing is locked. *Amended by §16 item 5: the cache test and the out-of-rounds check read the session afresh, so two calls in flight see each other's approve and spent rounds where the engine serialises state; what is left on the snapshot is as listed above.*
+     - *A caveat.* The types say "every `get` of one dispatch reads one moment, whatever is written meanwhile". The test kit does not behave so within a call (`refuse` reads the rounds an `update` just wrote, and the tests rely on it), and `update` could not retry if it did. Whether the engine holds one moment per dispatch is not verified live; if it does, the re-read is harmless and changes nothing. A test pins the reads by number (read 2 is the lockout's, read 3 the budget's) through `watchState` in `tests/fixtures.ts`, so a change to the number of reads before them moves those tests with it. *Amended by §16 item 5: reads 3 and 4 are now the cache test's and the rounds check's, and the budget's is read 5.*
    - **(g) The session is validated by shape** (§2.9). `isSession(value)` in `state.ts` checks the version, every top-level field's type, and the elements of every container the pipeline indexes into: each `ops` entry (`rounds`, `wipes`), `counts` entry, `models` value, `verbWipes` value, string array, review time and `debates` entry (and its voices and checks, with their statuses). `sessionOf` returns `INITIAL_SESSION` for anything that fails, so the call is decided normally (before, `v === 4` alone let a broken record throw in `opOf` and deny every gated call until `/clear`). The updaters stay pure. The debug line is logged in the `tool.call` hook, once for the snapshot of a gated call whose stored value is defined and fails the check (`notice.sessionMalformed`); the first write replaces the record, which ends it. A value of another version fails the check too, so it logs the line once as well. The status lists it compares against (debate kinds, statuses and verdicts; voice and check statuses) are copied from `types/index.d.ts` and checked against it at compile time in both directions (`satisfies` for an extra entry, a `never` assertion for a missing one), because a status missing from a list would make every stored record fail the check and reset the session, lockouts included, on each read. The check costs one pass over small containers (the caps are 8 debates, 100 paths, 200 times and 200 operations).
    - **(h) A failed allowlist write is not a failed attempt** (§2.9). In `putToUser`'s allowlist branch, when `writeOverrides` reports `ok: false` the call is refused with `isWipe = false`; a declined second confirm stays a failed attempt. The refusal Claude reads has a reason of its own, `reason.allowlistNotWritten` ("You chose to add this finding to the allowlist, but the entry could not be written, so the call stays blocked."; plain only, as the whole `reason.` family), instead of `reason.userKeptBlocked`, which says the user chose to keep it blocked. The audit decision stays `keep-blocked`.
    - **(i) Times come from `$.clock.now()`** (§2.9). `started`, `latencyMs`, `reviewStarted`, `councilMs` and `memberMs` use it, and so does the audit line's `ts` (`new Date(now).toISOString()`: the result is milliseconds since the epoch, per the types). Under the mocked clock the line reads 1970-01-01 plus the mocked time, which the tests use to check the latency. In a real session `$.clock.now()` is the system time.
@@ -1102,7 +1106,9 @@ ROADMAP C6.
 An independent audit of the rules tier found forms that reached a weaker tier than intended: a
 command the parser did not see, or a program it did not know. The rules tier is the safety
 boundary, so each was closed the same way as in §10. Every decision below is a **tightening**: more
-calls are reviewed, asked about or blocked, and none moves down a tier. They are recorded here as
+calls are reviewed, asked about or blocked, and none moves down a tier. *This was wrong for one case: a
+protected path named as the value of a wrapper or runner option passed where it used to ask, which §16
+item 9 found and corrected.* They are recorded here as
 decided; the live list of what still passes is the README's "Known gaps in shell parsing".
 
 1. **Unquoted heredoc bodies are scanned for substitutions.** A heredoc whose delimiter has no
@@ -1182,6 +1188,7 @@ decided; the live list of what still passes is the README's "Known gaps in shell
    A newline separates commands, and whitespace inside quotes is data, so no normalisation is safe
    without parsing the command, and the parse cannot be the cache key's. A reformatted command is
    reviewed again; the cost is one more review for a command retyped with different spacing.
+   *The key also carries the working folder, §16 item 2.*
 9. **Cut input keeps both ends** (a tightening). `truncate` kept the start and dropped the end, so
    the end of a command, a script or a diff was never seen. `cut` (`members/shared.ts`) keeps about
    two thirds of each limit from the start and one third from the end, on line boundaries (a line
@@ -1206,7 +1213,7 @@ decided; the live list of what still passes is the README's "Known gaps in shell
     reach. Notes for context left out of a brief (item 13) are written the same way.
 11. **A cut shell command is never approved by a model alone** (a tightening). A command that is cut
     hides code that will run, unlike a file or a diff, whose reviewer judges what it sees and is
-    told the rest is missing. When the command text of a shell call (`isCommandCut`, `members/
+    told the rest is missing. *Widened by §16 item 6 (renamed `isRunCut`): a script or SQL it runs counts too.* When the command text of a shell call (`isCommandCut`, `members/
     brief.ts`: the call limits of the general and the git and database reviewers; the range
     command's own 40 lines and 4,000 characters for the diff reviewer) is past its reviewer's limit
     and the verdict is an approve, the call is treated as one with no verdict: `askUser` with
@@ -1367,7 +1374,8 @@ decided; the live list of what still passes is the README's "Known gaps in shell
     - **Bounded.** Only the first `MAX_PART_KEYS` (8) gated parts of a call get part keys and part
       verb keys. A call with more is decided by its whole key plus those eight, and a failed attempt
       records at most nine keys, so a huge compound command cannot grow the session record (`ops`
-      stays capped at 200 entries as before).
+      stays capped at 200 entries as before). *Amended by §16 item 7: a call with more is no longer
+      reviewed by a model, and the verb counters are bounded too.*
     - **The status** (`attemptsOf`, the pane and `/council`) counts a verb at its cap as locked out,
       so it cannot say "0 locked out" while a verb is locked. Side effects of the keys sharing one
       map: "operations" counts every tracked key, part keys included; "attempts" is the sum of the
@@ -1618,3 +1626,162 @@ are recorded as decided.
    confirmation (3); printing the project's reason with no introduction in the refusal (3), in the audit
    line (4) and by emptying the string (5); also printing the nonce (1), not counting hidden characters
    (3), long values (4), dropping either id cap (1 each) and the 40 limit (2).
+
+2. **An approval is bound to where the call runs** (a tightening; a review of the decision path). The
+   verdict cache key and the chat approval key were the tool, the input and a scope tag that exists
+   only under a multi-repository root. The session's working directory follows a `cd` between Bash
+   calls (§14.5's probe; the types: `$.session.cwd()` is "the directory the session runs in"), so an
+   approved `rm -rf build` in one folder was reused in another, and so was a chat `once` or `session`
+   allowance. Decided:
+   - **The scope string is the tag plus the folder.** `placeScopeOf(scopeTag, cwd)` (`audit.ts`) is the
+     tag, a NUL and the working directory the hook read for this call (`$.session.cwd()`, read inside
+     the hook: the types say a timer that outlives its hook reads the session's, and a subagent has
+     its own), or just the folder when the tag is empty. `register.ts` passes it to `fingerprintOf`
+     for the cache key and to `callKeyOf` for chat approvals (the offer, the use of an allowance and
+     the code). The code a person types is derived from the key, so it differs per folder.
+   - **Unchanged.** The audit line's `fingerprint` is the plain one, in its old format. `fingerprintOf`
+     and `callKeyOf` keep their signatures and behave as before for the scope they are given. The
+     stored shape is unchanged, so nothing is migrated: a key written before is simply never matched
+     (the cache lasts one prompt; a held chat allowance of an older key no longer applies, which is
+     the stricter side).
+   - **The root scope's keys are no longer byte-identical to the old ones** (§14.5's "Keys" bullet): the
+     folder is always in them. The same call in the same folder is still served from the cache (one
+     model request).
+   Tests: `approvals.test.ts` (another folder is reviewed again; the same folder is still cached; the
+   key is `placeScopeOf(tag, cwd)`; the audit fingerprint is the plain one), `chat.test.ts` (a once and
+   a session allowance given in one folder do not run the call in another, which gets a code of its
+   own; the allowance still holds for the first), `scopes.test.ts` (the keys under a multi-repository
+   root). Changed to the stricter behaviour: the chat and scope tests that computed a key with no
+   folder now give it one (`placeScopeOf('', ROOT)`), because the key they pin now holds it.
+   Mutations: dropping the folder from the cache key fails 4 tests (the two folder tests in `approvals.test.ts`, the read-afresh cache test, and the key test in `scopes.test.ts`); dropping it from the chat key fails 4 (the code test in `chat.test.ts`, its once and session folder tests, and the two-codes test in `scopes.test.ts`).
+3. **The full council's approve is never cached** (a tightening). A big operation convenes the council
+   and runs the project's checks, and a cached approve skipped both for the identical call later in the
+   prompt. `holdCouncil`'s approve path no longer writes the cache, so a repeated big operation sits
+   again and runs the checks again. The single reviewer's approve is cached as before. Tests:
+   `approvals.test.ts` ("the same big operation again convenes the council again, and runs the checks
+   again", with a check and `npx prisma migrate deploy`, which has no git part; "a second identical push in
+   one prompt …", asserting model requests and spawns); `council.test.ts` and `debate.test.ts` changed
+   to the stricter behaviour (an identical push now sits again: six requests, and its approve earns its
+   own epic drop; the "cached approve gets none" half of the debate test had nothing left to pin).
+   Mutations: caching the council's approve fails "the same big operation again convenes the council again, and runs the checks again".
+4. **A call with a git part is never served from the cache, and its approve is not cached** (a
+   tightening). The checked-out branch, the index and the history are not in the key, so the same words
+   can mean another thing the next time (`git reset --hard` after a commit). `hasGitPart`
+   (`elrond/operations.ts`) splits the command (`splitShell`, pure; no git process) and is true when any
+   part, gated or not (`git status && rm -rf build`, `sudo git push`, `(cd x && git checkout main)`), has
+   `git` as its program. Decided beyond the brief: the brief said to use the parts already split, which
+   are only the gated parts of the classification, so a git part that is not gated would have been
+   missed; the parse is repeated instead, as `targetsOf` already does. A command too long or too complex
+   to split is read as text (`\bgit\b`), the careful side. `register.ts` computes `isCacheable` once; it
+   guards the cache test and the single reviewer's cache write (the council writes none, item 3).
+   Tests: `approvals.test.ts` ("an approved git reset --hard is reviewed again on repeat, and its approve is not
+   written to the cache", "even a cache that holds its key does not serve it" (seeded through a read),
+   "a git part that is not itself gated counts too", and "an identical ordinary review call in the same
+   folder is served from the cache: one request"), `operations.test.ts` (`hasGitPart`).
+   Mutations: serving a git-part call from the cache fails "even a cache that holds its key does not serve it"; caching a git-part call's approve fails "an approved git reset --hard is reviewed again on repeat, and its approve is not written to the cache". (The two guards are tested apart, because with the write guard alone nothing would ever be there to serve.)
+5. **The cache test and the out-of-rounds check read the session afresh** (a tightening; amends §13.4 f).
+   Both used the snapshot taken at the hook's start, so a call in flight beside this one could not see
+   the other's approve or spent rounds. Each now reads just before it decides (`cacheState`,
+   `roundsState`), always, so the reads keep a fixed order: 1 the snapshot, 2 the lockout, 3 the cache
+   test, 4 the rounds check, 5 the token budget's. Where the engine serialises state, two calls see
+   each other's result; if it holds one moment per dispatch (the types' wording, not verified live) the
+   re-read is harmless. The snapshot still serves bypass, shadow, the latest prompt, the written paths,
+   the model switches and the epoch. Tests pinned by number moved with it, the assertion unchanged:
+   `robustness.test.ts` "tokens spent by reviews that finished after the first read …" and "and the full
+   council" (the budget's read 3 became 5); new in `approvals.test.ts`: an approve that landed after the
+   snapshot is served (read 3), rounds spent after it send the call to the person (read 4). Mutations:
+   using the snapshot for the rounds check fails "rounds spent after the snapshot send the call to the person"; using it for the cache test fails "an approve that landed after the snapshot is served from the cache".
+6. **A cut script or SQL file is not approved by a model alone** (a tightening; widens §15 item 11).
+   `isCommandCut` looked only at the call's own command. A script the call runs (`scripts[]` of the
+   general reviewer, cut at 120 lines or 8,000 characters), or a `.sql` file or inline SQL it executes
+   (the database reviewer's `sql[]`, 150 lines or 8,000 characters), that was cut is also code that
+   will run and that no reviewer saw in full. `isRunCut` (renamed; `members/brief.ts`) is true for a
+   shell tool when the command, any script or any SQL piece is over its reviewer's limit (the same
+   `cut` test the prompt applies, so the two never disagree); such a call follows the cut-command path:
+   the person, or a refusal where nobody can be asked, never cached, and the audit reason is
+   `escalate.commandCut`, whose text now reads "The command, or a script or SQL file it runs, was too
+   long to review in full, so a reviewer's approval of it does not count." (the old phrase "too long to
+   review in full" is still in it). Decided: an inline SQL piece (`-c`, a heredoc) counts, as the brief
+   says, even when the call text that holds it was shown whole; a script that is missing or unreadable
+   is not "cut" (it is the existing "could not be shown" note). A file tool's own content and a diff
+   are unchanged: a write is not a run. Tests: `omission.test.ts` (`isRunCut` at the limits, one cut script
+   among whole ones, SQL by lines and by characters, a file tool is not a run; through the pipeline: a
+   cut script goes to the person, is refused where nobody can be asked with the reason, is not
+   remembered, a script under the limit runs and is remembered, a revise stands, a cut `.sql` file, the
+   full council). Mutations: ignoring a cut script fails 4 tests (the `isRunCut` script test and three pipeline tests); ignoring a cut SQL piece fails 2 (the `isRunCut` SQL test and the cut `.sql` file pipeline test).
+7. **The retry brake with many parts, and its counters** (a tightening; amends §15 item 20).
+   - **More than eight gated parts go to the person.** Only the first `MAX_PART_KEYS` gated parts get
+     keys, so a locked-out or spent part placed ninth was neither locked nor out of rounds. `Operation`
+     gains `hasTooManyParts` (present only when true, so the shape of every other operation is what it
+     was); `operationOf` still returns the first eight's keys, for counting a failed attempt. In
+     `register.ts`, at the out-of-rounds check, such a call (not in shadow, as that check is) goes to
+     `askUser('escalate.tooManyParts')`: the person, or a refusal where nobody can be asked (`nobodyToAsk`,
+     a failed attempt), never a model request and never cached (the cache test excludes it too). The
+     audit reason says why. It comes before the full council's routing, so a big operation of this size
+     is not convened either.
+   - **The verb counters are bounded.** `verbWipes` had no cap. At `MAX_VERB_KEYS` (200) distinct verb
+     keys a new verb counts on `OTHER_VERBS_KEY` (`shell:(other verbs)`); the lockout check also reads
+     it for a part's verb that has no entry of its own. It locks at the verb cap like any verb. Nothing
+     stored is evicted, so at most 201 entries. Decided: each new verb of a call counts once on the
+     shared key (a call of three new verbs adds three), the stricter side of one count per call; the
+     joined verb key is not given the shared key's count. A verb that has an entry is judged by it alone.
+   - **A force or delete push keeps its own count.** Its `partKeys` also hold its part key plus
+     `FORCE_SUFFIX` (` !force`), counted and checked like any part key (rounds, failed attempts, lockout,
+     out of rounds). `isForcePush` reads the part with the shared parser (`rules/push.ts`, import only): a
+     force flag, a delete, a `+refspec` or an empty source (`:branch`), as the force-push check reads
+     them. A successful call clears its whole key only, as item 20 says, so a plain push of the same
+     target does not clear the variant. The whole key, the verb keys and the audit `opKey` are unchanged,
+     and so is every key `operations.test.ts` pins. The variant is in the first eight parts only, like
+     the keys it follows.
+   Tests: `operations.test.ts` (nine gated parts and eight; 250 verbs leave 200 entries and the shared
+   key, nothing evicted, the shared key locks at five, a verb with an entry is not locked by it, a call of
+   several new verbs; the variant for each force and delete form, in a compound, behind `-C` and a
+   wrapper; a plain success does not clear it, for rounds and for failed attempts; `hasGitPart`),
+   `approvals.test.ts` (a locked force push is refused among the first eight, and as the ninth goes to
+   the person with no model request; nobody to ask refuses with the reason and the audit line says it;
+   allowed once it runs and is never cached; eight parts are still reviewed; two revised force pushes, a
+   plain push, then a third force push goes to the person with no model request). Mutations: not marking a nine-part compound fails 4 tests (three in `approvals.test.ts` and the marker test in `operations.test.ts`); evicting the oldest verb entry instead of using the shared key fails 4 (all of the verb-counter tests); clearing the force variant when a plain push succeeds fails 2 (the rounds-and-failed-attempts test and the three-pushes pipeline test).
+8. **A push preview that may be stale says so** (a tightening). When a push part follows any other part
+   of its call (`git commit -am x && git push`, `git checkout main && git push`), the preview and the
+   range diff are read before the earlier parts run. The preview is kept and a `note` step (the existing
+   mechanism; `noteLines` for the reviewers, outside every data block) says: "The commits shown were
+   read before the earlier commands of this call ran, so they may not be what is pushed."
+   (`stalePushNote`, `members/galadriel.ts`). `followsOtherPart` splits the command again and asks
+   whether a part with the same text sits after the first position, so a lone push, and a push that
+   comes first, get none; a `cd` before the push counts as another part (the brief said "any other
+   part"; the preview is read in the folder the `cd` leads to, but a `cd` is still a part that ran).
+   The note is a line, not a step, and counts against no cap; it joins the other push notes. Tests:
+   `galadriel.test.ts` (both forms and a lone push, for the preview and the range diff; it joins the
+   broad-push note; in the pipeline, every council member's prompt carries it outside any data block, and
+   a lone push says nothing). Mutations: making `followsOtherPart` always false fails 3 tests (the preview and range diff test, the joined-notes test and the pipeline test).
+9. **Protected paths on every word, and wrapper and runner options read in full** (a tightening;
+   corrects the opening of §15; landed in "Check protected paths on every word; read wrapper options
+   fully" before this record). §15 said no change of that pass lowered a tier. One did: the wrappers
+   and runners it added took their option values out of the words the protected-path check reads, so a
+   protected path named as such a value (`op run --env-file=.env`, `mise x -C .git`, `fakeroot -s
+   .env`, `firejail --profile=.env`) passed where it used to ask. Decided:
+   - **Candidates are every word as written**, plus the value side of `name=value` and `--opt=value`,
+     plus values glued to an option (`-C.git`, `--dir=x`; `ShellPart.optionValues`). So `uv run
+     --env-file`, `npm exec --userconfig`, `pnpm exec --dir`, `dd of=` and `NAME=path` ask too.
+   - **Options are read by getopt rules**, with a table per wrapper and per runner (which options take
+     a value, which are flags, which change the directory or the root, which name a script): clusters
+     letter by letter (`timeout -vs KILL 5`, `env -iu NAME`), long options by unique prefix, global
+     options before a runner's subcommand (`pnpm -r exec`, `npm -s exec`, `yarn workspace web exec`,
+     `uv -q run`). An option the tables do not list makes the part unresolved (`shell-runner-unresolved`,
+     review), and an unresolved part is also evaluated at `/`. `uv run -m` and `poetry run -v` were wrongly
+     unknown and no longer cause a review.
+   - **A wrapper that changes the directory or the root** (`env -C`, `sudo -D`/`-R`, `chroot`, `nsenter`,
+     `mise -C`, `npm --prefix`, `pnpm --dir`, `uv --directory`) is evaluated additionally at `/`, never
+     instead of the folder that is followed.
+   - **Parts carry a nesting level** (`ShellPart.scope`, `parentScope`), and `cd` is tracked per level: a
+     `cd` inside a subshell, a group or `$(…)` moves the folder for the later commands of that level. Both
+     the followed and the earlier reading are evaluated, so nothing lowers.
+   - **A program word the shell builds at run time** by a glob, a bracket or a brace list, as well as by
+     a variable, is reviewed (`shell-dynamic-program`). A brace list in the program position is expanded
+     when it is flat and literal (at most 16 words) and read as the commands it expands to, with the review
+     rule as the floor. `env -S` splices its words into env's own argv. A command substitution inside
+     unquoted `$(( … ))` is classified.
+   - **A known limit.** The scope selection for a multi-repository root (`targetsOf`, §14.5) does not
+     follow a `cd` inside a subshell.
+   The tests for this item are in `rules.test.ts`, written with the change. The README's "Known gaps in
+   shell parsing" and its tier list say the same in the user's words.

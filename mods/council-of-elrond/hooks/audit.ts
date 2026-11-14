@@ -112,6 +112,13 @@ export async function fingerprintOf(tool: string, input: unknown, scope = ''): P
   return Array.from(digest.slice(0, 8), byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
+/**
+ * The scope a call's approval is bound to: the repositories it touches (C5; empty
+ * for the root scope alone) and the folder the session is in. The folder follows a
+ * `cd` between calls, so the same words run elsewhere are another call.
+ */
+export const placeScopeOf = (scopeTag: string, cwd: string): string => (scopeTag === '' ? cwd : `${scopeTag}\u0000${cwd}`)
+
 export const ROTATED_FILES = 3
 
 const encoder = new TextEncoder()

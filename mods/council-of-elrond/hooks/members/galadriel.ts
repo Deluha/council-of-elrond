@@ -2,6 +2,7 @@ import { cut } from './shared.js'
 import type { Cut } from './shared.js'
 import { FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
 import type { Call, Classification } from '../rules/classify.js'
+import { splitShell } from '../rules/shell.js'
 import type { ShellPart } from '../rules/shell.js'
 import { relativeTo, resolve } from '../rules/paths.js'
 import { parsePush } from '../rules/push.js'
@@ -125,6 +126,18 @@ const pastPushNote = (total: number): string =>
 /** The line said, trusted, when a push of every branch or tag is shown as the current branch's commits only. */
 export const broadPushNote = 'This push sends more branches or tags than the commits shown: only the current branch is listed, so what the others would send is unknown.'
 
+/**
+ * The line said, trusted, when a push follows another part of its call: the
+ * commits were read before the earlier parts ran (a commit, a checkout, a
+ * merge), so they may not be what is pushed.
+ */
+export const stalePushNote = 'The commits shown were read before the earlier commands of this call ran, so they may not be what is pushed.'
+
+/** Whether a part comes after any other part of its call (the call's own text is split again, as the parts of a classification are the same words). */
+export function followsOtherPart(part: ShellPart, call: Call): boolean {
+  return splitShell(commandOf(call)).parts.some((other, index) => index > 0 && other.text === part.text)
+}
+
 /** The notes a push plan calls for, one line each. */
 const pushNotes = (plan: PushPlan): string[] => [
   ...(plan.unseen > 0 ? [unseenPushNote(plan.unseen)] : []),
@@ -177,7 +190,7 @@ function mergeRef(rest: readonly string[]): string | undefined {
 }
 
 /** A push's steps, and how many of them are commit lists past the first (they raise the cap by that much). */
-function pushInspections(rest: readonly string[]): { steps: Inspection[]; extra: number } {
+function pushInspections(rest: readonly string[], isStale: boolean): { steps: Inspection[]; extra: number } {
   const plan = pushPlan(rest)
   const logs = plan.ranges.map(
     ({ range, source, fallback }): Inspection => ({
@@ -198,7 +211,7 @@ function pushInspections(rest: readonly string[]): { steps: Inspection[]; extra:
       { kind: 'git', label: 'current branch', argv: ['git', 'rev-parse', '--abbrev-ref', 'HEAD'] },
       ...(plan.remote !== undefined ? [{ kind: 'git' as const, label: `remote ${plan.remote}`, argv: ['git', 'remote', 'get-url', plan.remote] }] : []),
       ...logs,
-      ...pushNotes(plan).map((label): Inspection => ({ kind: 'note', label })),
+      ...[...pushNotes(plan), ...(isStale ? [stalePushNote] : [])].map((label): Inspection => ({ kind: 'note', label })),
     ],
     extra: Math.max(0, logs.length - 1),
   }
@@ -295,7 +308,7 @@ export function planPreview(call: Call, classification: Classification, context:
       if (git === undefined) continue
       let steps: readonly Inspection[] = []
       if (git.sub === 'push') {
-        const pushed = pushInspections(git.rest)
+        const pushed = pushInspections(git.rest, followsOtherPart(part, call))
         steps = pushed.steps
         allowed += pushed.extra
       } else if (git.sub === 'merge') steps = mergeInspections(git.rest)
@@ -397,6 +410,6 @@ export function rangeDiffInspections(
         ...place,
       }),
     ),
-    notes: pushNotes(plan),
+    notes: [...pushNotes(plan), ...(followsOtherPart(part, call) ? [stalePushNote] : [])],
   }
 }

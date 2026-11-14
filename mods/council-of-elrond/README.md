@@ -77,7 +77,7 @@ Shipped defaults:
     (`claude plugin disable|uninstall|remove|rm|update|install|enable`, `claude plugin marketplace
     add|remove|rm|update`; rule `plugin-manage`). `claude plugin test`, `validate`, `list` and `eval`
     are not asked about;
-  - anything touching a protected path: `.env*`, `Jenkinsfile`, migrations folders, and the entries below. The entries written with a leading `**/` hold in every repository below the session root, at any depth, the rules file included (`app/.claude/council-of-elrond/rules.json`), and so does the directory itself (`rm -rf app/.git` asks). A path outside the session root is matched by its absolute form, so another repository's `.git/` or your user `~/.claude/settings.json` (which holds hooks and permissions) asks too:
+  - anything touching a protected path, wherever it appears in the command: as a word, as the value of a wrapper or runner option (`op run --env-file=.env`, `mise x -C .git`, `uv run --env-file`, `npm exec --userconfig`), after `=` (`dd of=`, `NAME=path`) or glued to an option. `.env*`, `Jenkinsfile`, migrations folders, and the entries below. The entries written with a leading `**/` hold in every repository below the session root, at any depth, the rules file included (`app/.claude/council-of-elrond/rules.json`), and so does the directory itself (`rm -rf app/.git` asks). A path outside the session root is matched by its absolute form, so another repository's `.git/` or your user `~/.claude/settings.json` (which holds hooks and permissions) asks too:
     - `**/.github/workflows/**`, `**/.gitlab-ci.yml`, `**/.circleci/**`, `**/.buildkite/**`;
     - `**/db/migrate/**`;
     - `**/.git/**`;
@@ -93,10 +93,12 @@ Shipped defaults:
     pipe, a heredoc, a here-string or a `<` redirect into `python3`, `node`, `perl`, `ruby`, `php`,
     `deno`, `bun`, `Rscript` or `lua` with no script named; rule `script-stdin`), and a code flag
     written attached or in a cluster (`python3 -Bc`, `perl -ne`, `node -pe`, `php -r'...'`);
-  - a program that is only known at run time, such as a variable or a substitution in the program
-    position (`shell-dynamic-program`; an unquoted `$IFS` or `${IFS}` is read as a space first);
-  - a command run through a runner whose options the mod cannot read with certainty
-    (`shell-runner-unresolved`);
+  - a first word the shell builds at run time, such as a variable, a substitution, a glob, a bracket
+    expression or a brace list in the program position (`shell-dynamic-program`; an unquoted `$IFS`
+    or `${IFS}` is read as a space first, and a flat literal brace list is read as the command it
+    expands to);
+  - a command run through a wrapper or runner that has an option the mod's tables do not list: it
+    cannot be read with certainty, so the call is reviewed (`shell-runner-unresolved`);
   - Bash with the sandbox disabled;
   - MCP tools whose names say they change something.
 
@@ -144,6 +146,13 @@ what counts.
   verdict does, or is refused where nobody can be asked. A revise or a block stands as it is, and
   the approve is not remembered. This is about the command text; a long file or diff is not held
   back, and its reviewer is told.
+- **A script or SQL file it runs is held to the same rule.** A script the call runs (written through
+  a file tool this session) or a `.sql` file or inline SQL it executes that is longer than its
+  reviewer reads (120 lines or 8,000 characters for a script, 150 lines or 8,000 characters for SQL)
+  is code that will run and that no reviewer saw in full. A reviewer's approve of such a call does
+  not let it run either: it comes to you ("… or a script or SQL file it runs, was too long to review
+  in full"), is refused where nobody can be asked, and is not remembered. Writing the same long file
+  with a file tool is not a run and is unchanged: its reviewer is told what was left out.
 - **Secrets are redacted before anything is cut**, so a cut cannot leave half a secret that no
   longer looks like one.
 - **Context that could not be shown is said so.** A `.sql` file the call names that is outside the
@@ -367,7 +376,7 @@ per call:
   `.gitignore` is written beside each. `/council log`, `report`, `rules` and `models` read the
   repository of the session's working directory (the root's when it is in none).
 - **Approvals do not travel.** A cached approval, and a code typed in chat, apply to the same call
-  in the same set of repositories only.
+  in the same set of repositories and the same working folder only.
 - **Allow rules and the allowlist are offered only for a call in one repository.** The rule or
   entry is written to that repository's file. A call touching two, or only the root, is not offered
   either (a file at the root would turn this lookup off): add the rule to the file by hand.
@@ -585,6 +594,10 @@ line of your own that holds nothing else:
   could be (not for a script, a long or multi-line command, a command whose words expand when it
   runs, or one with a possible secret in it: for those `session` records nothing and Claude says so,
   and you type the once form).
+- **The folder is part of the call.** The code, and a once or session allowance, stand for the call
+  in the working folder it was refused in. The folder follows a `cd` between Claude's commands, so
+  the same call made from another folder is another call: it is refused again, with a code of its
+  own, and the allowance still holds for the first folder.
 - **Offers last until your next message.** A code from a refusal is answered only in the next
   message you write; after a further message it is unknown, and Claude is told so.
 - **Never offered:** a protected path and a block rule have no code, and a high-confidence secret is
@@ -657,10 +670,12 @@ operation. A push keys on its remote and branch, and SQL on its database.
 - **Rounds:** after a reviewer refuses the same operation twice, further attempts come to you without another model call. Typing an instruction starts the rounds over.
 - **Failed attempts:** a refusal by a rule, a reviewer or the secrets scan, your "keep blocked" (or a dismissed question, or nobody to ask), your refusal at Claude Code's own permission prompt, and a gated call that ran and errored all count. Claude Code's own "Chat about this" counts like a dismissal. "Talk first" does not, nor does Claude Code denying a call on its own with nobody asked (in `claude -p`, or by a deny rule), nor an allowlist entry the mod could not write (the call stays blocked, but the failure is not Claude's).
 - **Lockout:** three failed attempts on one operation, or five on one kind of operation (say `git push` to any target), lock it out. Claude is told to stop retrying, tell you what failed and propose another approach.
-- **A command of several parts:** each gated part of a shell command (`rm -rf build; git push origin main`) is also counted as the operation it would be alone. A failed attempt counts on the whole command, on each part and on each part's kind; a review round on the whole command and on each part. A command is locked out when its whole operation or any part of it is, or when any kind in it is, and it comes to you without another model call when its whole operation or any part has used its rounds. Only the first eight gated parts of one command are counted this way, besides the command as a whole.
+- **A command of several parts:** each gated part of a shell command (`rm -rf build; git push origin main`) is also counted as the operation it would be alone. A failed attempt counts on the whole command, on each part and on each part's kind; a review round on the whole command and on each part. A command is locked out when its whole operation or any part of it is, or when any kind in it is, and it comes to you without another model call when its whole operation or any part has used its rounds. Only the first eight gated parts of one command are counted this way, besides the command as a whole; a command with more than eight gated parts is not decided by a reviewer at all, because a locked or spent part could sit among those not counted: it comes to you ("too many separate gated parts to track"), is refused where nobody can be asked, and is never remembered. Split it.
+- **A force or delete push has a count of its own.** Besides its operation's count, a force push (`-f`, `--force`, `--force-with-lease`, `+branch`) or a delete (`--delete`, `:branch`) keeps its own rounds and failed attempts, which a plain `git push` of the same branch never clears. Two revised force pushes, a plain push that went through, then a third force push come to you.
+- **The per-kind counters are bounded.** At 200 kinds of operation a new kind is counted on one shared counter ("other verbs"), which locks at five like any kind. Nothing already counted is dropped.
 - A call that runs successfully clears its own operation (for a command of several parts: the command as a whole; its parts' own counts and the per-kind counters stay). Likewise, typing an instruction gives the command as a whole its rounds back, not its parts. Everything resets when you send a new prompt (a `/council` command is not one).
   Only a person's prompt starts them over: in `claude -p` and SDK sessions they last until `/clear`.
-- **Cache:** a reviewer's approve is reused for the identical call until your next prompt. A block or revise never is. Any prompt that is not a person's (`claude -p`, the SDK, a task notification, a schedule) also clears the cache.
+- **Cache:** a single reviewer's approve is reused for the identical call, from the same working folder, until your next prompt. A block or revise never is, and neither is the approve of the full council (a big operation convenes it, and runs your project's checks, every time), nor any call with a `git` part, since the checked-out branch and the index are not part of what the call says. A call with none, in the same folder, still costs one review. The cache and the rounds are read again just before they are used, so two calls running at once see each other's result. Any prompt that is not a person's (`claude -p`, the SDK, a task notification, a schedule) also clears the cache.
 
 ## Escalation
 
@@ -758,8 +773,10 @@ command (`chrt`, `taskset`, `setarch`), multi-call binaries (`busybox`, `toybox`
 `script -c`, `nix-shell --run`, `env -S` and the `tmux` subcommands that start a command, and the
 substitutions in an unquoted heredoc body. The gaps that remain:
 
-- **Variables and runtime expansions aren't resolved.** `rm -rf $DIR` has an unknown target, so review decides. A variable or substitution as the program itself is reviewed, but what it expands to is not known, so the command it would run is not classified. `cd $X` followed by a relative recursive delete is treated as if `$X` were `/`. A protected file named only through a variable (`X=.env; cat $X`) is not recognised as protected.
-- **Only a `cd` at the top level of the command is tracked.** A `cd` or `pushd` between the top-level parts of a command (`cd src && rm -rf generated`) moves where the parts after it work, and a target the mod cannot know (`cd $X`, `cd -`) counts as `/`. A `cd` inside a subshell, a substitution, `sh -c` or `eval` moves nothing, neither the rest of that subshell nor the parts after it: `(cd / && rm -rf *)` and `bash -c 'cd / && rm -rf *'` resolve the target against the project root, so they are review rather than block. `popd` is not tracked.
+- **Variables and runtime expansions aren't resolved.** `rm -rf $DIR` has an unknown target, so review decides. A program word the shell builds at run time (a variable, a substitution, a glob, a bracket or a brace list; a flat literal brace list is read as the command it expands to) is reviewed, but what it expands to is not known, so the command it would run is not classified. `cd $X` followed by a relative recursive delete is treated as if `$X` were `/`. A protected file named only through a variable (`X=.env; cat $X`) is not recognised as protected.
+- **A `cd` is followed for the commands of its own level.** A `cd` or `pushd` between the parts of a command (`cd src && rm -rf generated`) moves where the later parts of that level work, and a target the mod cannot know (`cd $X`, `cd -`) counts as `/`. A `cd` inside a subshell, a group or `$(…)` moves the folder for the later commands of that level, not for the commands outside it: both readings are judged, so nothing is judged more leniently than before. The scope selection under a multi-repository root does not follow a `cd` inside a subshell. `popd` is not tracked.
+- **Wrapper and runner options are read as the program reads them, and an unknown one means review.** Clusters are read letter by letter (`timeout -vs KILL 5`, `env -iu NAME`), long options by unique prefix, and global options before a runner's subcommand (`pnpm -r exec`, `npm -s exec`, `yarn workspace web exec`, `uv -q run`). An option the mod's tables do not list sends the call to review. A wrapper or runner that changes the directory or the root (`env -C`, `sudo -D`/`-R`, `chroot`, `nsenter`, `mise -C`, `npm --prefix`, `pnpm --dir`, `uv --directory`) is judged from `/` as well as from where the session is.
+- **A protected path counts wherever the command names it.** Every word as written, the value of `name=value` and `--opt=value`, and a value glued to an option are tested, including a wrapper's or runner's own option value (`op run --env-file=.env`, `fakeroot -s .env`, `firejail --profile=.env`).
 - **Code inside interpreters isn't parsed.** `python -c "shutil.rmtree('/')"` is review (script execution); the reviewer sees the code, but no rule reads it. The same holds for code fed on standard input and for a script file's contents.
 - **Encoded or downloaded payloads** (`base64 -d | sh`, `curl | sh`) are caught only as "piped into a shell" (review).
 - **Shell symbolic links aren't resolved.** File-tool paths are resolved to their real path; paths in shell commands are not.

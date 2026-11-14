@@ -136,7 +136,12 @@ const TABLE = {
   'escalate.budget': { plain: "The session's review token budget is spent." },
   'escalate.failed': { plain: 'The reviewer could not give a verdict.' },
   'escalate.councilFailed': { plain: 'A big operation went to the full council, and members of it could not give a verdict.' },
-  'escalate.commandCut': { plain: "The command was too long to review in full, so a reviewer's approval of it does not count." },
+  'escalate.commandCut': {
+    plain: "The command, or a script or SQL file it runs, was too long to review in full, so a reviewer's approval of it does not count.",
+  },
+  'escalate.tooManyParts': {
+    plain: 'The command has too many separate gated parts to track (more than eight), so no reviewer decides it; split it into smaller commands.',
+  },
   'escalate.rounds': { plain: 'The reviewer refused this operation twice since you last wrote; it comes to you before any further review.' },
   'escalate.secretLow': { plain: 'The secrets scan found something that may be a secret.' },
 

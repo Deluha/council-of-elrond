@@ -204,9 +204,9 @@ describe('the full council in the pipeline', () => {
         checks: [],
       },
     })
-    // An identical call approved this prompt is not reviewed again.
+    // A council approve is not remembered (DESIGN §16): the identical call convenes it again.
     await $.tool.call(PUSH)
-    expect(w.modelRequests).toHaveLength(3)
+    expect(w.modelRequests).toHaveLength(6)
   })
 
   test('a new branch: the diff reviewer reads the remote default branch when its range is unreadable', async ($, on) => {

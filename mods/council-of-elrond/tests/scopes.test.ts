@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { fingerprintOf } from '../hooks/audit.js'
+import { fingerprintOf, placeScopeOf } from '../hooks/audit.js'
 import { callKeyOf } from '../hooks/elrond/chat.js'
 import { MAX_GIMLI_COMMANDS } from '../hooks/config/schema.js'
 import { classify, cwdAfter, targetsOf } from '../hooks/rules/classify.js'
@@ -589,15 +589,18 @@ describe('the verdict cache and the chat key', () => {
     expect(w.modelRequests).toHaveLength(2)
   })
 
-  test('the root scope alone keeps today\'s keys; a repository\'s are tagged with its directory', async ($, on) => {
+  test('the key is the scope and the folder: the root scope alone is its folder, a repository\'s is tagged with its directory too', async ($, on) => {
     const w = world(on, { multiRepo: true, replies: [APPROVE] })
     const state = watchState(on)
     const input = { command: 'rm -rf build' }
     await $.tool.call({ tool: 'Bash', ...input })
-    expect((state.written.at(-1) as CouncilSession).cache).toEqual([await fingerprintOf('Bash', input)])
+    expect((state.written.at(-1) as CouncilSession).cache).toEqual([await fingerprintOf('Bash', input, placeScopeOf('', ROOT))])
     w.cwd = APP
     await $.tool.call({ tool: 'Bash', ...input })
-    expect((state.written.at(-1) as CouncilSession).cache).toEqual([await fingerprintOf('Bash', input), await fingerprintOf('Bash', input, APP)])
+    expect((state.written.at(-1) as CouncilSession).cache).toEqual([
+      await fingerprintOf('Bash', input, placeScopeOf('', ROOT)),
+      await fingerprintOf('Bash', input, placeScopeOf(APP, APP)),
+    ])
     // The audit line keeps the plain fingerprint, in either place.
     expect((await lines(w, APP))[0]?.fingerprint).toBe(await fingerprintOf('Bash', input))
     expect((await auditLines(w))[0]?.fingerprint).toBe(await fingerprintOf('Bash', input))
@@ -615,9 +618,9 @@ describe('the verdict cache and the chat key', () => {
     const offers = (state.written.at(-1) as CouncilSession).chatOffers
     const input = { command: 'sudo ls' }
     expect(offers.map(offer => offer.callKey)).toEqual([
-      await callKeyOf({ tool: 'Bash', input }),
-      await callKeyOf({ tool: 'Bash', input }, APP),
-      await callKeyOf({ tool: 'Bash', input }, LIB),
+      await callKeyOf({ tool: 'Bash', input }, placeScopeOf('', ROOT)),
+      await callKeyOf({ tool: 'Bash', input }, placeScopeOf(APP, APP)),
+      await callKeyOf({ tool: 'Bash', input }, placeScopeOf(LIB, LIB)),
     ])
     expect(new Set(offers.map(offer => offer.code)).size).toBe(3)
   })

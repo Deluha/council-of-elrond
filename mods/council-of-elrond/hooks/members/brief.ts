@@ -36,20 +36,28 @@ export function requestOf(brief: Brief, nonce: string): { system: string; prompt
 const isOver = (text: string, lines: number, chars: number): boolean => cut(text, lines, chars).omitted !== undefined
 
 /**
- * Whether the command text of a shell call was cut before the reviewer saw it.
- * A file's content or a diff that is cut is not this: its reviewer is told, and
- * judges what it sees. A command that is cut hides code that will run, so no
- * model's approve stands for it (the caller sends it to the person).
+ * Whether anything a shell call runs was cut before the reviewer saw it: the
+ * command text, a script file it runs, or a SQL file or inline SQL it executes.
+ * A file tool's own content or a diff that is cut is not this: its reviewer is
+ * told, and judges what it sees (a write is not a run). Code that will run and
+ * was cut hides what it does, so no model's approve stands for it (the caller
+ * sends it to the person).
  */
-export function isCommandCut(brief: Brief): boolean {
+export function isRunCut(brief: Brief): boolean {
   if (brief.member === 'legolas') {
     const range = brief.context.range
     return range !== undefined && isOver(range.call, LEGOLAS_LIMITS.rangeCallLines, LEGOLAS_LIMITS.rangeCallChars)
   }
   if (!SHELL_TOOLS.has(brief.context.tool)) return false
-  if (brief.member === 'gandalf') return isOver(brief.context.call, GANDALF_LIMITS.callLines, GANDALF_LIMITS.callChars)
+  if (brief.member === 'gandalf') {
+    return (
+      isOver(brief.context.call, GANDALF_LIMITS.callLines, GANDALF_LIMITS.callChars) ||
+      brief.context.scripts.some(script => isOver(script.content, GANDALF_LIMITS.scriptLines, GANDALF_LIMITS.scriptChars))
+    )
+  }
   if (brief.profile === 'database' && brief.context.diff !== undefined) return false
-  return isOver(brief.context.call, ARAGORN_LIMITS.callLines, ARAGORN_LIMITS.callChars)
+  if (isOver(brief.context.call, ARAGORN_LIMITS.callLines, ARAGORN_LIMITS.callChars)) return true
+  return brief.profile === 'database' && brief.context.sql.some(piece => isOver(piece.text, ARAGORN_LIMITS.sqlLines, ARAGORN_LIMITS.sqlChars))
 }
 
 /** Who a member (and profile) is, in refusals, questions and notices. */

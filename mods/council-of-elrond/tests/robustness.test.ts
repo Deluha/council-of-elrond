@@ -71,8 +71,8 @@ describe('one state snapshot per call (DESIGN §13.4 f)', () => {
   test('tokens spent by reviews that finished after the first read stop the next single review', { options: { tokenBudget: 1_500 } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], answer: KEEP_BLOCKED })
     const state = watchState(on)
-    // Reads 1 and 2 are the snapshot and the lockout check; read 3 is the budget's.
-    state.readAs = n => (n === 3 ? SPENT : undefined)
+    // Reads 1 and 2 are the snapshot and the lockout check, 3 and 4 the cache test and the rounds check (DESIGN §16); read 5 is the budget's.
+    state.readAs = n => (n === 5 ? SPENT : undefined)
     expect(denyOf(await $.tool.call(REVIEWED))).toContain('(keep blocked)')
     expect(w.modelRequests).toEqual([])
     expect(w.asked[0]?.question).toContain('token budget is spent')
@@ -81,7 +81,8 @@ describe('one state snapshot per call (DESIGN §13.4 f)', () => {
   test('and the full council', { options: { tokenBudget: 1_500 } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], answer: KEEP_BLOCKED, isClockMocked: true })
     const state = watchState(on)
-    state.readAs = n => (n === 3 ? SPENT : undefined)
+    // The same order: the snapshot, the lockout check, the cache test, the rounds check, then the budget.
+    state.readAs = n => (n === 5 ? SPENT : undefined)
     expect(denyOf(await $.tool.call(PUSH))).toContain('(keep blocked)')
     expect(w.modelRequests).toEqual([])
     expect(w.asked[0]?.question).toContain('token budget is spent')

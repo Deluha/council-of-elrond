@@ -319,6 +319,51 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   with no refspec still lists the current branch's commits, and now adds a line, in the preview and
   to every reviewer outside the preview, that the push sends more branches or tags than the commits
   shown.
+- **A protected path named as the value of a wrapper or runner option asks again.** (`op run
+  --env-file=.env`, `mise x -C .git`, `fakeroot -s .env`, `firejail --profile=.env`; an earlier change
+  in this release had stopped seeing it.) The same now holds for `uv run --env-file`, `npm exec
+  --userconfig`, `pnpm exec --dir`, `dd of=` and `NAME=path`. Wrapper and runner options are read as
+  the program reads them: clusters letter by letter (`timeout -vs KILL 5 …`, `env -iu NAME …`), long
+  options by unique prefix, global options before a runner's subcommand (`pnpm -r exec`, `npm -s
+  exec`, `yarn workspace web exec`, `uv -q run`). An option the tables do not list sends the call to
+  review. A wrapper or runner that changes the directory or root (`env -C`, `sudo -D`/`-R`, `chroot`,
+  `nsenter`, `mise -C`, `npm --prefix`, `pnpm --dir`, `uv --directory`) is also judged from `/`. A
+  `cd` inside a subshell, group or `$(…)` moves the folder for the later commands of that level. A
+  program word the shell builds at run time, by a glob, a bracket or a brace list as well as a
+  variable, is reviewed; a flat literal brace list is read as the command it expands to. A command
+  substitution inside unquoted `$(( … ))` is classified. `uv run -m` and `poetry run -v` no longer
+  cause a review.
+- **An approval holds in the folder it was given in.** A reviewer's approve, kept until your next
+  prompt, and a chat `council allow` (once or for the session) used to be matched on the call alone,
+  and the session's working directory follows a `cd` between commands, so an approved `rm -rf build`
+  in one folder ran unreviewed in another. Both are now matched on the call and the folder (and, under
+  a multi-repository root, the repositories it touches). The audit line's fingerprint is unchanged.
+- **The full council's approve is never remembered, and neither is any call with a `git` part.** A
+  repeated big operation (a push, a migration) convenes the council and runs your project's checks
+  again. A call that has a `git` part (gated or not) is never served from the approve cache and its
+  approve is not cached, since the checked-out branch and the index are not part of what the call
+  says: an approved `git reset --hard` is reviewed again on repeat. The same call without git, in the
+  same folder, is still reviewed once.
+- **The cache and the rounds are read just before they are used.** Two calls running at once now see
+  each other's approve and spent rounds, where each used the snapshot taken when its own hook began.
+- **A script or SQL file that was cut is not approved by a model alone.** A script the call runs, or
+  a `.sql` file or inline SQL it executes, longer than its reviewer reads is code that will run and
+  that no reviewer saw in full. Like a cut command, an approve of such a call comes to you ("The
+  command, or a script or SQL file it runs, was too long to review in full"), is refused where
+  nobody can be asked, is never remembered, and the audit line says why. A long file written with a
+  file tool is unchanged.
+- **The retry brake follows a long compound command and its force pushes.** A shell command with more
+  than eight gated parts is no longer reviewed by a model: only the first eight have keys of their
+  own, so a locked-out part placed ninth was neither locked nor out of rounds. It comes to you ("too
+  many separate gated parts to track; split it"), is refused where nobody can be asked, and is never
+  remembered. The per-kind failed-attempt counters stop growing at 200 kinds: a new kind then counts
+  on one shared counter that locks at five, and nothing counted is dropped. A force or delete push
+  keeps a retry count of its own, which a plain push of the same branch never clears (before, two
+  revised force pushes and one successful plain push gave the next force push fresh rounds).
+- **A push's preview says when it may be stale.** When a push follows another command of its call
+  (`git commit -am x && git push`, `git checkout main && git push`), the commits shown were read
+  before the earlier commands ran. The preview is kept and a line, in the preview and to every
+  reviewer outside it, says so.
 
 ### Fixed
 - **The status line is cleared when its surface leaves.** A label set for a phone or VS Code

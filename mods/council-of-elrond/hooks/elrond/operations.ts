@@ -4,6 +4,7 @@ import { FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
 import type { Call, Classification } from '../rules/classify.js'
 import { relativeTo, resolve } from '../rules/paths.js'
 import { isCurrentBranchRef, parsePush } from '../rules/push.js'
+import { splitShell } from '../rules/shell.js'
 import type { ShellPart } from '../rules/shell.js'
 
 /**
@@ -34,6 +35,12 @@ export type Operation = {
   partKeys: readonly string[]
   /** Each gated part's own verb key, distinct, for at most the first MAX_PART_KEYS parts. */
   partVerbKeys: readonly string[]
+  /**
+   * A shell call with more gated parts than MAX_PART_KEYS: the keys cover only the
+   * first ones, so a locked or out-of-rounds part could sit past them. No model
+   * reviews it; it goes to the person (present only when true).
+   */
+  hasTooManyParts?: boolean
 }
 
 /** Programs whose first word after the name is a subcommand that names the verb. */
@@ -121,16 +128,32 @@ const writtenFiles = (part: ShellPart, cwd: string, context: OperationContext): 
     .filter(redirect => redirect.op.includes('>') && !redirect.target.startsWith('&') && redirect.target !== '/dev/null')
     .map(redirect => normalPath(redirect.target, cwd, context))
 
+/** `git [global options] SUB rest`: the subcommand and what follows it, skipping the global options. */
+function gitCommand(args: readonly string[]): { sub: string; rest: readonly string[] } {
+  // `git -C dir push`: skip global options to find the subcommand.
+  let index = 0
+  while (index < args.length && (args[index] ?? '').startsWith('-')) index += ['-C', '-c'].includes(args[index] ?? '') ? 2 : 1
+  return { sub: args[index] ?? '', rest: args.slice(index + 1) }
+}
+
+/** What marks a force or delete push's own retry count: the part key plus this. */
+export const FORCE_SUFFIX = ' !force'
+
+/** Whether a shell part is a `git push` that forces or deletes (the shared push parser's reading, as the force-push check has it). */
+export function isForcePush(part: ShellPart): boolean {
+  if (programOf(part) !== 'git') return false
+  const { sub, rest } = gitCommand(part.coreWords.slice(1))
+  if (sub !== 'push') return false
+  const push = parsePush(rest)
+  return push.isForce || push.isDelete || push.refspecs.some(spec => spec.isPlus || spec.source === '')
+}
+
 /** One shell part's verb and targets. */
 export function partOperation(part: ShellPart, cwd: string, context: OperationContext): { verb: string; targets: string[] } {
   const program = programOf(part)
   const args = part.coreWords.slice(1)
   if (program === 'git') {
-    // `git -C dir push`: skip global options to find the subcommand.
-    let index = 0
-    while (index < args.length && (args[index] ?? '').startsWith('-')) index += ['-C', '-c'].includes(args[index] ?? '') ? 2 : 1
-    const sub = args[index] ?? ''
-    const rest = args.slice(index + 1)
+    const { sub, rest } = gitCommand(args)
     if (sub === 'push') return { verb: 'git push', targets: pushTargets(rest) }
     return { verb: `git ${sub}`.trim(), targets: positionals(rest) }
   }
@@ -172,11 +195,15 @@ export function operationOf(call: Call, classification: Classification, context:
     // The key can hold a target a command named verbatim (a push URL with a
     // token, a connection string); it is written to the audit log, so redact.
     // A part's own key is the key of a call made of that part alone.
+    const partKeys = lines.slice(0, MAX_PART_KEYS).map(line => cap(redact(`shell:${line}`)))
+    // A force or delete push also keeps a count of its own, which a plain push of the same target never clears.
+    const variants = parts.slice(0, MAX_PART_KEYS).flatMap((finding, index) => (isForcePush(finding.part as ShellPart) ? [`${partKeys[index] as string}${FORCE_SUFFIX}`] : []))
     return {
       key: cap(redact(`shell:${key.join(' ; ')}`)),
       verbKey: cap(`shell:${verbs.join(' ; ')}`),
-      partKeys: sortedUnique(lines.slice(0, MAX_PART_KEYS).map(line => cap(redact(`shell:${line}`)))),
+      partKeys: sortedUnique([...partKeys, ...variants]),
       partVerbKeys: sortedUnique(ops.slice(0, MAX_PART_KEYS).map(op => cap(`shell:${op.verb}`))),
+      ...(parts.length > MAX_PART_KEYS && { hasTooManyParts: true }),
     }
   }
   const field = FILE_PATH_FIELDS[call.tool]
@@ -204,6 +231,10 @@ export type OpsState = {
 }
 
 const MAX_OPS = 200
+/** Distinct verb keys the counters hold; a new verb past this counts on `OTHER_VERBS_KEY`. Nothing stored is evicted. */
+export const MAX_VERB_KEYS = 200
+/** The one shared key the verbs past MAX_VERB_KEYS count on. */
+export const OTHER_VERBS_KEY = 'shell:(other verbs)'
 
 const ZERO: OpState = { rounds: 0, wipes: 0 }
 
@@ -230,10 +261,13 @@ const verbKeysChecked = (operation: Operation): string[] => [...new Set([...oper
 /** The most failed attempts on any verb of the call, and the verb key that holds them. */
 function worstVerb(state: OpsState, operation: Operation): { verbKey: string; wipes: number } | undefined {
   let worst: { verbKey: string; wipes: number } | undefined
-  for (const verbKey of verbKeysChecked(operation)) {
-    const wipes = state.verbWipes[verbKey] ?? 0
+  const consider = (verbKey: string, wipes: number): void => {
     if (wipes >= VERB_WIPE_CAP && (worst === undefined || wipes > worst.wipes)) worst = { verbKey, wipes }
   }
+  for (const verbKey of verbKeysChecked(operation)) consider(verbKey, state.verbWipes[verbKey] ?? 0)
+  // A part's verb with no entry of its own may have been counted on the shared key (the counters were full then).
+  const other = state.verbWipes[OTHER_VERBS_KEY] ?? 0
+  if (operation.partVerbKeys.some(verbKey => state.verbWipes[verbKey] === undefined)) consider(OTHER_VERBS_KEY, other)
   return worst
 }
 
@@ -294,7 +328,14 @@ export function noteWipe<T extends OpsState>(state: T, operation: Operation): T 
     return withOp(current, key, { ...op, wipes: op.wipes + 1 })
   }, state)
   const verbWipes = { ...counted.verbWipes }
-  for (const verbKey of new Set(operation.partVerbKeys)) verbWipes[verbKey] = (verbWipes[verbKey] ?? 0) + 1
+  let known = Object.keys(verbWipes).filter(verbKey => verbKey !== OTHER_VERBS_KEY).length
+  for (const verbKey of new Set(operation.partVerbKeys)) {
+    // A verb already counted keeps its entry; a new one past the bound shares one, each verb once.
+    const isNew = verbWipes[verbKey] === undefined
+    const target = isNew && known >= MAX_VERB_KEYS ? OTHER_VERBS_KEY : verbKey
+    if (isNew && target === verbKey) known++
+    verbWipes[target] = (verbWipes[target] ?? 0) + 1
+  }
   return { ...counted, verbWipes }
 }
 
@@ -374,6 +415,18 @@ export const isWipeOutcome = (outcome: Outcome, policy: WipePolicy): boolean =>
 // ── Cache ───────────────────────────────────────────────────────────────────
 
 const MAX_CACHE = 100
+
+/**
+ * Whether a call has a `git` part, gated or not: the branch, the index and the
+ * history are not in a call's key, so the same words can mean another thing
+ * the next time. A command too long or too complex to split is read as text.
+ */
+export function hasGitPart(call: Call): boolean {
+  if (!SHELL_TOOLS.has(call.tool) || typeof call.input.command !== 'string') return false
+  const split = splitShell(call.input.command)
+  if (split.isTooLong || split.isCut) return /\bgit\b/.test(call.input.command)
+  return split.parts.some(part => programOf(part) === 'git')
+}
 
 /** Notes an approved fingerprint; the cache lives until the next prompt. */
 export const cacheApprove = (cache: readonly string[], fingerprint: string): string[] =>
