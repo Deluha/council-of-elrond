@@ -1,6 +1,6 @@
 import { globToRegExp, protectedMatcher, slashRegex, toolMatcher } from '../rules/globs.js'
 import type { ProtectedMatcher } from '../rules/globs.js'
-import { SHIPPED } from './defaults.js'
+import { SHIPPED, WRITE_PROTECTED_PATHS } from './defaults.js'
 import { splitByTrust } from './trust.js'
 import type { RulesFile, TrustCounts, TrustSummary } from './trust.js'
 import {
@@ -32,6 +32,12 @@ export const SCHEMA_VERSION = 1
 
 export type CompiledRule = Rule & {
   source: RuleSource
+  /**
+   * The rule is from a project rules file nobody has confirmed (or one with
+   * nothing to confirm): it can only add to what the shipped rules decide
+   * (`classify`), never replace it.
+   */
+  isUnconfirmed?: boolean
   matchesTool: (tool: string) => boolean
   commandRe?: RegExp
   pathRe?: RegExp
@@ -49,6 +55,8 @@ export type CompiledConfig = {
   /** Project rules first, in file order, then the enabled shipped rules. */
   rules: readonly CompiledRule[]
   protectedPaths: readonly ProtectedMatcher[]
+  /** Shipped and internal: a write asks, a plain read or a run does not (see `WRITE_PROTECTED_PATHS`). */
+  writeProtectedPaths: readonly ProtectedMatcher[]
   protectedBranches: readonly RegExp[]
   production: readonly RegExp[]
   bigOperations: readonly BigOperation[]
@@ -493,12 +501,17 @@ function compileBigOperation(entry: string): BigOperation {
 
 const branchToRegExp = (branch: string): RegExp => globToRegExp(branch)
 
-export function compileConfig(config: Config, projectRuleIds: ReadonlySet<string>): CompiledConfig {
+export function compileConfig(
+  config: Config,
+  projectRuleIds: ReadonlySet<string>,
+  unconfirmedRuleIds: ReadonlySet<string> = new Set(),
+): CompiledConfig {
   const rules = config.rules.map((rule): CompiledRule => {
     const matchers = rule.tools.map(toolMatcher)
     return {
       ...rule,
       source: projectRuleIds.has(rule.id) ? 'project' : 'shipped',
+      ...(projectRuleIds.has(rule.id) && unconfirmedRuleIds.has(rule.id) && { isUnconfirmed: true }),
       matchesTool: tool => matchers.some(matches => matches(tool)),
       ...(rule.command !== undefined && { commandRe: new RegExp(rule.command) }),
       ...(rule.path !== undefined && { pathRe: new RegExp(rule.path) }),
@@ -509,6 +522,7 @@ export function compileConfig(config: Config, projectRuleIds: ReadonlySet<string
     config,
     rules,
     protectedPaths: config.protectedPaths.map(protectedMatcher),
+    writeProtectedPaths: WRITE_PROTECTED_PATHS.map(protectedMatcher),
     protectedBranches: config.protectedBranches.map(branchToRegExp),
     production: config.productionPatterns.map(pattern => new RegExp(pattern, 'i')),
     bigOperations: config.bigOperations.map(compileBigOperation),
@@ -522,7 +536,10 @@ export function compileConfig(config: Config, projectRuleIds: ReadonlySet<string
  *
  * `isTrusted` false: only the settings that cannot loosen the gate apply
  * (`splitByTrust`); the rest are held back, as if absent, and reported in
- * `needsTrust`. The default is the file in full.
+ * `needsTrust`; and the file's rules only add to the shipped decision
+ * (`isUnconfirmed`). A file with nothing that waits loads the same either way,
+ * save for that mark: `isTrusted` false is also how a file nobody can confirm
+ * is loaded. The default is the file in full.
  */
 export function loadConfig(fileText: string | undefined, shipped: Config = SHIPPED, isTrusted = true): LoadedConfig {
   const shippedOnly = (errors: readonly string[]): LoadedConfig => ({
@@ -547,7 +564,7 @@ export function loadConfig(fileText: string | undefined, shipped: Config = SHIPP
   const projectIds = new Set((used.rules ?? []).map(rule => rule.id))
   const needsTrust = split.counts.total > 0 ? { needsTrust: { summary: split.summary, counts: split.counts, isIgnored: !isTrusted } } : {}
   try {
-    return { compiled: compileConfig(merged, projectIds), origin: 'shipped+project', errors: [], ...needsTrust }
+    return { compiled: compileConfig(merged, projectIds, isTrusted ? new Set() : projectIds), origin: 'shipped+project', errors: [], ...needsTrust }
   } catch (error) {
     return shippedOnly([`(file): ${error instanceof Error ? error.message : String(error)}`])
   }

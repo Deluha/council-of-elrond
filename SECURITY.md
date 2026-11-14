@@ -31,9 +31,10 @@ past the gate in a way the documentation says it should not is in scope.
 A `rules.json` that arrives with a cloned repository is trusted like code only after a person has
 confirmed that exact content (`/council trust`), kept as a hash in the plugin's own store. Until
 then its settings that loosen the gate or run code are ignored and its tightening ones apply, so it
-can never make the gate weaker than no file. The option `trustProjectRules=always` turns this off for
-a host whose owner controls which repositories it opens; it is the plugin's own configuration, never
-read from a rules file.
+can never make the gate weaker than no file: an unconfirmed file can add questions and blocks but
+cannot remove a review. The option `trustProjectRules=always` turns this off for a host
+whose owner controls which repositories it opens; it is the plugin's own configuration, never read
+from a rules file.
 
 ## Out of scope
 

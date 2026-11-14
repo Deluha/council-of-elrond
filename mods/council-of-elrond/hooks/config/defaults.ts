@@ -374,6 +374,14 @@ const REVIEW: readonly Rule[] = [
   },
 ]
 
+/**
+ * Paths whose writes ask but whose plain reads and runs do not: the mod's own
+ * installed code must not be rewritten unasked, yet reading a plugin's files
+ * and running its scripts is ordinary work. Internal: not a field of the rules
+ * file, so a project cannot add to it, lower it or list it (DESIGN §16).
+ */
+export const WRITE_PROTECTED_PATHS: readonly string[] = ['**/.claude/plugins/**']
+
 export const SHIPPED: Config = {
   schemaVersion: 1,
   rules: [...BLOCK, ...ASK, ...REVIEW],
@@ -392,7 +400,6 @@ export const SHIPPED: Config = {
     '**/.claude/council-of-elrond/**',
     '**/.claude/settings.json',
     '**/.claude/settings.local.json',
-    '**/.claude/plugins/**',
   ],
   protectedBranches: ['main', 'master', 'production', 'prod', 'release/*', 'trunk'],
   productionPatterns: [

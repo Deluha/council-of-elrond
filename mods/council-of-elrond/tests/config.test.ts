@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { SHIPPED } from '../hooks/config/defaults.js'
-import { loadConfig } from '../hooks/config/schema.js'
+import { SHIPPED, WRITE_PROTECTED_PATHS } from '../hooks/config/defaults.js'
+import { loadConfig, TOP_KEYS } from '../hooks/config/schema.js'
 import { resolveModel } from '../hooks/elrond/models.js'
 import { classify } from '../hooks/rules/classify.js'
 import { CONTEXT } from './fixtures.js'
@@ -21,7 +21,10 @@ describe('config', () => {
     const tiers = Object.fromEntries(SHIPPED.rules.map(rule => [rule.id, rule.tier]))
     expect(tiers['plugin-manage']).toBe('ask')
     for (const id of ['shell-dynamic-program', 'shell-runner-unresolved', 'script-stdin', 'script-inline']) expect(tiers[id], id).toBe('review')
-    expect(SHIPPED.protectedPaths).toContain('**/.claude/plugins/**')
+    // The plugin folders ask for a write only: a second, internal list, not a field of the rules file.
+    expect(SHIPPED.protectedPaths).not.toContain('**/.claude/plugins/**')
+    expect(WRITE_PROTECTED_PATHS).toEqual(['**/.claude/plugins/**'])
+    expect(TOP_KEYS).not.toContain('writeProtectedPaths')
     // The check a rule names is one the schema knows, so a project rule can name it too.
     const named = loadConfig(JSON.stringify({ schemaVersion: 1, rules: [{ id: 'mine', tier: 'review', tools: ['Bash'], check: 'interpreter-stdin', reason: 'r' }] }))
     expect(named.errors).toEqual([])

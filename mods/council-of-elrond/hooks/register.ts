@@ -45,7 +45,7 @@ import { isRelayed, noticeText, nobodyToAsk, relayContext, untrustedNotice } fro
 import { reportOutput } from './elrond/report.js'
 import { bandRows, debateRows, voiceNote } from './elrond/view.js'
 import type { Row } from './elrond/view.js'
-import { ruleJson, suggestRule } from './elrond/suggest.js'
+import { suggestQuestion, suggestRule } from './elrond/suggest.js'
 import type { Refusal } from './elrond/refusal.js'
 import { route } from './elrond/routing.js'
 import type { Enabled, Seat } from './elrond/routing.js'
@@ -65,8 +65,8 @@ import { addOmitted, cut, newNonce, parseVerdict, reasonsOf } from './members/sh
 import type { Omitted, Shown, Verdict } from './members/shared.js'
 import { redact } from './redact.js'
 import type { SecretPattern } from './redact.js'
-import { classify, FILE_PATH_FIELDS, forcePushPlaces, SHELL_TOOLS, targetsOf } from './rules/classify.js'
-import type { Call, Classification, ClassifyContext, Target } from './rules/classify.js'
+import { applyAdditions, classifyBase, FILE_PATH_FIELDS, forcePushPlaces, SHELL_TOOLS, targetsOf } from './rules/classify.js'
+import type { Call, Classification, ClassifyContext, Finding, Target } from './rules/classify.js'
 import { isInside, relativeTo, resolve } from './rules/paths.js'
 import { auditDirsOf, candidateChildren, checksOf, combineClassifications, intersection, scopesTouched, scopeTagOf, unionById, writeDirOf } from './rules/scopes.js'
 import {
@@ -380,8 +380,9 @@ async function loadRules($: EngineInterface, dir: string, key: string): Promise<
   }
   if (fileText !== undefined && loaded.errors.length === 0) {
     const file = await fileTrustOf($, path, fileText, loaded)
-    // Held back: the same text again, with only what cannot loosen the gate in force.
-    if (file.state === 'untrusted') loaded = loadConfig(fileText, SHIPPED, false)
+    // Held back: the same text again, with only what cannot loosen the gate in force. A file with nothing to confirm is read the same way, so
+    // its rules only add to the shipped decision: nobody can confirm it, and a rule that replaced the decision would take a review away.
+    if (file.state === 'untrusted' || (file.state === 'nothing' && settings.trustProjectRules !== 'always')) loaded = loadConfig(fileText, SHIPPED, false)
     loaded = { ...loaded, file }
     if (file.state === 'untrusted' && loaded.needsTrust !== undefined) await noticeUntrusted($, file, loaded.needsTrust.counts)
   }
@@ -471,8 +472,13 @@ async function classifyIn(
   where: ClassifyContext,
 ): Promise<{ classification: Classification; ctx: CallContext }> {
   const scopes = await scopesOf($, ctx, targetsOf(call, where))
-  const { classification, index } = combineClassifications(scopes.map(scope => classify(call, scope.loaded.compiled, { ...where, root: scope.dir })))
-  return { classification, ctx: callContextOf(ctx, scopes, index) }
+  const each = scopes.map(scope => classifyBase(call, scope.loaded.compiled, { ...where, root: scope.dir }))
+  const combined = combineClassifications(each.map(one => one.base))
+  // The rules of unconfirmed files go on top of the combined shipped decision, so one scope's addition cannot take another's review away.
+  const classification = applyAdditions(combined.classification, each.flatMap(one => one.unconfirmed))
+  // The scope whose unconfirmed rule decided, when one did; else the strictest scope's.
+  const deciding = classification.decided === undefined ? -1 : each.findIndex(one => one.unconfirmed.includes(classification.decided as Finding))
+  return { classification, ctx: callContextOf(ctx, scopes, deciding >= 0 ? deciding : combined.index) }
 }
 
 /** The scope of the session's working directory: its repository, else the root's. For `/council` and the start suggestion. */
@@ -1119,7 +1125,7 @@ async function offerRule(
   if (suggested.kind === 'none') return undefined
   const { rule, key } = suggested.suggestion
   if ((await $.session.surfaces()).length === 0) return undefined
-  const question = text('ask.suggestRule', { path: OVERRIDES_PATH, json: ruleJson(rule) })
+  const question = suggestQuestion(suggested.suggestion, OVERRIDES_PATH)
   const answer = await $.ui
     .ask(question, { options: [text('ask.suggestAdd'), text('ask.suggestDecline')], header: text('ask.header') })
     .catch(() => undefined)
@@ -1822,7 +1828,8 @@ export const register: Register = (on, options) => {
     const cacheKey = await fingerprintOf(call.tool, call.input, placeScope)
     const operation = operationOf(call, classification, where)
     // The branch, the index and the history are not in the key: a call with a git part is never served from the cache, nor cached. Nor is one no reviewer decides (too many parts).
-    const isCacheable = !hasGitPart(call) && operation.hasTooManyParts !== true
+    // Nor one an unconfirmed ask rule puts to the person after its review: that answer is the person's, call by call.
+    const isCacheable = !hasGitPart(call) && operation.hasTooManyParts !== true && classification.alsoAsk === undefined
     const decided = classification.decided
     const shadow = isShadow(state, settings.shadowMode)
     // Built on first use: a block, lockout or cached call never shows it, and a write can be megabytes.
@@ -1880,6 +1887,8 @@ export const register: Register = (on, options) => {
         opKey: operation.key,
         tier: classification.tier,
         ruleId: decided?.ruleId ?? null,
+        // Rules of an unconfirmed project file that matched but only added: the shipped decision's id stays in `ruleId`.
+        ...(classification.added.length > 0 && { alsoRuleIds: [...new Set(classification.added.map(finding => finding.ruleId))] }),
         member,
         profile,
         model,
@@ -1947,12 +1956,14 @@ export const register: Register = (on, options) => {
       why: StringKey,
       opinions: readonly MemberOpinion[],
       secrets: readonly GollumFinding[] = [],
+      // The rule the question names when it is not the deciding one: an unconfirmed project rule that asks after the review.
+      asking: Finding | undefined = decided,
     ): Promise<'allowed' | ToolCallResult> => {
       const question = questionText(
         {
           call: shownCall(),
-          ruleReason: decided?.reason ?? '',
-          ...(decided?.source === 'project' && { isProjectReason: true }),
+          ruleReason: asking?.reason ?? '',
+          ...(asking?.source === 'project' && { isProjectReason: true }),
           why,
           opinions,
           ...(preview !== undefined && { preview: preview.text }),
@@ -2056,8 +2067,8 @@ export const register: Register = (on, options) => {
       )
     }
 
-    const askUser = async (why: StringKey, opinions: readonly MemberOpinion[]): Promise<ToolCallResult> => {
-      const answer = await putToUser(why, opinions)
+    const askUser = async (why: StringKey, opinions: readonly MemberOpinion[], asking: Finding | undefined = decided): Promise<ToolCallResult> => {
+      const answer = await putToUser(why, opinions, [], asking)
       return answer === 'allowed' ? allowOnce() : answer
     }
 
@@ -2066,6 +2077,20 @@ export const register: Register = (on, options) => {
       isShadowed = true
       return finish(await proceed())
     }
+
+    /**
+     * A call the shipped rules review that an unconfirmed project `ask` rule also matched (`classification.alsoAsk`): once the review is
+     * done and did not refuse it, the person is asked, with the project's reason as the project's text. The answer is never cached, and
+     * where nobody can be asked it ends refused, as for an approve of a cut command. A person already asked about a secret is not asked again.
+     */
+    let projectAsk: Finding | undefined
+    const askProject = (opinions: readonly MemberOpinion[]): Promise<ToolCallResult> => {
+      if (projectAsk === undefined) return finish({ deny: refusalText({ who: 'who.council', verdict: 'error', reason: text('reason.internal'), alternative: text('alternative.ask') }) })
+      reasonText = projectReasonText(projectAsk.reason)
+      return askUser('escalate.askTier', opinions, projectAsk)
+    }
+    /** Shadow mode in the review phase: verdicts are only logged, but an ask rule still enforces. */
+    const passShadowed = (): Promise<ToolCallResult> => (projectAsk !== undefined ? askProject([]) : passInShadow())
 
     // 1. Bypass: every gated call passes, logged.
     if (state.bypass) {
@@ -2125,6 +2150,8 @@ export const register: Register = (on, options) => {
       return askUser('escalate.askTier', [])
     }
 
+    projectAsk = classification.tier === 'review' && !isAllowedByUser ? classification.alsoAsk : undefined
+
     // Review. An identical call approved this prompt, in this folder, is not reviewed again. Read afresh: a call in flight beside this one may have been approved since the snapshot.
     const cacheState = sessionOf(await read($, session))
     if (isCacheable && cacheState.cache.includes(cacheKey)) {
@@ -2150,9 +2177,9 @@ export const register: Register = (on, options) => {
       member = 'council'
       profile = null
       const seats = councilSeats(call, classification, enabledMembers(), { ranges: settings.galadrielEnabled })
-      if (seats.length === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', [])
+      if (seats.length === 0) return shadow ? passShadowed() : askUser('escalate.memberOff', [])
       // A fresh read, so reviews running in parallel are counted when this one decides.
-      if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
+      if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passShadowed() : askUser('escalate.budget', [])
       const choice = modelChoice('council', ctx, state.models)
       model = choice.model
       const range = rangeOf(classification)
@@ -2268,17 +2295,18 @@ export const register: Register = (on, options) => {
         return isVerdict && !shadow && thisPrompt(value) ? noteRound(counted, operation, combined.verdict === 'approve') : counted
       })
 
-      if (combined.reviewed === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', combined.opinions)
-      if (combined.isFailureOnly) return shadow ? passInShadow() : askUser('escalate.councilFailed', combined.opinions)
+      if (combined.reviewed === 0) return shadow ? passShadowed() : askUser('escalate.memberOff', combined.opinions)
+      if (combined.isFailureOnly) return shadow ? passShadowed() : askUser('escalate.councilFailed', combined.opinions)
       if (combined.verdict === 'approve' && isCommandUnseen) {
         reasonText = text('escalate.commandCut', {}, 'plain')
-        return shadow ? passInShadow() : askUser('escalate.commandCut', combined.opinions)
+        return shadow ? passShadowed() : askUser('escalate.commandCut', combined.opinions)
       }
       // Not cached: a big operation convenes the council, and runs the project's checks, every time.
+      if (combined.verdict === 'approve' && projectAsk !== undefined) return askProject(combined.opinions)
       if (combined.verdict === 'approve') return finish(await proceed())
       if (shadow) {
         $.ui.log(text('notice.shadowVerdict', { who: text('who.fullCouncil'), verdict: combined.verdict, tool: call.tool }), { to: 'debug' })
-        return passInShadow()
+        return passShadowed()
       }
       return refuse({ who: 'who.fullCouncil', verdict: combined.verdict, reason: combined.reason, alternative: combined.alternative }, true)
     }
@@ -2301,8 +2329,8 @@ export const register: Register = (on, options) => {
       const big = bigOperationOf(classification, compiled, branch !== undefined ? { currentBranch: branch } : {})
       if (big !== undefined) return holdCouncil(big)
     }
-    if (seated === undefined || seated.kind === 'none') return shadow ? passInShadow() : askUser('escalate.memberOff', [])
-    if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
+    if (seated === undefined || seated.kind === 'none') return shadow ? passShadowed() : askUser('escalate.memberOff', [])
+    if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passShadowed() : askUser('escalate.budget', [])
 
     // 10. Review, and act on the verdict.
     const brief = await briefOf($, seated, call, classification, cwd, realPath, state, preview, previewNotes, ctx)
@@ -2341,7 +2369,7 @@ export const register: Register = (on, options) => {
     if (!verdict.ok) {
       verdictText = 'failed'
       reasonText = verdict.problem
-      return shadow ? passInShadow() : askUser('escalate.failed', [{ who, problem: verdict.problem }])
+      return shadow ? passShadowed() : askUser('escalate.failed', [{ who, problem: verdict.problem }])
     }
 
     verdictText = verdict.verdict.verdict
@@ -2349,8 +2377,9 @@ export const register: Register = (on, options) => {
     if (verdict.verdict.verdict === 'approve' && isRunCut(brief)) {
       // The reviewer saw only the ends of the command: its approve does not stand, and is not cached.
       reasonText = text('escalate.commandCut', {}, 'plain')
-      return shadow ? passInShadow() : askUser('escalate.commandCut', [{ who, verdict: 'approve', reason: verdict.verdict.reason }])
+      return shadow ? passShadowed() : askUser('escalate.commandCut', [{ who, verdict: 'approve', reason: verdict.verdict.reason }])
     }
+    if (verdict.verdict.verdict === 'approve' && projectAsk !== undefined) return askProject([{ who, verdict: 'approve', reason: verdict.verdict.reason }])
     if (verdict.verdict.verdict === 'approve') {
       if (isCacheable) {
         await update($, session, value => {
@@ -2363,7 +2392,7 @@ export const register: Register = (on, options) => {
     }
     if (shadow) {
       $.ui.log(text('notice.shadowVerdict', { who: text(who), verdict: verdict.verdict.verdict, tool: call.tool }), { to: 'debug' })
-      return passInShadow()
+      return passShadowed()
     }
     return refuse({ who, verdict: verdict.verdict.verdict, reason: verdict.verdict.reason, alternative: verdict.verdict.safer_alternative }, true)
   }).catch(($, e, next) =>

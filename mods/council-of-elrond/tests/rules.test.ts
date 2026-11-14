@@ -1011,7 +1011,7 @@ describe('the mod protects itself', () => {
     ])
   })
 
-  test('the user plugin folders and user settings are protected paths', () => {
+  test('writes to the user plugin folders, and every mention of the user settings, ask: protected paths', () => {
     const protectedAsk = (result: ReturnType<typeof bash>, label: string) => {
       expect(result.tier, label).toBe('ask')
       expect(result.isProtected, label).toBe(true)
@@ -1040,6 +1040,108 @@ describe('the mod protects itself', () => {
     ]) {
       protectedAsk(bash(command), command)
     }
+  })
+
+  test('a plain read of a plugin folder, and a run of what it holds, are not asked about: the ordinary rules decide', () => {
+    const P = '/home/me/.claude/plugins'
+    expectCases([
+      ['cat ~/.claude/plugins/x/README.md', 'allow'],
+      ['ls ~/.claude/plugins/', 'allow'],
+      [`grep -r foo ${P}/marketplaces`, 'allow'],
+      [`find ${P} -name '*.md'`, 'allow'],
+      [`head -n 5 ${P}/x/a.json | jq .`, 'allow'],
+      [`cd ${P}/x && ls`, 'allow'],
+      [`cd ${P}/x && cat README.md`, 'allow'],
+      [`timeout 5 cat ${P}/x/a`, 'allow'],
+      [`env FOO=1 ls ${P}`, 'allow'],
+      [`python3 ${P}/cache/x/skills/y/scripts/run.py`, 'review', 'script-file'],
+      [`bash ${P}/cache/x/run.sh`, 'review', 'script-shell'],
+      [`${P}/cache/x/bin/tool --help`, 'review', 'script-path'],
+      [`cd ${P}/x && python3 run.py`, 'review', 'script-file'],
+    ])
+    expect(ruleOf(`python3 ${P}/cache/x/skills/y/scripts/run.py`)).toBe('script-file')
+    expect(ruleOf(`bash ${P}/cache/x/run.sh`)).toBe('script-shell')
+    expect(ruleOf(`${P}/cache/x/bin/tool --help`)).toBe('script-path')
+    for (const command of [`cat ${P}/x/a`, `python3 ${P}/x/run.py`, `${P}/x/tool`]) expect(bash(command).isProtected, command).toBe(false)
+  })
+
+  test('anything else naming a plugin folder asks: writes, unknown programs, redirects, options that write, code of its own', () => {
+    const P = '/home/me/.claude/plugins'
+    const asks = [
+      `cp x ${P}/a/b.ts`,
+      `mv ${P}/a ${P}/b`,
+      `echo x > ${P}/a/b.ts`,
+      `cat a > ${P}/a/b`,
+      `cat a >> ${P}/a/b`,
+      `cat ${P}/a > ${P}/b`,
+      // The same word read and written: the redirect target decides, not the operand.
+      `cat ${P}/a > ${P}/a`,
+      `sort ${P}/a >> ${P}/a`,
+      `time -o ${P}/a cat ${P}/a`,
+      `FOO=${P}/a cat ${P}/a`,
+      `sed -i s/a/b/ ${P}/a/b.ts`,
+      `sed -n p ${P}/a/b.ts`,
+      `find ${P} -delete`,
+      `find ${P} -exec cat {} +`,
+      `find ${P} -fprint ${P}/out`,
+      `someunknowntool ${P}/a`,
+      `timeout --weird 5 cat ${P}/a`,
+      `touch ${P}/a`,
+      `chmod +x ${P}/a`,
+      `ln -s x ${P}/a`,
+      `install -m 644 x ${P}/a`,
+      `rsync -a x ${P}/a`,
+      `tar -xf x.tar -C ${P}/a`,
+      `git -C ${P}/a log`,
+      `tee ${P}/a`,
+      `sort -o ${P}/a b`,
+      `sort --output=${P}/a b`,
+      `sort -T ${P}/a b`,
+      `uniq in ${P}/out`,
+      `tree -o ${P}/out .`,
+      `yq -i .a=1 ${P}/a.yml`,
+      `yq --inplace .a=1 ${P}/a.yml`,
+      `jq --in-place . ${P}/a.json`,
+      `X=${P}/a cat b`,
+      `time -o ${P}/log cat b`,
+      `env -C ${P}/a cat b`,
+      `cat ${P}/a ${P}/b > out && cp x ${P}/c`,
+      `cd ${P}/x && cp a b`,
+      `cd ${P}/x && touch a`,
+      `cd ${P}/x && make`,
+      `python3 -c "open('${P}/a','w')"`,
+      `python3 -W ${P}/x run.py`,
+      `bash -c 'cp x ${P}/a'`,
+      `cat < ${P}/a > out && rm -r ${P}/a`,
+    ]
+    for (const command of asks) {
+      const result = bash(command)
+      expect(['ask', 'block'], command).toContain(result.tier)
+      if (result.tier === 'ask') expect(result.findings.some(finding => finding.ruleId === 'protected-path'), command).toBe(true)
+    }
+    // A file tool's write asks, whatever the path is spelled like; a read tool is not looked at.
+    for (const tool of ['Write', 'Edit', 'NotebookEdit']) {
+      const field = tool === 'NotebookEdit' ? 'notebook_path' : 'file_path'
+      const result = classify({ tool, input: { [field]: `${P}/cache/x/a.ts`, content: 'x' } }, SHIPPED_COMPILED, CONTEXT)
+      expect(result.tier, tool).toBe('ask')
+      expect(result.decided?.ruleId, tool).toBe('protected-path')
+    }
+    expect(classify({ tool: 'Read', input: { file_path: `${P}/cache/x/a.ts` } }, SHIPPED_COMPILED, CONTEXT).tier).toBe('allow')
+  })
+
+  test('a protected path proper is unchanged: any shell mention asks, a reader too', () => {
+    for (const command of ['cat .env', 'ls .git/hooks', 'grep -r x .github/workflows', 'cat ~/.claude/settings.json', 'cat .claude/council-of-elrond/rules.json']) {
+      expect(bash(command).tier, command).toBe('ask')
+    }
+  })
+
+  test('the list is internal: not a field of a rules file, and a project cannot add to it or empty it', () => {
+    for (const text of [{ schemaVersion: 1, writeProtectedPaths: ['x/**'] }, { schemaVersion: 1, protectedPaths: [] }]) {
+      const loaded = loadConfig(JSON.stringify(text))
+      const plugin = classify({ tool: 'Write', input: { file_path: '/home/me/.claude/plugins/x/a', content: 'x' } }, loaded.compiled, CONTEXT)
+      expect(plugin.tier).toBe('ask')
+    }
+    expect(loadConfig(JSON.stringify({ schemaVersion: 1, writeProtectedPaths: ['x/**'] })).errors.join(' ')).toContain('writeProtectedPaths: unknown field')
   })
 
   test('other files under the user folder are not protected', () => {

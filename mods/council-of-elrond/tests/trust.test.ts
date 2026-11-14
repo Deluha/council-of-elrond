@@ -5,18 +5,22 @@ import { GIMLI_COMMAND_KEYS, GIMLI_KEYS, GOLLUM_KEYS, GOLLUM_PATTERN_KEYS, loadC
 import { cleanText, codeOf, FIELD_TRUST, hashOf, inspectValue, isCode, isTrusted, matchCode, parseRecord, recordValue, splitByTrust, TIER_TRUST, TRUST_CAP, trustMode, withoutTrusted, withTrusted } from '../hooks/config/trust.js'
 import type { Overrides } from '../hooks/config/types.js'
 import { TIERS } from '../hooks/config/types.js'
+import { bigOperationOf } from '../hooks/elrond/council.js'
+import { route } from '../hooks/elrond/routing.js'
+import type { Enabled } from '../hooks/elrond/routing.js'
 import { countsText, needsPerson, parseCouncil, trustLines, trustListing, trustOutput } from '../hooks/elrond/commands.js'
 import { questionText } from '../hooks/elrond/escalation.js'
 import { projectReasonText, refusalText } from '../hooks/elrond/refusal.js'
 import { gandalfPrompt } from '../hooks/members/gandalf.js'
 import { legolasPrompt } from '../hooks/members/legolas.js'
 import { aragornGitPrompt } from '../hooks/members/aragorn.js'
+import { planPreview } from '../hooks/members/galadriel.js'
 import { patternsWith, scanText } from '../hooks/members/gollum.js'
 import { reasonsOf } from '../hooks/members/shared.js'
-import { classify } from '../hooks/rules/classify.js'
+import { applyAdditions, classify, classifyBase } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
 import { text } from '../hooks/strings.js'
-import { ALLOW_ONCE, APPROVE, auditLines, council, CONTEXT, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, ROOT, settled, SHIPPED_COMPILED, watchState, world } from './fixtures.js'
+import { ALLOW_ONCE, APPROVE, auditLines, council, CONTEXT, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, REVISE, ROOT, settled, SHIPPED_COMPILED, watchState, world } from './fixtures.js'
 import type { World } from './fixtures.js'
 import type { CouncilSession } from '../types'
 
@@ -102,7 +106,7 @@ describe('the split: every field of the schema is classified', () => {
       'gollum.allowlist': 'needs-trust',
       'gimli.commands': 'needs-trust',
     })
-    expect(TIER_TRUST).toEqual({ allow: 'needs-trust', review: 'needs-trust', ask: 'always', block: 'always' })
+    expect(TIER_TRUST).toEqual({ allow: 'needs-trust', review: 'always', ask: 'always', block: 'always' })
   })
 
   test('FULL holds every field, so the test below covers each of them', () => {
@@ -132,14 +136,14 @@ describe('the split: every field of the schema is classified', () => {
     }
   })
 
-  test('rules by tier: allow and review wait, ask and block apply; the order of the rest is kept', () => {
+  test('rules by tier: allow waits, review, ask and block apply (an unconfirmed file only adds); the order of the rest is kept', () => {
     const split = splitByTrust(FULL)
-    expect(split.always.rules?.map(rule => rule.id)).toEqual(['ask-terraform', 'no-destroy'])
-    expect(split.needsTrust.rules?.map(rule => rule.id)).toEqual(['allow-clean', 'review-ls'])
-    expect(split.counts).toEqual({ rules: 2, disabled: 1, allowlist: 1, models: 1, checks: 1, patterns: 1, total: 7 })
+    expect(split.always.rules?.map(rule => rule.id)).toEqual(['review-ls', 'ask-terraform', 'no-destroy'])
+    expect(split.needsTrust.rules?.map(rule => rule.id)).toEqual(['allow-clean'])
+    expect(split.counts).toEqual({ rules: 1, disabled: 1, allowlist: 1, models: 1, checks: 1, patterns: 1, total: 6 })
     expect(split.always).toEqual({
       schemaVersion: 1,
-      rules: FULL.rules?.filter(rule => rule.tier === 'ask' || rule.tier === 'block'),
+      rules: FULL.rules?.filter(rule => rule.tier !== 'allow'),
       protectedPaths: ['infra/**'],
       protectedBranches: ['staging'],
       productionPatterns: ['prod-db'],
@@ -170,8 +174,12 @@ describe('loadConfig with the file held back', () => {
     const loaded = loadConfig(text, SHIPPED, false)
     const config = loaded.compiled.config
     expect(loaded.errors).toEqual([])
-    expect(loaded.needsTrust).toMatchObject({ isIgnored: true, counts: { total: 7 } })
-    expect(loaded.compiled.rules.filter(rule => rule.source === 'project').map(rule => rule.id)).toEqual(['ask-terraform', 'no-destroy'])
+    expect(loaded.needsTrust).toMatchObject({ isIgnored: true, counts: { total: 6 } })
+    expect(loaded.compiled.rules.filter(rule => rule.source === 'project').map(rule => rule.id)).toEqual(['review-ls', 'ask-terraform', 'no-destroy'])
+    // Every project rule that applies is marked: it only adds to the shipped decision.
+    expect(loaded.compiled.rules.filter(rule => rule.source === 'project').every(rule => rule.isUnconfirmed === true)).toBe(true)
+    expect(loaded.compiled.rules.filter(rule => rule.source === 'shipped').some(rule => rule.isUnconfirmed === true)).toBe(false)
+    expect(loadConfig(text).compiled.rules.some(rule => rule.isUnconfirmed === true)).toBe(false)
     expect(config.disableRules).toEqual([])
     expect(config.rules.some(rule => rule.id === 'shell-delete')).toBe(true)
     expect(config.models).toEqual(SHIPPED.models)
@@ -208,12 +216,17 @@ describe('loadConfig with the file held back', () => {
     expect(tierOf('sudo ls', trusted)).toBe('allow')
   })
 
-  test('a block rule or an ask rule of the file applies while it is held back', () => {
+  test('while it is held back a block rule blocks and an ask rule adds a question after the review; neither replaces the shipped decision', () => {
     const held = loadConfig(text, SHIPPED, false)
     expect(tierOf('terraform destroy', held)).toBe('block')
-    expect(tierOf('terraform apply', held)).toBe('ask')
-    // The shipped rules already review it; the file's ask rule is the stricter.
+    // The shipped rules already review `terraform apply`: they stand, and the file's ask rule is handed back, to be put after the review.
+    const apply = classify(bashCall('terraform apply'), held.compiled, CONTEXT)
+    expect(apply.tier).toBe('review')
+    expect(apply.decided).toMatchObject({ ruleId: 'infrastructure', source: 'shipped' })
+    expect(apply.alsoAsk).toMatchObject({ ruleId: 'ask-terraform', source: 'project' })
     expect(tierOf('terraform apply', loadConfig(undefined))).toBe('review')
+    // Trusted, the same file decides first, as it always did.
+    expect(classify(bashCall('terraform apply'), loadConfig(text).compiled, CONTEXT)).toMatchObject({ tier: 'ask', decided: { ruleId: 'ask-terraform' } })
   })
 
   test('an invalid file is ignored whole, trusted or not', () => {
@@ -317,15 +330,15 @@ describe('what the listing shows: every held-back setting, every field, whole; o
   const CANNOT = 'This file cannot be confirmed from the session because'
 
   /** A rule, a pattern and a check with every field the schema allows on each of them. */
-  const EVERY_RULE = { id: 'review-all', tier: 'review', tools: ['Bash', 'Edit'], command: '^cmd$', path: '^p$', input: '^i$', check: 'privileged', member: 'aragorn', profile: 'git', reason: 'Why.' } as const
+  const EVERY_RULE = { id: 'allow-all', tier: 'allow', tools: ['Bash', 'Edit'], command: '^cmd$', path: '^p$', input: '^i$', check: 'privileged', member: 'aragorn', profile: 'git', reason: 'Why.' } as const
   const EVERY_PATTERN = { id: 'acme', level: 'low', regex: 'ACME-[0-9]{8}', label: 'Acme key', kind: 'password' } as const
   const EVERY_CHECK = { name: 'tests', argv: ['npm', 'run test', '--flag'], timeoutMs: 90_000 } as const
 
   test('every rule, disabled rule, model, check and pattern, each field of it, with the counts and the code', () => {
     const { lines } = trustOutput([view(FULL)], [])
     const shown = lines.join('\n')
-    expect(lines[0]).toBe('/work: 2 allow or review rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s) are ignored until you confirm this content.')
-    for (const line of ['id: allow-clean', 'tier: allow', 'tools[0]: "Bash"', 'command: ^rm\\s+-rf\\s+build$', 'reason: The build folder is disposable.', 'id: review-ls', 'tier: review', 'command: ^ls\\b']) {
+    expect(lines[0]).toBe('/work: 1 allow or review rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s) are ignored until you confirm this content.')
+    for (const line of ['id: allow-clean', 'tier: allow', 'tools[0]: "Bash"', 'command: ^rm\\s+-rf\\s+build$', 'reason: The build folder is disposable.']) {
       expect(lines, line).toContain(`${GUTTER}${line}`)
     }
     expect(lines).toContain(`${GUTTER}shell-delete`)
@@ -338,6 +351,7 @@ describe('what the listing shows: every held-back setting, every field, whole; o
     expect(lines.at(-1)).toBe('Its code is abcdef01. To confirm exactly this content, type: /council trust abcdef01. Any change to the file makes it untrusted again.')
     // What the file also holds that applies at once is not listed: nothing is asked about it.
     expect(shown).not.toContain('no-destroy')
+    expect(shown).not.toContain('review-ls')
     expect(shown).not.toContain('infra/**')
   })
 
@@ -594,17 +608,19 @@ describe('confirm mode through the pipeline (the default)', () => {
     expect(await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })).toEqual({ result: 'ran' })
   })
 
-  test('the tightening part of the same file applies: a block rule, an ask rule, a protected path', async ($, on) => {
-    const w = world(on, { replies: [APPROVE] })
-    w.files.set(RULES, fileOf())
+  test('the tightening part of the same file applies: a block rule, an ask rule that adds to the review, a protected path', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: ALLOW_ONCE })
+    // Without the file's check, which is not run while the file is unconfirmed and so would refuse the council.
+    w.files.set(RULES, fileOf({ ...FULL, gimli: { commands: [] } }))
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'terraform destroy' }))).toContain('Never destroy from here.')
     expect(w.asked).toEqual([])
+    // Reviewed first (the council, here: a big operation of the file), and only then put to the person.
     await $.tool.call({ tool: 'Bash', command: 'terraform apply' })
+    expect(w.modelRequests.length).toBeGreaterThan(0)
     expect(w.asked).toHaveLength(1)
     expect(w.asked[0]?.question).toContain("Why it was gated (the project's own words):")
     await $.tool.call({ tool: 'Write', file_path: `${ROOT}/infra/main.tf`, content: 'x' })
     expect(w.asked).toHaveLength(2)
-    expect(w.ran).toEqual([])
   })
 
   test('the notice, once per session: a line and a toast with counts, no word of the file', async ($, on) => {
@@ -614,7 +630,7 @@ describe('confirm mode through the pipeline (the default)', () => {
     await $.tool.call(RM)
     const notices = w.logs.filter(line => line.includes('ignored until you confirm'))
     expect(notices).toHaveLength(1)
-    expect(notices[0]).toContain('2 allow or review rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s)')
+    expect(notices[0]).toContain('1 allow or review rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s)')
     expect(notices[0]).toContain('/council trust')
     expect(notices[0]).not.toMatch(/allow-clean|fable|acme|npm/)
     expect(w.toasts.filter(toast => toast.includes('not confirmed'))).toHaveLength(1)
@@ -629,7 +645,7 @@ describe('confirm mode through the pipeline (the default)', () => {
     await $.tool.call(RM)
     const rows = w.appended.map(row => row.content.map(part => part.text ?? '').join('')).filter(row => row.includes('settings that need the user to confirm'))
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toContain('2 allow or review rule(s)')
+    expect(rows[0]).toContain('1 allow or review rule(s)')
     expect(rows[0]).toContain('/council trust')
     expect(rows[0]).not.toMatch(/allow-clean|review-ls|fable|acme|npm|shell-delete/)
   })
@@ -647,7 +663,7 @@ describe('confirm mode through the pipeline (the default)', () => {
     w.files.set(RULES, fileOf())
     for (const sub of ['rules', 'status']) {
       const shown = await say($, w, sub)
-      expect(shown).toContain('Project rules file: not trusted. Ignored until you run /council trust: 2 allow or review rule(s)')
+      expect(shown).toContain('Project rules file: not trusted. Ignored until you run /council trust: 1 allow or review rule(s)')
       expect(shown).toContain('No allow rule or allowlist entry is offered for it meanwhile')
     }
   })
@@ -1241,5 +1257,237 @@ describe('the names a rules file gives are short and plain (DESIGN §16)', () =>
     expect(validateOverrides(rule('')).errors.join(' ')).toContain('rules[0].id: required string')
     expect(validateOverrides(rule('shell-delete')).errors.join(' ')).toContain('is a shipped rule')
     expect(validateOverrides({ schemaVersion: 1, rules: [rule('a').rules[0], rule('a').rules[0]] }).errors.join(' ')).toContain('"a" is used twice')
+  })
+})
+
+describe('an unconfirmed rules file only adds to the shipped decision (DESIGN §16)', () => {
+  // An allow rule keeps the file waiting for confirmation (it can be confirmed); without one the file has nothing to confirm and is read the same way.
+  const WAITING = { id: 'allow-clean', tier: 'allow', tools: ['Bash'], command: '^rm\\s+-rf\\s+build$', reason: 'The build folder is disposable.' } as const
+  const ASK_ALL = { id: 'ask-all', tier: 'ask', tools: ['*'], reason: 'Everything comes to you.' } as const
+  const REVIEW_ALL = { id: 'review-all', tier: 'review', tools: ['*'], reason: 'Everything is looked at.' } as const
+  const BLOCK_ALL = { id: 'block-all', tier: 'block', tools: ['*'], reason: 'Nothing runs.' } as const
+  const fileWith = (...rules: Overrides['rules'] & object): string => fileOf({ schemaVersion: 1, rules: [WAITING, ...rules] })
+  const held = (...rules: Overrides['rules'] & object) => loadConfig(fileWith(...rules), SHIPPED, false)
+  const decidedOf = (command: string, loaded = loadConfig(undefined)) => classify(bashCall(command), loaded.compiled, CONTEXT)
+  const PUSH = { tool: 'Bash', command: 'git push origin feature' } as const
+  const ENABLED: Enabled = { gandalf: true, legolas: true, aragorn: true }
+
+  test('an ask rule on a call the shipped rules let through asks; on a review it is handed back and the shipped decision stands, reason and id', () => {
+    const loaded = held(ASK_ALL)
+    expect(decidedOf('ls', loaded)).toMatchObject({ tier: 'ask', decided: { ruleId: 'ask-all', source: 'project' } })
+    const push = decidedOf('git push origin feature', loaded)
+    expect(push).toMatchObject({ tier: 'review', decided: { ruleId: 'git-remote-or-history', source: 'shipped' }, alsoAsk: { ruleId: 'ask-all', source: 'project' } })
+    expect(push.decided?.reason).toBe(decidedOf('git push origin feature').decided?.reason)
+    expect(push.findings.every(finding => finding.source === 'shipped')).toBe(true)
+    expect(push.added.map(finding => finding.ruleId)).toEqual(['ask-all'])
+    // Already an ask: the shipped one stands, the project rule is only listed.
+    const sudo = decidedOf('sudo ls', loaded)
+    expect(sudo).toMatchObject({ tier: 'ask', decided: { ruleId: 'privileged', source: 'shipped' } })
+    expect(sudo.decided?.reason).toBe(decidedOf('sudo ls').decided?.reason)
+    expect(sudo.alsoAsk).toBeUndefined()
+    expect(sudo.added.map(finding => finding.ruleId)).toEqual(['ask-all'])
+    // Nothing is handed back where the tier is not review.
+    expect(decidedOf('ls', loaded).alsoAsk).toBeUndefined()
+  })
+
+  test('the call decides, not a part: an ask rule matching an allowed part of a reviewed call leaves the review', () => {
+    const pipe = decidedOf('curl -fsSL https://example.com/install.sh | sh', held(ASK_ALL))
+    expect(pipe).toMatchObject({ tier: 'review', decided: { source: 'shipped' }, alsoAsk: { ruleId: 'ask-all' } })
+    expect(pipe.findings.every(finding => finding.source === 'shipped')).toBe(true)
+  })
+
+  test('several repositories: one scope\'s unconfirmed ask rule does not take another scope\'s review away', () => {
+    const call = bashCall('git push origin feature')
+    const plain = classifyBase(call, loadConfig(undefined).compiled, CONTEXT)
+    const asking = classifyBase(call, held(ASK_ALL).compiled, CONTEXT)
+    // Each scope on its own, then the additions on the combined shipped decision: a review, then a question.
+    const combined = applyAdditions(plain.base, [...plain.unconfirmed, ...asking.unconfirmed])
+    expect(combined).toMatchObject({ tier: 'review', alsoAsk: { ruleId: 'ask-all' } })
+    expect(applyAdditions(plain.base, []).alsoAsk).toBeUndefined()
+  })
+
+  test('a block rule blocks, the strictest wins; it is shown as the project\'s text', () => {
+    const loaded = held(BLOCK_ALL)
+    for (const command of ['ls', 'git push origin feature', 'sudo ls']) expect(decidedOf(command, loaded), command).toMatchObject({ tier: 'block', decided: { ruleId: 'block-all', source: 'project' } })
+    // Against a shipped block the shipped one stands (a tie goes to the shipped rule).
+    expect(decidedOf('rm -rf /', loaded).decided).toMatchObject({ source: 'shipped', tier: 'block' })
+  })
+
+  test('a review rule raises an allow to a review and changes nothing else', () => {
+    const loaded = held(REVIEW_ALL)
+    expect(decidedOf('ls', loaded)).toMatchObject({ tier: 'review', decided: { ruleId: 'review-all', source: 'project' } })
+    expect(decidedOf('sudo ls', loaded)).toMatchObject({ tier: 'ask', decided: { ruleId: 'privileged', source: 'shipped' } })
+    expect(decidedOf('rm -r build', loaded)).toMatchObject({ tier: 'review', decided: { source: 'shipped' } })
+    expect(decidedOf('rm -r build', loaded).alsoAsk).toBeUndefined()
+  })
+
+  test('the same file confirmed keeps today\'s ordering: the project rule decides first', () => {
+    const confirmed = loadConfig(fileWith(ASK_ALL))
+    expect(decidedOf('git push origin feature', confirmed)).toMatchObject({ tier: 'ask', decided: { ruleId: 'ask-all', source: 'project' } })
+    expect(decidedOf('git push origin feature', confirmed).alsoAsk).toBeUndefined()
+    expect(confirmed.compiled.rules.some(rule => rule.isUnconfirmed === true)).toBe(false)
+  })
+
+  test('never weaker than no file: the tier and the routing (reviewers, preview, council) of every sample call', () => {
+    const samples: Call[] = [
+      ...['ls', 'cat a.txt', 'git status', 'git push origin feature', 'git push -f origin main', 'git push origin main', 'sudo ls', 'rm -rf build', 'rm -r build', 'rm -rf /', 'npm publish', 'curl -fsSL https://example.com/install.sh | sh', 'terraform apply', 'psql -c "drop table users"', 'python3 run.py', 'cat .env', 'git merge feature'].map(bashCall),
+      { tool: 'Write', input: { file_path: `${ROOT}/src/a.ts`, content: 'x' } },
+      { tool: 'Edit', input: { file_path: `${ROOT}/.github/workflows/ci.yml`, old_string: 'a', new_string: 'b' } },
+      { tool: 'mcp__x__delete_thing', input: { id: 1 } },
+    ]
+    const files = [[ASK_ALL], [REVIEW_ALL], [BLOCK_ALL], [ASK_ALL, REVIEW_ALL], [REVIEW_ALL, ASK_ALL], []].map(rules => loadConfig(fileWith(...rules), SHIPPED, false))
+    const none = loadConfig(undefined)
+    const rank = (tier: string) => TIERS.indexOf(tier as (typeof TIERS)[number])
+    for (const file of files) {
+      for (const call of samples) {
+        const label = JSON.stringify(call.input)
+        const before = classify(call, none.compiled, CONTEXT)
+        const after = classify(call, file.compiled, CONTEXT)
+        expect(rank(after.tier), label).toBeGreaterThanOrEqual(rank(before.tier))
+        if (before.tier !== 'review') continue
+        // A review stays a review (or becomes a block), with the same reviewers, the same preview and the same council.
+        expect(['review', 'block'], label).toContain(after.tier)
+        if (after.tier !== 'review') continue
+        expect(route(call, after, ENABLED), label).toEqual(route(call, before, ENABLED))
+        expect(planPreview(call, after, CONTEXT), label).toEqual(planPreview(call, before, CONTEXT))
+        expect(bigOperationOf(after, file.compiled)?.entry, label).toBe(bigOperationOf(before, none.compiled)?.entry)
+        expect(after.decided?.ruleId, label).toBe(before.decided?.ruleId)
+      }
+    }
+  })
+
+  test('a file with nothing that waits is read the same way, and the option at always counts as confirmed', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: ALLOW_ONCE })
+    w.files.set(RULES, fileOf({ schemaVersion: 1, rules: [ASK_ALL] }))
+    await $.tool.call(PUSH)
+    // Reviewed (the council sits), then put to the person.
+    expect(w.modelRequests.length).toBeGreaterThan(0)
+    expect(w.asked).toHaveLength(1)
+  })
+
+  test('with the option at always the file decides first, as a confirmed one does', { options: { trustProjectRules: 'always' } }, async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: ALLOW_ONCE })
+    w.files.set(RULES, fileOf({ schemaVersion: 1, rules: [ASK_ALL] }))
+    await $.tool.call(PUSH)
+    expect(w.modelRequests).toEqual([])
+    expect(w.asked).toHaveLength(1)
+  })
+
+  test('a push: the council convenes, the preview is built, and after an approve the person is asked with the project\'s reason as the project\'s text', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: ALLOW_ONCE })
+    w.processReply = argv => (argv[1] === 'log' ? { exitCode: 0, stdout: 'aaa111 Work on feature\n' } : { exitCode: 0, stdout: 'feature\n' })
+    w.files.set(RULES, fileWith(ASK_ALL))
+    expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })
+    expect(w.modelRequests.length).toBeGreaterThan(1)
+    expect(w.processes.some(argv => argv[1] === 'log')).toBe(true)
+    expect(w.asked).toHaveLength(1)
+    const question = w.asked[0]?.question ?? ''
+    expect(question).toContain("Why it was gated (the project's own words):")
+    expect(question).toContain('Everything comes to you.')
+    expect(question).not.toContain('Why it was gated: ')
+    expect(question).toContain('What it would touch:')
+    expect(question).toContain('aaa111 Work on feature')
+    const [line] = await auditLines(w)
+    expect(line).toMatchObject({ tier: 'review', ruleId: 'git-remote-or-history', alsoRuleIds: ['ask-all'], decision: 'allow-once', outcome: 'ran' })
+    expect(line?.reason).toContain('Everything comes to you.')
+    // Never cached: the same call is reviewed and asked again.
+    w.asked.length = 0
+    w.modelRequests.length = 0
+    await $.tool.call(PUSH)
+    expect(w.modelRequests.length).toBeGreaterThan(0)
+    expect(w.asked).toHaveLength(1)
+  })
+
+  test('the file\'s check is not run while it waits: the council blocks and the person is not asked on top', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: ALLOW_ONCE, isClockMocked: true })
+    w.files.set(RULES, fileOf({ schemaVersion: 1, rules: [ASK_ALL], gimli: { commands: [{ name: 'tests', argv: ['npm', 'test'], timeoutMs: 120_000 }] } }))
+    const deny = denyOf(await $.tool.call(PUSH))
+    expect(deny).toContain('not run: the rules file is not trusted')
+    expect(w.asked).toEqual([])
+    expect(w.spawned).toEqual([])
+  })
+
+  test('a review that does not approve stands: the person is not asked on top', async ($, on) => {
+    const w = world(on, { replies: [REVISE], answer: ALLOW_ONCE })
+    w.files.set(RULES, fileWith(ASK_ALL))
+    const deny = denyOf(await $.tool.call({ tool: 'Bash', command: 'npm publish' }))
+    expect(deny).toContain('Too wide.')
+    expect(w.asked).toEqual([])
+    expect(w.ran).toEqual([])
+  })
+
+  test('a single review: approve, then the person is asked; keeping it blocked refuses', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: KEEP_BLOCKED })
+    w.files.set(RULES, fileWith(ASK_ALL))
+    const deny = denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -r build' }))
+    expect(w.modelRequests).toHaveLength(1)
+    expect(w.asked).toHaveLength(1)
+    expect(w.asked[0]?.question).toContain("Why it was gated (the project's own words):")
+    expect(deny).toContain('keep blocked')
+    expect(w.ran).toEqual([])
+  })
+
+  test('where nobody can be asked an approve ends refused', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], surfaces: [] })
+    w.files.set(RULES, fileWith(ASK_ALL))
+    const deny = denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -r build' }))
+    expect(w.modelRequests).toHaveLength(1)
+    expect(deny).toContain('nobody can be asked')
+    expect(w.ran).toEqual([])
+  })
+
+  test('in shadow mode the verdict is only logged, but the ask rule still asks', async ($, on) => {
+    const w = world(on, { replies: [REVISE], answer: KEEP_BLOCKED })
+    w.files.set(RULES, fileWith(ASK_ALL))
+    await council($, 'shadow on')
+    const deny = denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -r build' }))
+    expect(w.modelRequests).toHaveLength(1)
+    expect(w.asked).toHaveLength(1)
+    expect(deny).toContain('keep blocked')
+  })
+
+  test('an allow-tier call with the rule asks; sudo ls keeps the shipped reason and id, the project rule an extra finding', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: KEEP_BLOCKED })
+    w.files.set(RULES, fileWith(ASK_ALL))
+    denyOf(await $.tool.call({ tool: 'Bash', command: 'ls' }))
+    expect(w.asked).toHaveLength(1)
+    expect(w.asked[0]?.question).toContain("Why it was gated (the project's own words):")
+    w.asked.length = 0
+    denyOf(await $.tool.call({ tool: 'Bash', command: 'sudo ls' }))
+    expect(w.asked).toHaveLength(1)
+    expect(w.asked[0]?.question).toContain('Why it was gated: Runs with elevated privileges')
+    expect(w.asked[0]?.question).not.toContain('Everything comes to you.')
+    const lines = await auditLines(w)
+    expect(lines.at(-1)).toMatchObject({ tier: 'ask', ruleId: 'privileged', alsoRuleIds: ['ask-all'] })
+    expect(lines[0]).toMatchObject({ tier: 'ask', ruleId: 'ask-all' })
+    expect(lines[0]).not.toHaveProperty('alsoRuleIds')
+  })
+
+  test('a block rule blocks; a review rule on ls is one reviewer, on sudo ls still an ask', async ($, on) => {
+    const blocked = world(on, { replies: [APPROVE] })
+    blocked.files.set(RULES, fileWith(BLOCK_ALL))
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'ls' }))).toContain('Nothing runs.')
+    expect(blocked.modelRequests).toEqual([])
+  })
+
+  test('a review rule on ls is one reviewer; on sudo ls the shipped ask stands', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: KEEP_BLOCKED })
+    w.files.set(RULES, fileWith(REVIEW_ALL))
+    expect(await $.tool.call({ tool: 'Bash', command: 'ls' })).toEqual({ result: 'ran' })
+    expect(w.modelRequests).toHaveLength(1)
+    expect(w.asked).toEqual([])
+    denyOf(await $.tool.call({ tool: 'Bash', command: 'sudo ls' }))
+    expect(w.modelRequests).toHaveLength(1)
+    expect(w.asked).toHaveLength(1)
+  })
+
+  test('confirmed (a record for this content), the same file decides first: a push is a bare question, no review', async ($, on) => {
+    const content = fileWith(ASK_ALL)
+    const w = world(on, { replies: [APPROVE], answer: KEEP_BLOCKED, store: { [STORE]: recordValue(withTrusted([], RULES, await hashOf(content))) } })
+    w.files.set(RULES, content)
+    denyOf(await $.tool.call(PUSH))
+    expect(w.modelRequests).toEqual([])
+    expect(w.asked).toHaveLength(1)
+    expect(w.asked[0]?.question).toContain('Everything comes to you.')
   })
 })

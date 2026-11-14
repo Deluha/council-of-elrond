@@ -117,9 +117,9 @@ project checks the user listed in `rules.json` (`gimli.commands`, §8).
 config load (session start, /council reload, after the mod's own write) ─► rules.json per repository
              │ validate ─► broken: ignored whole, shipped rules enforce
              │ confirmed (path + SHA-256 in the trust record) or trustProjectRules = always ─► in force in full
-             │ unconfirmed ─► split (pure): ask and block rules, protected lists, bigOperations apply;
-             │                allow and review rules, disables, models, patterns, allowlist and project
-             │                checks are held back, counted, told once per file (§15.22)
+             │ unconfirmed ─► split (pure): ask, block and review rules (adding only, §16.10), protected lists,
+             │                bigOperations apply; allow rules, disables, models, patterns, allowlist and
+             │                project checks are held back, counted, told once per file (§15.22)
 tool.call ─► classify (pure, rules only; against each repository the call touches under a
              │             multi-repository root, the strictest wins: §14.5)
              │ allow ─► high secret? refuse (audited) · else next(e)     (no state read or written)
@@ -207,6 +207,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | A rules file that cannot be listed in full or safely read (more than 40 settings waiting, a value over 400 characters after cleaning, a value `redact()` would change, a value that held a control, invisible or direction-changing character, or more than 20 files waiting) | Listed as far as it can be, each such value named and marked, with the line "This file cannot be confirmed from the session because …" in place of a code. Its hash is never noted as listed, so `/council trust <code>` for it confirms nothing and says the same (§16 item 1). The way out is to fix the file, or the option at `always`. |
 | `/council trust <code>` for content that was not listed in this session (before any listing, or a file edited after its listing), or whose listing a confirmation already used up | Confirms nothing; says to run `/council trust` first and read what it lists (`trust.notListed`), or, when the code fits no file now, that none has it (`trust.noMatch`). |
 | The trust record cannot be saved (`$.store.set` rejects) | `/council trust <code>` confirms nothing and says why. After the mod's own write (the rule or allowlist offer the person answered), the new content is simply not trusted: a transcript line (`notice.trustNotSaved`) says to run `/council trust`. |
+| A project `ask` rule of a file nobody confirmed matches a call the shipped rules review | The shipped decision runs as it would with no file (reviewer or full council, preview, checks); only an approve is then put to the person with the project's reason as the project's text, a revise or a block stands, a failed or absent review goes to the person anyway, and where nobody can be asked the call is refused. Never cached (§16 item 10). |
 | A rules file's content differs from the one confirmed (any byte; a copy at another path; a link that now points elsewhere) | Untrusted: the hash, or the real path, no longer matches the record. Its settings that wait for confirmation are held back at the next load (session start, `/council reload`, or when a call first reaches a repository below a multi-repository root); a session already running keeps the content it loaded and confirmed. |
 | Audit write fails | Logged to the debug log (`notice.auditFailed`); never changes a decision, and the queue goes on to the next line. Nothing waits for the queue: a write that never returns holds back only the lines queued after it, never a decision or a later call (§13.4 d). `/council log` and `/council report` read the files, so they may not show a line still queued. |
 | Two Claude Code sessions in one project share the audit log | `$.fs` has no lock and no append, so each write reads the whole file and writes it back: lines of the two sessions can interleave, and a line can be lost when two writes cross. Each session's own writes are queued in order. `/council report` skips any line it cannot parse (§13.4 e). |
@@ -1183,6 +1184,8 @@ decided; the live list of what still passes is the README's "Known gaps in shell
    form. A glob cannot name a home folder, so the entry is not limited to `~/.claude/plugins/`: a
    `.claude/plugins/` folder in a repository is protected too, the same breadth the settings
    entries have. A read of a plugin file asks as well, as a read of `.env` does.
+   *Amended by §16 item 11: the plugin folders are protected against writes only; a plain read of
+   them, and a run of a script they hold, are judged by the ordinary rules again.*
 8. **Commands are hashed exactly.** The verdict cache and chat approvals match a command exactly,
    not after collapsing whitespace (this supersedes the shell-command half of §10 item 6).
    A newline separates commands, and whitespace inside quotes is data, so no normalisation is safe
@@ -1427,6 +1430,10 @@ decided; the live list of what still passes is the README's "Known gaps in shell
       | `gollum.allowlist` | yes | lets a secret through the scan |
       | `gimli.commands` | yes | starts processes outside the permission prompts |
 
+      *Amended by §16 item 10: `review` rules no longer wait, and none of the rules of a file nobody has
+      confirmed replaces a shipped decision; they only add to it. The table and the paragraph below are the
+      original decision; the table in force is in the README's "Trusting a project's rules file".*
+
       **`review` rules wait too (a tightening over the brief's first list).** A project rule decides
       before the shipped non-block rules do (`classify`), so a project `review` rule that matches
       what a shipped `ask` rule matches lowers it to a review: `sudo ls` under a project review rule
@@ -1524,7 +1531,8 @@ decided; the live list of what still passes is the README's "Known gaps in shell
 An adversarial review of the confirmation in §15 item 22 found that a person could be led to confirm
 settings they had not been shown. Every decision below is a **tightening**: nothing can be confirmed that
 could not be before, `trust` still needs a person, and `trustProjectRules=always` behaves as it did. They
-are recorded as decided.
+are recorded as decided. The one exception is item 11, which loosens one thing against the commit before
+it (reads of the plugin folders), as the maintainer approved, and goes nowhere below `origin/main`.
 
 1. **Confirming a rules file confirms only what was listed in full in this session** (a tightening;
    brief of the second review round). What was wrong:
@@ -1785,3 +1793,185 @@ are recorded as decided.
      follow a `cd` inside a subshell.
    The tests for this item are in `rules.test.ts`, written with the change. The README's "Known gaps in
    shell parsing" and its tier list say the same in the user's words.
+10. **A rules file nobody has confirmed adds protection and never replaces a shipped decision** (a
+    tightening; amends §15 item 22). A project rule decides before the shipped non-block rules
+    (`classify`), and the ask tier returns before the preview, the reviewers and the full council
+    (`register.ts`). So an `ask` rule of a file nobody confirmed (applied at once, as the tiers that
+    cannot loosen) turned every review-tier call into a bare question: no reviewer, no preview, no
+    council, a short excerpt and the file's own reason, and on a tie its reason and rule id replaced
+    the shipped ones. No tier dropped, yet the person lost the review. A `review` rule could not be
+    applied at once for the same reason in the other direction (it lowers a shipped `ask`). Decided:
+    - **The shipped decision is computed first, as if the file had no rules, and it stands**: its
+      tier, rule id, reason, findings, routing (one reviewer, the full council, the checks) and
+      preview. `classifyBase` (`rules/classify.ts`) is `classify` without the file's rules, which it
+      sets apart (`unconfirmed`, each with the part and folder it matched in); `applyAdditions` puts
+      them on top, **on the call as a whole, not per part** (a part the shipped rules allow, in a call
+      they review, must not take that review away: `curl … | sh` under a catch-all `ask` rule found
+      it). `classify` is the two together, so its callers are unchanged.
+    - **What a rule may add**: `block` blocks when the shipped decision is below it (a tie goes to the
+      shipped rule), shown as the project's text; `ask` on a call the shipped rules let through
+      makes it an ask, on a review is handed back as `Classification.alsoAsk`, on an ask or a block
+      changes nothing; `review` raises an allow to a review (one reviewer, by the routing of an
+      unmatched review or the rule's own member) and changes nothing else. A rule that did not decide
+      the tier is in `Classification.added`.
+    - **The mark.** `CompiledRule.isUnconfirmed`, set by `loadConfig(text, shipped, false)` for every
+      project rule of the file (`compileConfig`'s third argument); a rule of a confirmed file or of the
+      option `always` is unmarked and decides first, exactly as before. `register.ts` loads a file that
+      way when its state is `untrusted`, and also when it is `nothing` (no setting waits) unless the
+      option is `always`: **decided beyond the brief, because it is needed** — with `review` rules
+      applied at once, a file holding only review rules has nothing waiting, and read as confirmed it
+      would let a project `review` rule lower a shipped `ask`; the same holds for a file of `ask`
+      rules, which nobody can confirm, so it would be the bare-question case again.
+      `TIER_TRUST.review` is now `always`.
+    - **After the review** (`register.ts`): an approve of the single reviewer or of the full council
+      goes to the person through the path of an approve of a cut command (`escalate.commandCut`):
+      `askUser`, with the project rule's cleaned reason shown as the project's text; where nobody can
+      be asked the call is refused (`nobodyToAsk`), a failed attempt. The wording is the existing
+      `escalate.askTier` ("A rule sends this call straight to you."); a string that says "after its
+      review" would be better and is left to the maintainer. A revise or a block stands and the person
+      is not asked on top. A review that gave no verdict, or an unavailable one, goes to the person
+      as before (one question). Never cached: `isCacheable` is false for such a call, and the
+      approve is not written, so a repeat is reviewed and asked again. In shadow mode the verdict is
+      only logged and the ask rule still enforces (`passShadowed` asks where `passInShadow` would
+      pass). A person already asked about a possible secret is not asked a second time, as for an ask
+      tier. The audit reason is the project's cleaned reason. A cut command's approve is asked once,
+      with `escalate.commandCut` as the reason and the shipped rule's text.
+    - **Several repositories**: each scope is read with `classifyBase`, the shipped decisions are
+      combined (`combineClassifications`), and the additions of every scope go on the combined one
+      (`applyAdditions`), so one scope's `ask` rule cannot take another scope's review away.
+    - **The audit line** keeps the shipped `ruleId`. No field recorded a rule that matched without
+      deciding, so `alsoRuleIds` (the ids, once each, present only when there are some) is added to
+      `AuditRecord`.
+    - **The listings.** `/council trust` lists what waits, so review rules are no longer in it; the
+      status and notice lines count only allow rules there. The words of `trust.count.rules` ("allow or
+      review"), `notice.rulesUntrusted` and `trust.state.untrusted` ("its block and ask rules … apply")
+      were not changed in this pass and still name the old split: a follow-up for `strings.ts`.
+    - **Not changed**: a person's own "Add the rule" or allowlist answer still records the file's new
+      content as trusted (§15 item 22), so for a file with nothing waiting it confirms the file's
+      other rules too.
+    Tests: `trust.test.ts` (the tier table; the marks; an ask rule on a let-through call, on a review,
+    on an ask and on a pipe whose one part the shipped rules allow; block; review, raising an allow
+    and leaving `sudo ls` an ask; the confirmed ordering; for every sample call the tier is never
+    lower and, where the shipped decision is a review, the routing, the preview and the council are
+    the same; a file with nothing waiting; the option `always`; through `register`: a push convenes
+    the council, builds the preview and asks after the approve with the project's reason as the
+    project's text, is not cached, is audited with `alsoRuleIds`; the not-run check blocks and the
+    person is not asked on top; a revise stands; a single review asks and "keep blocked" refuses;
+    nobody to ask refuses; shadow mode asks; `ls` asks; `sudo ls` keeps the shipped reason and id;
+    a block rule blocks; the confirmed file decides first; one scope's ask rule leaves another's
+    review). Changed to the new behaviour, each for its reason: the tier-table and split tests (review
+    no longer waits; the counts are of allow rules), the listing tests (an `EVERY_RULE` fixture is an
+    allow rule, the thing that waits), the held-back test of `terraform apply` (the shipped review
+    stands, the ask rule is handed back; a project check of the same file was moved out of the
+    pipeline test, since an unconfirmed check blocks the council). Mutations, each confirmed to fail
+    the suite and reverted: an unconfirmed ask rule replacing a shipped review (11 tests); a project
+    rule deciding first whatever its file (16); skipping the ask after an approve, single reviewer (2)
+    and council (3); asking on top of a revise (1); an unconfirmed review rule displacing a shipped
+    ask (4); the ask rule lost where the call, not the part, is reviewed (11); an unconfirmed file read
+    as confirmed at load (17); a file with nothing waiting not marked (1).
+11. **The plugin folders ask for a write, not a read** (a loosening against the commit that protected
+    them, approved by the maintainer; never below `origin/main`; amends §15 item 7). `**/.claude/plugins/**`
+    was a protected path, so every shell mention of it asked, plain reads (`cat ~/.claude/plugins/x/README.md`,
+    `ls ~/.claude/plugins/`, `grep -r foo ~/.claude/plugins/marketplaces`) and the run of a plugin skill's
+    own script included; on `origin/main` those were allow or review. Decided:
+    - **A second shipped list, internal**: `WRITE_PROTECTED_PATHS` in `config/defaults.ts`, compiled into
+      `CompiledConfig.writeProtectedPaths`. It is not a field of the rules file, nor of `Config`, so a
+      project can neither add to it nor empty it; `**/.claude/plugins/**` moved to it from
+      `protectedPaths`.
+    - **File tools**: `Write`, `Edit` and `NotebookEdit`, which all write, ask as for a protected path
+      (rule `protected-path`, `isProtected` set, so no allow rule is offered); `Read` is not looked at,
+      as before.
+    - **Shell**: a part that names such a path asks unless `isReadOrRun` (`rules/classify.ts`) finds it
+      a read or a run. A read: the program is one of the fixed list (README "Tiers"), bare (no `/`),
+      resolved (no unread wrapper option), with none of its own writing options, and the path is one
+      of its operands. A run: the path is the program word written as a path, or the script an
+      interpreter or shell is given (the ordinary `script-file` or `script-shell` rule matched, and
+      neither `script-inline` nor `script-stdin` did). Then the ordinary rules decide (review for a
+      script, as on `origin/main`). Every other part naming the path asks.
+    - **Decided as tightenings**, beyond the brief's list: `find -okdir`; `sort -o`, `--output` and `-T`;
+      `tree -o`; `less -o` and `-O`; `file -C`; `uniq` with a second operand (its output file) are
+      writing, so a part using them asks; a word that also appears as a redirect target, in a wrapper's
+      words or in an assignment is never an operand (`cat p > p`, `time -o p cat p`, `X=p cat p`); a bare
+      program word that the shell resolves against a `cd` into the folder (`cd ~/.claude/plugins/x &&
+      make`) is exempt only for a reader or an interpreter running a script, so `make` asks; a script
+      operand with whitespace or a shell metacharacter is not a script.
+    - **A note.** `rm -rf` of a plugin folder is still a block (`rm-recursive-outside-repo`, a floor), and
+      `bash -c 'cp x ~/.claude/plugins/a'` asks twice over (the outer part holds the path in a word that is
+      not a script, the nested part is a `cp`).
+    - **Sweeps** of about 10,000 commands from the earlier sweeps and 84,000 generated ones that name a
+      plugin path (every reader and writer, wrappers, `cd`, redirects, runners): none is below `origin/main`
+      except `watch -d ls <path>` (six forms), which the previous commit's parse of `watch -d` made an allow
+      for any path (`origin/main` read the `ls` as `-d`'s value and reviewed the path as a program), and
+      the only commands below the previous commit are reads and runs under a plugin folder.
+    - **Not done**: `/council rules` lists `protectedPaths`; the plugin folders are no longer in that line
+      and have none of their own (it needs a string).
+    Tests: `rules.test.ts` (the reads and runs of the brief, with their rule ids; a list of asks; every
+    file tool; a protected path proper unchanged; the list is not a schema field and not emptied by a
+    project), `config.test.ts`. Mutations, each confirmed to fail the suite and reverted: every shell
+    mention asking (1 test); `cp` as a reader (2); a redirect target ignored (1, after a test where the
+    same word is read and written); a wrapper's option value ignored (1, likewise); `sort -o` not
+    writing (1); `find -delete` as a reader (1); a bare program word exempt (1); the list emptied (3).
+    One guard is defensive and has no test that fails without it: an unresolved wrapper copy's program
+    word is the wrapper's own name, which is never a reader.
+12. **More classifier gaps closed** (a tightening; recorded here for "Close more classifier gaps:
+    checks, pushes, interpreters, self-protection", which landed with its tests in `rules.test.ts` and
+    without this record). What it did, verified against `rules/*.ts` and `config/defaults.ts`:
+    - **Block rules read what the programs read.** Recursive `rm` is blocked when `--recursive` or
+      `--no-preserve-root` is written as a unique prefix (`--rec`, `--no-pres`), for another user's home
+      (`~root`) and for a defaulted home expansion (`${HOME:-/}`). A write to a disk device is blocked
+      when the device is spelt with extra slashes or dots, or relative to a folder the command first
+      enters.
+    - **Pushes.** The force and delete flags of `git push` are read as git reads them: short clusters
+      with digits or other letters, and long options by unique prefix (`--forc`, `--del`). A force push
+      whose destination or remote is computed asks (`force-push-unknown-branch`). A force push of the
+      current branch asks when an earlier part of the same call may have moved HEAD (a checkout, a
+      switch, a reset and the like, a git subcommand the mod does not know, or code it does not read);
+      a protected branch read before the call still blocks. `git send-pack` and `hub push` are read like
+      `git push`; `git subtree push`, `git lfs push` and `jj git push` are reviewed.
+    - **Interpreters.** Code fed through `/dev/stdin`, a descriptor path, a process substitution or
+      `<&0` is reviewed (`script-stdin`); the option tables of the interpreters were completed, and an
+      option the tables do not know on a fed interpreter is reviewed; more interpreters and inline-code
+      flags are covered; `python -m` of a module that runs the code it is given (`code`, `asyncio`,
+      `timeit`, `pdb`, `runpy`, `idlelib`, `IPython`, `ptpython`, `bpython`) is reviewed.
+    - **Command lines handed to other programs** are classified as `sh -c` is: tmux (`send-keys`,
+      `run-shell`, `if-shell`, `respawn-window` and the other commands that start one, `display-popup`,
+      `pipe-pane`, `set-hook`, `confirm-before`, `bind-key`, lists joined with `\;`, a command by any
+      unique prefix), screen, zellij, `nix develop|shell|run`, `git submodule foreach`, `git bisect
+      run`, `git rebase --exec`, the filters of `git filter-branch`, `find -exec`, `-execdir`, `-ok` and
+      `-okdir`, `entr` and `parallel`. A key sequence or a command file that cannot be read is
+      reviewed (`command-unreadable`).
+    - **More forms are reviewed**: `curl` data options attached or clustered and methods other than
+      GET, `wget` bodies, HTTPie bodies, `gh` writes, more `git rm`, `git checkout` of paths,
+      `git switch --discard-changes` and `git branch -df`, `awk` and `sed` that run commands or write
+      files, more cloud deletes, and `tar` or `unzip` extracting outside the project
+      (`extract-outside-project`).
+    - **Self-protection.** `plugin-manage` sees global options before `plugin`, options between its
+      words, the CLI's short aliases and `npx …@<version>`; the new ask rule `claude-session` covers a
+      nested session (`-p`, `--bare`, `--settings`, `--plugin-dir`, a permission bypass or mode,
+      `CLAUDE_*` assignments) and `claude mcp add|remove`, `claude config set`.
+    - **One shipped pattern that was slow on long input is now linear.**
+    Decisions recorded: `--no-preserve-root` counts from `--n` (rm has no other long option starting
+    so, and `--r` likewise counts as `--recursive`); "HEAD may have moved" (`mayMoveHead`) is any git
+    subcommand that switches or rewrites the checked-out branch, `git stash pop|apply|branch`,
+    `git branch -m|-M|-f|-F`, a git subcommand the mod does not list as leaving the branch alone (it may
+    be an alias), an unresolved wrapper, a program word known only at run time, an interpreter or shell,
+    and a program run by its path; an option the tables do not know on a fed interpreter means code may
+    run, so it is reviewed; `nix run` is read by the app name only (`nix run nixpkgs#curl -- x` is
+    `curl x`); `tar` and `unzip` are reviewed only when extracting; a tmux binding (`bind-key`) only
+    registers its command, so the command it would run is read but a file it would load is not a
+    finding; an ambiguous tmux prefix (tmux refuses it) is reviewed if any command it could be runs
+    something.
+13. **The allow rule offered after "allow once" is narrower, and the question says what it allows** (a
+    tightening; amends §10 item 7). Verified against `elrond/suggest.ts`:
+    - A shell rule allows that exact command text, in any folder, without review. A file tool's rule pins
+      the tool and the path, so it allows every later write to that file by that tool, whatever it
+      writes. A rule for any other tool allows that tool with exactly the same arguments: its input is
+      pinned as the escaped JSON text, no offer over 300 characters, and the call is classified again
+      with the rule in place before it is offered.
+    - No rule is offered for a shell command with an unquoted `*`, `?`, `[`, `{` or `~` (any one counts,
+      paired or not; a quoted or escaped one is still offered), nor for a big operation (a rule would
+      skip the full council; with no current branch known, every merge counts as big).
+    - `council allow <code> session` is unavailable in the same cases, because a session allowance has
+      the offer's limits (`canSession` is whether a rule would be offered).
+    - The question and the rule's `reason` come from the kind of call (`suggest.question.*`,
+      `suggest.reason.*`). Tests are in `suggest.test.ts`.

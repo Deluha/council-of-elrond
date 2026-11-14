@@ -30,6 +30,7 @@ export type FieldTrust = 'always' | 'needs-trust' | 'by-tier' | 'meta'
 
 export const FIELD_TRUST: Readonly<Record<FieldName, FieldTrust>> = {
   schemaVersion: 'meta',
+  // By tier (`TIER_TRUST`): allow rules wait; review, ask and block rules apply at once, but an unconfirmed file's rule only adds.
   rules: 'by-tier',
   // Switches a shipped review or ask rule off: fewer calls are gated.
   disableRules: 'needs-trust',
@@ -50,15 +51,19 @@ export const FIELD_TRUST: Readonly<Record<FieldName, FieldTrust>> = {
 }
 
 /**
- * A project rule decides before the shipped non-block rules do, so an `allow`
- * rule lets a call through and a `review` rule can lower a shipped `ask` to a
- * review: both wait for trust. `ask` and `block` rules sit at or above every
- * shipped tier a project rule can displace (block rules are a floor), so they
- * never loosen.
+ * A project rule of a confirmed file decides before the shipped non-block rules
+ * do, so an `allow` rule lets a call through: it waits for trust. The other
+ * tiers apply at once, but never as a replacement: a rule of a file nobody has
+ * confirmed only adds to the decision the shipped rules give (`classify`):
+ * `block` blocks (block rules are a floor), `ask` puts a call the shipped rules
+ * let through to the person, and after the review of one they review, `review`
+ * reviews a call the shipped rules let through and changes nothing else. So an
+ * unconfirmed file never takes away a review, a preview, the council or a
+ * question the shipped rules give (DESIGN §16).
  */
 export const TIER_TRUST: Readonly<Record<Tier, 'always' | 'needs-trust'>> = {
   allow: 'needs-trust',
-  review: 'needs-trust',
+  review: 'always',
   ask: 'always',
   block: 'always',
 }

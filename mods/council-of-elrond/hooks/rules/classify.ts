@@ -4,6 +4,7 @@ import type { MemberName, Profile, RuleSource, Tier } from '../config/types.js'
 import { forcesCurrentBranch, mayMoveHead, runCheck } from './checks.js'
 import type { CheckContext } from './checks.js'
 import { touchesProtected } from './globs.js'
+import type { ProtectedMatcher } from './globs.js'
 import { relativeTo, resolve } from './paths.js'
 import { splitShell } from './shell.js'
 import type { ShellPart } from './shell.js'
@@ -54,6 +55,18 @@ export type Classification = {
   isProtected: boolean
   /** Files a script-running part names, for reviewer context. */
   scriptPaths: readonly string[]
+  /**
+   * Rules of a project file nobody has confirmed that matched and did not
+   * decide: they add no tier (an unconfirmed rule only adds to the shipped
+   * decision), and are listed so the audit line and the person can see them.
+   */
+  added: readonly Finding[]
+  /**
+   * An unconfirmed project `ask` rule that matched a call the shipped rules
+   * review: the call is reviewed as the shipped decision says, and only then
+   * put to the person. Only ever set when `tier` is `review`.
+   */
+  alsoAsk?: Finding
 }
 
 type Subject = {
@@ -131,11 +144,79 @@ function protectedWordsOf(part: ShellPart): string[] {
   return [...out]
 }
 
-function isProtectedPath(candidate: string, config: CompiledConfig, context: ClassifyContext, cwd: string): boolean {
+function isProtectedPath(candidate: string, matchers: readonly ProtectedMatcher[], context: ClassifyContext, cwd: string): boolean {
   const absolute = resolve(candidate.replace(/^['"]|['"]$/g, ''), cwd, context.home)
   const relative = relativeTo(absolute, context.root)
   const forms = relative !== undefined ? [relative] : [absolute.slice(1)]
-  return forms.some(form => touchesProtected(form, config.protectedPaths))
+  return forms.some(form => touchesProtected(form, matchers))
+}
+
+/**
+ * Programs that only read what they are given. A shell part naming a
+ * write-protected path (a plugin folder) is let through when it is one of
+ * these, unless one of its options writes (`WRITING_OPTIONS`).
+ */
+const READERS: ReadonlySet<string> = new Set([
+  'cat', 'head', 'tail', 'less', 'more', 'bat', 'ls', 'tree', 'stat', 'file', 'wc', 'du', 'find',
+  'grep', 'egrep', 'fgrep', 'rg', 'ag', 'diff', 'cmp', 'sort', 'uniq', 'cut', 'jq', 'yq',
+  'md5sum', 'sha1sum', 'sha256sum', 'shasum', 'realpath', 'readlink', 'basename', 'dirname', 'test', '[', 'cd', 'pushd',
+])
+
+const hasOption = (words: readonly string[], pattern: RegExp): boolean => words.some(word => pattern.test(word))
+
+/**
+ * The options and operands with which a reader writes a file after all: a
+ * reader that does is not one. Beyond the brief's own (`find` actions, `jq` and
+ * `yq` in place), those of `sort`, `tree`, `less`, `file` and `uniq`, which
+ * write to a named file or folder.
+ */
+const WRITING_OPTIONS: Readonly<Record<string, (words: readonly string[]) => boolean>> = {
+  find: words => hasOption(words, /^-(delete|exec|execdir|ok|okdir|fls|fprint\w*)$/),
+  jq: words => hasOption(words, /^--in-?place/),
+  yq: words => hasOption(words, /^-[A-Za-z0-9]*i[A-Za-z0-9]*$|^--in-?place/),
+  sort: words => hasOption(words, /^-[A-Za-z0-9]*[oT]|^--(o|t)/),
+  tree: words => hasOption(words, /^-[A-Za-z0-9]*o|^--o/),
+  less: words => hasOption(words, /^-[A-Za-z0-9]*[oO]|^--(log|LOG)/),
+  file: words => hasOption(words, /^-[A-Za-z0-9]*C|^--compile/),
+  uniq: words => words.filter(word => !word.startsWith('-')).length > 1,
+}
+
+/**
+ * Whether a shell part that names a write-protected path (the words in `hits`)
+ * is a read or a run of what it names, which the ordinary rules judge, and not
+ * a write:
+ * - a read: the program is one of `READERS`, resolved (no unread wrapper
+ *   option), none of its options writes, and the path is one of its operands,
+ *   not a redirect target, an option value of a wrapper or an assignment;
+ * - a run: the path is the program word written as a path, or the script an
+ *   interpreter or a shell is given (the ordinary `script-file` or
+ *   `script-shell` rule matches, and no code flag or piped code is read).
+ * Anything else naming the path writes, or may.
+ */
+function isReadOrRun(part: ShellPart, hits: readonly string[], matched: readonly CompiledRule[]): boolean {
+  if (part.isUnresolved === true || part.isUnreadable === true) return false
+  const core = part.coreWords
+  const program = core[0]
+  if (program === undefined) return false
+  // The words before the command (wrappers, assignments, their option values) must not be what names the path.
+  const at = part.words.length - core.length
+  if (at < 0 || core.some((word, index) => part.words[at + index] !== word)) return false
+  const elsewhere = [...part.words.slice(0, at), ...part.optionValues, ...part.redirects.map(redirect => redirect.target)]
+  const rest = core.slice(1)
+  const isReader = READERS.has(program) && !(WRITING_OPTIONS[program]?.(rest) ?? false)
+  const ids = new Set(matched.map(rule => rule.id))
+  const isScriptRun = (ids.has('script-file') || ids.has('script-shell')) && !ids.has('script-inline') && !ids.has('script-stdin')
+  // The script is the first word that is no option, when options alone come before it.
+  const firstOperand = rest.findIndex(word => !word.startsWith('-'))
+  const script = isScriptRun && firstOperand >= 0 && rest.slice(0, firstOperand).every(word => word.startsWith('-')) ? rest[firstOperand] : undefined
+  const isProgramOk = program.includes('/') || isReader || script !== undefined
+  return hits.every(hit => {
+    if (elsewhere.some(word => word.includes(hit))) return false
+    const operands = rest.filter(word => word === hit).length
+    if (hit === program && !isProgramOk) return false
+    if (operands === 0) return hit === program
+    return isReader || (hit === script && operands === 1 && !/[\s;&|<>$`()]/.test(hit))
+  })
 }
 
 function subjectsOf(call: Call, context: ClassifyContext): { subjects: Subject[]; tooLong: boolean; cut: boolean } {
@@ -274,14 +355,32 @@ export function targetsOf(call: Call, context: ClassifyContext): Target[] {
 }
 
 /**
- * The tier of a call, by the rules alone: pure, no I/O.
- *
- * Per subject (each shell part, or the file path): a project rule that
- * matches decides first, else the strictest shipped rule that matches;
- * shipped block rules and protected paths are a floor no project rule
- * lowers. The call takes its strictest subject. Nothing matching is allow.
+ * What an unconfirmed file's rules add to a call's shipped decision (`base`,
+ * the call as the shipped rules and the confirmed rules decide it): they only
+ * add. A block blocks; an ask or a review rule raises a call the shipped rules
+ * let through; an ask rule on a call they review is handed back as `alsoAsk`.
+ * It is the call's tier that counts, not one part's: a part the shipped rules
+ * allow, in a call they review, takes nothing away from that review.
  */
-export function classify(call: Call, config: CompiledConfig, context: ClassifyContext): Classification {
+export function applyAdditions(base: Classification, unconfirmed: readonly Finding[]): Classification {
+  const addition = strictest(unconfirmed)
+  if (addition === undefined) return base
+  const others = unconfirmed.filter(finding => finding !== addition)
+  if (addition.tier === 'ask' && base.tier === 'review') return { ...base, added: [...base.added, ...unconfirmed], alsoAsk: addition }
+  if (strictness(addition.tier) > strictness(base.tier)) {
+    const findings = [...base.findings, addition]
+    return { ...base, tier: addition.tier, decided: strictest(findings) as Finding, findings, added: [...base.added, ...others] }
+  }
+  return { ...base, added: [...base.added, ...unconfirmed] }
+}
+
+/**
+ * The call as the shipped rules and the rules of a confirmed file decide it,
+ * with the rules of a file nobody has confirmed set apart (`unconfirmed`, each
+ * with the part and folder it matched in): `applyAdditions` puts them on top.
+ * One scope's `classify` is the two together.
+ */
+export function classifyBase(call: Call, config: CompiledConfig, context: ClassifyContext): { base: Classification; unconfirmed: Finding[] } {
   const checkContext: CheckContext = {
     ...context,
     protectedBranches: config.protectedBranches,
@@ -290,6 +389,7 @@ export function classify(call: Call, config: CompiledConfig, context: ClassifyCo
   const inputJson = JSON.stringify(call.input)
   const { subjects, tooLong, cut } = subjectsOf(call, context)
   const findings: Finding[] = []
+  const unconfirmed: Finding[] = []
   const scriptPaths: string[] = []
   let isProtected = false
 
@@ -316,12 +416,20 @@ export function classify(call: Call, config: CompiledConfig, context: ClassifyCo
     for (const cwd of isUnknown ? [...after, '/'] : after) {
       const partContext = { ...checkContext, cwd, isHeadMoved }
       const matches = config.rules.filter(rule => ruleMatches(rule, call, subject, inputJson, partContext))
-      const project = matches.find(rule => rule.source === 'project')
+      const project = matches.find(rule => rule.source === 'project' && rule.isUnconfirmed !== true)
       const shipped = matches.filter(rule => rule.source === 'shipped')
       const floor: Finding[] = shipped.filter(rule => rule.tier === 'block').map(rule => toFinding(rule, subject.label))
+      for (const rule of matches.filter(rule => rule.isUnconfirmed === true)) {
+        const finding = { ...toFinding(rule, subject.label), ...(part !== undefined && { part, cwd }) }
+        if (!unconfirmed.some(known => known.ruleId === finding.ruleId && known.subject === finding.subject)) unconfirmed.push(finding)
+      }
 
-      const protectedHit = (subject.protectedWords ?? subject.candidates).some(candidate => isProtectedPath(candidate, config, context, cwd))
-      if (protectedHit) {
+      const words = subject.protectedWords ?? subject.candidates
+      const protectedHit = words.some(candidate => isProtectedPath(candidate, config.protectedPaths, context, cwd))
+      // A write-protected path asks for a write; a shell part that only reads it, or runs what it names, is judged by the ordinary rules.
+      const writeHits = words.filter(candidate => isProtectedPath(candidate, config.writeProtectedPaths, context, cwd))
+      const isWriteHit = writeHits.length > 0 && (part === undefined || !isReadOrRun(part, writeHits, shipped))
+      if (protectedHit || isWriteHit) {
         isProtected = true
         floor.push({
           tier: 'ask',
@@ -349,10 +457,29 @@ export function classify(call: Call, config: CompiledConfig, context: ClassifyCo
 
   const decided = strictest(findings)
   return {
-    tier: decided?.tier ?? 'allow',
-    ...(decided !== undefined && { decided }),
-    findings,
-    isProtected,
-    scriptPaths: [...new Set(scriptPaths)],
+    base: {
+      tier: decided?.tier ?? 'allow',
+      ...(decided !== undefined && { decided }),
+      findings,
+      isProtected,
+      scriptPaths: [...new Set(scriptPaths)],
+      added: [],
+    },
+    unconfirmed,
   }
+}
+
+/**
+ * The tier of a call, by the rules alone: pure, no I/O.
+ *
+ * Per subject (each shell part, or the file path): a project rule of a
+ * confirmed file that matches decides first, else the strictest shipped rule
+ * that matches; shipped block rules and protected paths are a floor no project
+ * rule lowers. The call takes its strictest subject. Nothing matching is
+ * allow. The rules of a file nobody has confirmed (`isUnconfirmed`) come last,
+ * on the call as a whole, and only add (`applyAdditions`).
+ */
+export function classify(call: Call, config: CompiledConfig, context: ClassifyContext): Classification {
+  const { base, unconfirmed } = classifyBase(call, config, context)
+  return applyAdditions(base, unconfirmed)
 }

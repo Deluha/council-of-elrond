@@ -124,9 +124,6 @@ const TABLE = {
   },
   'ask.confirmAdd': { plain: 'Add it' },
   'ask.confirmCancel': { plain: 'Cancel' },
-  'ask.suggestRule': {
-    plain: 'You allowed this call once. Add an allow rule to {path}, so the same call passes from now on without review or a question? Block rules, protected paths and the secrets scan of other calls are unaffected. The exact rule:\n{json}',
-  },
   'ask.suggestAdd': { plain: 'Add the rule' },
   'ask.suggestDecline': { plain: 'Not now' },
 
@@ -374,7 +371,26 @@ const TABLE = {
   'trust.untrustOption': { plain: 'The trustProjectRules option is "always", so rules files stay trusted until it is changed.' },
 
   // The allow rule offered after "allow once" (its reason, as written to the rules file)
-  'suggest.reason': { plain: 'You allowed this exact call after the council stopped it, and added this rule.' },
+  // The question asked about that rule, by what the rule covers. Each kind says what it really allows.
+  'suggest.question.shell': {
+    plain: 'You allowed this call once. Add an allow rule to {path}? The rule allows this exact command text, in any folder, without review. Block rules, protected paths and the secrets scan of other calls are unaffected. The exact rule:\n{json}',
+  },
+  'suggest.question.file': {
+    plain: 'You allowed this call once. Add an allow rule to {path}? The rule allows every later write to this file by this tool, whatever it writes, without review. Block rules, protected paths and the secrets scan of other calls are unaffected. The exact rule:\n{json}',
+  },
+  'suggest.question.tool': {
+    plain: 'You allowed this call once. Add an allow rule to {path}? The rule allows this tool with exactly these arguments. Block rules, protected paths and the secrets scan of other calls are unaffected. The exact rule:\n{json}',
+  },
+  // The reason written into the rule, as it reads in the rules file
+  'suggest.reason.shell': {
+    plain: 'You allowed this call once after the council stopped it, and added this rule: it allows this exact command text, in any folder, without review.',
+  },
+  'suggest.reason.file': {
+    plain: 'You allowed this call once after the council stopped it, and added this rule: it allows every later write to this file by this tool, whatever it writes, without review.',
+  },
+  'suggest.reason.tool': {
+    plain: 'You allowed this call once after the council stopped it, and added this rule: it allows this tool with exactly these arguments.',
+  },
 
   // /council report (shown to the user, never to Claude)
   'report.title': { plain: 'Council report (the audit log, rotated files included)' },

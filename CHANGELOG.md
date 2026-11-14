@@ -13,7 +13,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 ### Added
 - **`/council trust`, `/council trust <code>`, `/council untrust` and the option "Trust project rules
   files".** `trust` lists what a project's rules file would enable once confirmed, all of it, each
-  setting in full with every field it has (each allow or review rule, disabled rule, model, check with
+  setting in full with every field it has (each allow rule, disabled rule, model, check with
   every argument on its own line, and secret pattern; secrets allowlist entries counted, never shown),
   with the file's code, or says why the file cannot be confirmed from the session; `trust <code>`
   confirms the file with that code, as it stands now, only if it was listed in this session;
@@ -93,12 +93,13 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 ### Changed
 - **A project's rules file is ignored where it loosens the gate or runs code, until you confirm it.
   After upgrading, your `rules.json` is untrusted until you act.** A rules file arrives with a cloned
-  repository and used to be honoured in full with nobody confirming it. Now its allow and review
-  rules, `disableRules`, `models`, `gollum.patterns`, `gollum.allowlist` and `gimli.commands` take
+  repository and used to be honoured in full with nobody confirming it. Now its allow rules,
+  `disableRules`, `models`, `gollum.patterns`, `gollum.allowlist` and `gimli.commands` take
   effect only after a person has confirmed that exact file content; until then they are as if absent
   (so a big operation whose project checks are among them is refused with "not run: the rules file is
-  not trusted"), and its block and ask rules, protected paths, protected branches, production
-  patterns and `bigOperations` still apply. **Two ways to get the old behaviour back:** run
+  not trusted"), and its block, ask and review rules (which only add to what the shipped rules decide,
+  see "Security"), protected paths, protected branches, production patterns and `bigOperations`
+  still apply. **Two ways to get the old behaviour back:** run
   `/council trust`, read what it lists and type `/council trust <code>` (any change to the file makes
   it untrusted again, and `/council untrust` takes it back); or set the new option "Trust project
   rules files" to `always` (`trustProjectRules=always`) for a host whose owner controls which
@@ -113,14 +114,25 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
     computed at run time is reviewed").
   - Plugin management commands (`claude plugin install`, `update`, `disable` and the like) ask (the
     entry "The mod protects itself").
-  - A shell command that names a path under your plugin folders asks, since they are protected
-    paths like `.claude/settings.json` (the same entry).
+  - A shell command that writes to, or may write to, your plugin folders asks; one that only reads
+    them, or runs a script they hold, does not (the entry "The plugin folders ask for a write, not a
+    read").
   - A shell command too long to review in full is never approved by a model alone and comes to you
     (the entry "A command too long to review is never approved by a model alone").
   - A force push whose branch cannot be read asks (the entry "A force push of the checked-out branch
     meets the protected-branch block").
   - A compound command shares its retry counts with its parts, so a locked-out part locks out the
     whole (the entry "Rounds, failed attempts and lockouts follow each part of a compound command").
+- **An allow rule offered after "allow once" is narrower, and the question says what it allows.** A
+  shell rule allows that exact command text, in any folder, without review. A file tool's rule allows
+  every later write to that file by that tool, whatever it writes. A rule for any other tool allows that
+  tool with exactly the same arguments (the input is pinned as its escaped JSON; no offer over 300
+  characters; the call is classified again with the rule in place before it is offered). No rule is
+  offered for a shell command with an unquoted `*`, `?`, `[`, `{` or `~` (any one counts; a quoted or
+  escaped one is still offered), nor for a big operation, since a rule would skip the full council (with
+  no current branch known, every merge counts as big). `council allow <code> session` is unavailable in
+  the same cases, because a session allowance has the offer's limits. The rule's `reason` and the
+  question say which kind of call it is.
 - **A project rule's reason is shown as the project's text.** In a reviewer's prompt it sits inside a
   data block under a lead-in that says so (not after "Flagged because"), and in the dialog it is
   shown after the `|` bar, on one line of at most 200 characters. A shipped rule's reason is as it
@@ -188,7 +200,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 
 ### Security
 - **A repository's rules file can no longer loosen the gate or run code on its own say-so.** See the
-  first entry under "Changed": its allow and review rules, disabled shipped rules, model choices,
+  first entry under "Changed": its allow rules, disabled shipped rules, model choices,
   extra secret patterns, secrets allowlist and project checks wait for a person to confirm that exact
   content (a hash in the plugin's own store); a file that has not been confirmed can never make the
   gate weaker than no file, and a project check it names is reported as not run, never dropped.
@@ -212,6 +224,68 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   are at most 64 characters, each a letter, a digit, `.`, `_` or `-`; a file with another name is
   invalid and ignored whole, like any other error, so such a name can no longer carry text into a
   refusal, a dialog or a listing.
+- **A rules file nobody has confirmed can add protection, never replace a shipped decision.** An `ask`
+  rule of such a file used to turn every call the shipped rules review (a push, a piped install
+  script, a delete) into a bare question, with no reviewer, no preview, no council, a short excerpt and
+  the file's own reason, and on a tie its reason and rule id replaced the shipped ones. Now the shipped
+  decision is made first, as if the file had no rules, and stands: its tier, rule, reason, reviewer or
+  full council, preview and checks. The file's rules only add: a `block` rule blocks; an `ask` rule puts
+  a call the shipped rules let through to you, and, on a call they review, is asked only after the
+  review approves (with the file's reason shown as the project's text; a revise or a block stands and
+  you are not asked on top; never remembered; refused where nobody can be asked; in shadow mode too);
+  a `review` rule, which now applies at once instead of waiting, reviews a call the shipped rules let
+  through and changes nothing else. A file with nothing that waits is read the same way, since nobody
+  can confirm it; a confirmed file, and the option `always`, decide first as before. The audit line
+  keeps the shipped `ruleId` and lists the file's rules that only added in the new field
+  `alsoRuleIds`. `/council trust` no longer lists review rules among what waits. (The wording of the
+  status and notice lines still says "allow or review rule(s)" and "block and ask rules"; it is left to
+  a later change.)
+- **The plugin folders ask for a write, not a read.** The protection of `**/.claude/plugins/**` made
+  every shell mention of it ask, so `cat ~/.claude/plugins/x/README.md`, `ls ~/.claude/plugins/` and
+  running a plugin skill's own script asked on each call. The folders are now on a second, built-in
+  list, for writes only (not a field of the rules file). A `Write`, `Edit` or `NotebookEdit` of a file
+  there asks, as does a shell command that names the folder unless it only reads it (`cat`, `head`,
+  `tail`, `less`, `more`, `bat`, `ls`, `tree`, `stat`, `file`, `wc`, `du`, `find`, `grep` and its kin,
+  `rg`, `ag`, `diff`, `cmp`, `sort`, `uniq`, `cut`, `jq`, `yq`, the checksum tools, `realpath`,
+  `readlink`, `basename`, `dirname`, `test`, `[`, `cd`, `pushd`; not `find -delete` or `-exec`, `jq
+  --in-place`, `yq -i`, `sort -o`, `tree -o`, `less -o`, `file -C`, a redirect into the folder) or runs
+  what it holds (the program written as a path, or the script an interpreter or shell is given), which
+  the ordinary rules judge as before (a script is reviewed). `cp`, `mv`, `rm`, `tee`, `sed -i`, `ln`,
+  `chmod`, `touch`, `install`, `rsync`, `tar`, `git -C`, an unknown program and a redirect target ask.
+  The protection of these folders is new in this release, so against the last release nothing is
+  looser. A path that is protected proper (`.env`, `.git`,
+  the settings files, the rules file) asks for any mention.
+- **More classifier gaps are closed.** Recursive `rm` is blocked when `--recursive` or
+  `--no-preserve-root` is written as a unique prefix, for another user's home (`~user`) and for a
+  defaulted home expansion (`${HOME:-/}`); a write to a disk device is blocked when the device is
+  written with extra slashes or dots, or relative to a folder the command first enters. The force and
+  delete flags of `git push` are read as git reads them (clusters with digits or other letters, long
+  options by unique prefix); a force push whose destination is computed asks; a force push after a
+  command in the same call that can switch the current branch (checkout, switch, reset and the like, an
+  unknown git subcommand, or code that is not read) asks, while a protected branch read before the call
+  still blocks; `git send-pack` and `hub push` are read like `git push`; `git subtree push`,
+  `git lfs push` and `jj git push` are reviewed. Code fed to an interpreter through `/dev/stdin`, a
+  descriptor path, a process substitution or `<&0` is reviewed; the option tables were completed, and
+  an option the tool does not know on a fed interpreter is reviewed; more interpreters and inline-code
+  flags are covered; `python -m` of a module that runs the code it is given (`code`, `asyncio`,
+  `timeit`, `pdb`, `runpy`, `idlelib`, `IPython`, `ptpython`, `bpython`) is reviewed.
+- **Command lines handed to other programs are classified like `sh -c`.** `tmux` (`send-keys`,
+  `run-shell`, `if-shell`, `respawn-window`, `display-popup`, `pipe-pane`, `set-hook`,
+  `confirm-before`, `bind-key`, `\;` lists, unique command prefixes), `screen`, `zellij`,
+  `nix develop|shell|run`, `git submodule foreach`, `git bisect run`, `git rebase --exec`, the filters
+  of `git filter-branch`, `find -exec` and `-ok`, `entr` and `parallel`. A key sequence or a command
+  file that cannot be read is reviewed (new rule `command-unreadable`).
+- **More forms are reviewed.** `curl` data options attached or clustered and methods other than GET,
+  `wget` and HTTPie bodies, `gh` writes, more `git rm`, `git checkout` of paths,
+  `git switch --discard-changes` and `git branch -df`, `awk` and `sed` that run commands or write
+  files, more cloud deletes, and `tar` or `unzip` extracting outside the project (new rule
+  `extract-outside-project`, reviewed only when extracting).
+- **The mod protects itself further.** `plugin-manage` sees global options before `plugin`, options
+  between its words, the CLI's short aliases and `npx @anthropic-ai/claude-code@<version>`. A new ask
+  rule, `claude-session`, covers starting a nested Claude Code session (`-p`, `--bare`, `--settings`,
+  `--plugin-dir`, a permission bypass, `CLAUDE_*` assignments) and `claude mcp add|remove`,
+  `claude config set`.
+- **A shipped pattern that was slow on long input is now linear.**
 - **A reformatted command is reviewed again.** An approval used to be reused for a later command that differed only in whitespace. Whitespace can change what a shell command does, so the verdict cache and chat approvals now match a command exactly.
 - **A heredoc body is read when the shell expands it.** With an unquoted delimiter (`<<EOF`,
   `<<-EOF`) the shell runs the `$(...)` and backticks in the body; those commands are now classified
@@ -241,7 +315,8 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   `claude plugin marketplace add|remove|rm|update` now ask (`plugin-manage`); `claude plugin test`,
   `validate`, `list` and `eval` do not. Your plugin folders (`**/.claude/plugins/**`) are protected
   paths like `.claude/settings.json`, which already covered `~/.claude/settings.json` and
-  `~/.claude/settings.local.json`.
+  `~/.claude/settings.local.json`. (Amended below: the plugin folders are protected against writes
+  only.)
 - **Allowed calls are scanned for high-confidence secrets.** A literal key in an allowed `curl` or
   `echo` used to reach the network or the transcript unscanned; it is now refused, as on a gated
   call, and logged with tier `allow` so `/council report` counts it. Low-confidence findings on an

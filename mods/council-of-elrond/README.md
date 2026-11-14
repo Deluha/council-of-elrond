@@ -56,6 +56,17 @@ fed to a shell, and the `$(...)` and backticks in the body of a heredoc with an 
 which the shell expands) are split, and the strictest part decides. A heredoc with a quoted delimiter
 (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) is plain data.
 
+**Classified as the command they run.** A command line handed to another program is read like the
+argument of `sh -c`, and each command in it is judged on its own: `script -c`, `su -c`,
+`nix-shell --run`, `env -S`, `tmux` (`send-keys`, `run-shell`, `if-shell`, `new-session`, `new-window`,
+`split-window`, `respawn-pane`, `respawn-window`, `display-popup`, `pipe-pane`, `set-hook`,
+`confirm-before`, `bind-key`, commands joined with `\;`, and a command written by any unique
+prefix), `screen`, `zellij`, `nix develop|shell|run`, `git submodule foreach`, `git bisect run`,
+`git rebase --exec`, the filters of `git filter-branch`, `find -exec`, `-execdir`, `-ok` and `-okdir`,
+`entr` and `parallel`. A key sequence or a command file that cannot be read (several tmux keys typed
+at once, `tmux source-file`, `screen -X source`, `zellij action write`) is reviewed instead
+(rule `command-unreadable`).
+
 Shipped defaults:
 
 - **Block:**
@@ -72,27 +83,52 @@ Shipped defaults:
   - a force push of the current branch when the branch it would overwrite cannot be determined
     (rule `force-push-unknown-branch`): a detached HEAD, git failing or timing out, or git pointed
     elsewhere (`git -C`, `GIT_DIR=`, a `cd` out of the project). It is asked about, not blocked, as
-    the branch may well be a feature branch;
+    the branch may well be a feature branch. The same rule asks for a force push whose destination is
+    computed (`HEAD:$B`, `"$(git branch --show-current)"`), and for a force push of the current branch
+    that follows a command in the same call that can switch it (`git checkout`, `switch`, `reset`
+    and the like, a git subcommand the mod does not know, or code it does not read: an interpreter,
+    a script by its path, a program named by a variable). A protected branch read before the call
+    still blocks. Force and delete flags are read as git reads them (clusters with digits or other
+    letters, long options by unique prefix), and `git send-pack` and `hub push` are read like
+    `git push`;
   - installing, updating, enabling, disabling or removing a Claude Code plugin or marketplace
     (`claude plugin disable|uninstall|remove|rm|update|install|enable`, `claude plugin marketplace
-    add|remove|rm|update`; rule `plugin-manage`). `claude plugin test`, `validate`, `list` and `eval`
-    are not asked about;
+    add|remove|rm|update`, the CLI's short aliases (`i`, `rm`) and its other management actions, with
+    global options before `plugin` or options between the words, through a path to the binary or
+    `npx @anthropic-ai/claude-code@<version>`; rule `plugin-manage`). `claude plugin test`, `validate`,
+    `list` and `eval` are not asked about;
+  - starting a nested Claude Code session, or changing its servers or configuration: `-p`, `--bare`,
+    `--settings`, `--setting-sources`, `--plugin-dir`, `--mcp-config`, `--permission-mode`, a permission
+    bypass, a `CLAUDE_*` variable set for it, `claude mcp add|remove` (and its other changing actions)
+    and `claude config set` (rule `claude-session`);
   - anything touching a protected path, wherever it appears in the command: as a word, as the value of a wrapper or runner option (`op run --env-file=.env`, `mise x -C .git`, `uv run --env-file`, `npm exec --userconfig`), after `=` (`dd of=`, `NAME=path`) or glued to an option. `.env*`, `Jenkinsfile`, migrations folders, and the entries below. The entries written with a leading `**/` hold in every repository below the session root, at any depth, the rules file included (`app/.claude/council-of-elrond/rules.json`), and so does the directory itself (`rm -rf app/.git` asks). A path outside the session root is matched by its absolute form, so another repository's `.git/` or your user `~/.claude/settings.json` (which holds hooks and permissions) asks too:
     - `**/.github/workflows/**`, `**/.gitlab-ci.yml`, `**/.circleci/**`, `**/.buildkite/**`;
     - `**/db/migrate/**`;
     - `**/.git/**`;
     - `**/.claude/council-of-elrond/**`, `**/.claude/settings.json`, `**/.claude/settings.local.json`;
-    - `**/.claude/plugins/**`, which covers your user plugin folders (`~/.claude/plugins/`) and, because it is written with `**/`, a `.claude/plugins/` folder in any repository.
+  - **a write to your plugin folders.** `**/.claude/plugins/**` covers your user plugin folders (`~/.claude/plugins/`) and, because it is written with `**/`, a `.claude/plugins/` folder in any repository. It is a second, built-in list, for writes only: not a field of the rules file, so a project can neither add to it nor empty it. A file write or edit there asks. A shell command that names a path there asks unless it only reads it or runs what it holds:
+    - it reads when its program is one of `cat`, `head`, `tail`, `less`, `more`, `bat`, `ls`, `tree`, `stat`, `file`, `wc`, `du`, `find`, `grep`, `egrep`, `fgrep`, `rg`, `ag`, `diff`, `cmp`, `sort`, `uniq`, `cut`, `jq`, `yq`, `md5sum`, `sha1sum`, `sha256sum`, `shasum`, `realpath`, `readlink`, `basename`, `dirname`, `test`, `[`, `cd` and `pushd`, and the path is one of its operands. Not when an option of it writes (`find -delete`, `-exec`, `-execdir`, `-ok`, `-okdir`, `-fprint*`, `-fls`; `jq --in-place`; `yq -i`; `sort -o` and `-T`; `tree -o`; `less -o` and `-O`; `file -C`; `uniq` with an output file), when a redirect of the command names the path, when a wrapper or an assignment names it (`time -o`, `X=path cat`), or when a wrapper's option was not read in full (`timeout --weird 5 cat path`);
+    - it runs when the path is the program (`~/.claude/plugins/x/bin/tool --help`) or the script an interpreter or a shell is given (`python3 ~/.claude/plugins/x/run.py`, `bash ~/.claude/plugins/x/run.sh`), and no code flag or piped code comes with it. The ordinary rules then judge it, so a script is reviewed (`script-file`, `script-shell`, `script-path`) as it was before the folder was protected.
+
+    Every other command that names the folder asks: `cp`, `mv`, `rm`, `tee`, `sed -i`, `ln`, `chmod`, `touch`, `install`, `rsync`, `tar`, `git -C`, a program the mod does not know, a redirect target. A path that is protected proper (`.env`, `.git`, the settings files, the rules file) asks for any mention, a read included.
 - **Review:**
   - file writes and edits;
   - deletes, moves, in-place edits, writes through a redirect;
-  - git operations that change a remote or history, or discard work;
+  - git operations that change a remote or history, or discard work (`git rm` of a tree or by force, `git checkout` of paths, `git switch --discard-changes`, `git branch -df`), and the pushes that are not `git push` itself: `git subtree push`, `git lfs push` and `jj git push`;
   - database clients and migrations;
-  - infrastructure changes, network writes, publishing;
+  - infrastructure changes, including more cloud deletes (`gsutil rm`, `aws s3 rb`, `pulumi destroy`), network writes (a `curl` data option attached or clustered, a method other than GET, `wget` bodies, HTTPie bodies and methods) and publishing, `gh` writes included;
+  - `awk` and `sed` programs that run a command or write a file;
+  - extracting an archive (`tar -x`, `unzip`) into a folder outside the project, or one only known at run time (rule `extract-outside-project`); other uses of `tar` and `unzip` are not matched;
+  - a command line handed to another program in a form that cannot be read: a key sequence of several tmux keys, a command file, an ambiguous tmux command prefix (rule `command-unreadable`);
   - running scripts or inline code, including code fed to an interpreter on its standard input (a
     pipe, a heredoc, a here-string or a `<` redirect into `python3`, `node`, `perl`, `ruby`, `php`,
-    `deno`, `bun`, `Rscript` or `lua` with no script named; rule `script-stdin`), and a code flag
-    written attached or in a cluster (`python3 -Bc`, `perl -ne`, `node -pe`, `php -r'...'`);
+    `deno`, `bun`, `Rscript` or `lua` with no script named; rule `script-stdin`), also when the script
+    is `/dev/stdin`, a descriptor path (`/dev/fd/3`), a process substitution or `<&0`, and when an
+    option the mod's tables do not know comes before a script on a fed interpreter (it may take the
+    script's place). Many more interpreters and their inline-code flags are covered, and a code flag
+    is read attached or in a cluster (`python3 -Bc`, `perl -ne`, `node -pe`, `php -r'...'`).
+    `python -m` of a module that runs the code it is given (`code`, `asyncio`, `timeit`, `pdb`,
+    `runpy`, `idlelib`, `IPython`, `ptpython`, `bpython`) is reviewed;
   - a first word the shell builds at run time, such as a variable, a substitution, a glob, a bracket
     expression or a brace list in the program position (`shell-dynamic-program`; an unquoted `$IFS`
     or `${IFS}` is read as a space first, and a flat literal brace list is read as the command it
@@ -254,10 +290,10 @@ Put project overrides in `.claude/council-of-elrond/rules.json`:
 - `id` (a rule, and a secret pattern) and a check's `name`: at most 64 characters, each a letter, a digit, `.`, `_` or `-`. A file with another name is broken, like any other error.
 
 **How overrides combine with the shipped rules:**
-- **Overrides win.** A matching project rule decides before the shipped rules.
+- **Overrides win.** A matching project rule of a confirmed file decides before the shipped rules. A file nobody has confirmed only adds to what the shipped rules decide ([Trusting a project's rules file](#trusting-a-projects-rules-file)).
 - **Two things can't be lowered.** No project rule goes below a shipped block rule or a protected path, and block rules can't be disabled.
 - **Lists only grow.** Lists add to the shipped ones.
-- **Some settings wait for you.** Until you confirm the file with `/council trust`, its allow and review rules, disabled rules, models, patterns, allowlist and checks are ignored ([Trusting a project's rules file](#trusting-a-projects-rules-file)).
+- **Some settings wait for you.** Until you confirm the file with `/council trust`, its allow rules, disabled rules, models, patterns, allowlist and checks are ignored ([Trusting a project's rules file](#trusting-a-projects-rules-file)).
 - **A project rule's reason is the project's text.** Reviewers see it inside a data block under a lead-in that says so, not after "Flagged because", and the dialog shows it after the `|` bar. Claude's refusal and the audit line introduce it as "The project's rules file says" and never as the council's own sentence. Everywhere it is on one line of at most 200 characters, with control, invisible and direction-changing characters removed.
 
 **A broken file is ignored whole.** The shipped rules stay in force, and the errors are listed by
@@ -279,14 +315,30 @@ code wait until you confirm that exact file.
 
 | Applies at once | Waits until you confirm the file |
 | :- | :- |
-| `block` and `ask` rules, `protectedPaths`, `protectedBranches`, `productionPatterns`, `bigOperations` | `allow` and `review` rules, `disableRules`, `models`, `gollum.patterns`, `gollum.allowlist`, `gimli.commands` |
+| `block`, `ask` and `review` rules (they only add, see below), `protectedPaths`, `protectedBranches`, `productionPatterns`, `bigOperations` | `allow` rules, `disableRules`, `models`, `gollum.patterns`, `gollum.allowlist`, `gimli.commands` |
+
+**A file nobody has confirmed can add protection, never replace a shipped decision.** The shipped
+rules decide the call first, as if the file held no rules, and what they decide stands: its tier,
+its rule, its reason, the reviewer or the full council, the preview and the checks. The file's rules
+then add to it:
+
+| The file's rule | The shipped rules let the call through | The shipped rules review it | The shipped rules ask | The shipped rules block |
+| :- | :- | :- | :- | :- |
+| `block` | blocked, with the file's reason shown as the project's text | blocked, likewise | blocked, likewise | the shipped block stands |
+| `ask` | comes to you | reviewed as the shipped rules say, and, only if the review approves, then put to you with the file's reason shown as the project's text. A revise or a block stands and you are not asked on top. Never remembered, so a repeat is reviewed and asked again; where nobody can be asked, it is refused | the shipped ask stands | the shipped block stands |
+| `review` | reviewed by one reviewer | nothing changes | nothing changes | nothing changes |
+
+A rule that only adds (it asks after a review, or it matched where the shipped rules had already decided) is listed in the audit line (`alsoRuleIds`); `ruleId` keeps the shipped rule.
+So such a file can never leave a call with less review, a thinner preview or a smaller council than
+having no file: it only adds a question or a block, or a review where there was none. A file with
+nothing that waits has nothing to confirm, so its rules are read the same way; the option set to
+`always` and a file you confirmed decide first, as a project's rules always did.
 
 Until then the waiting settings are as if absent: an allow rule lets nothing through, a shipped
 rule you disabled still fires, the built-in models are used, your patterns are not applied, and the
 project checks are not run. A big operation whose checks are among them is refused with "not run:
 the rules file is not trusted", the same as a check that could not be started, so a check the
-project asked for is never dropped silently. A `review` rule waits because a project rule decides
-before a shipped one and can lower a shipped `ask` to a review.
+project asked for is never dropped silently. (The `/council trust` listing names an unconfirmed file's `allow` rules only: its `review`, `ask` and `block` rules apply already.)
 
 **Telling you.** Once per session per file the council says, in a transcript line and a toast, that
 the file has settings that are ignored, with counts and no text from the file. Where nothing draws
@@ -297,7 +349,7 @@ content), trusted by the option, or not trusted, with how many settings are igno
 **Confirming.**
 - `/council trust` lists, for each file in scope that has settings waiting (a session root that
   holds several repositories has one per repository), every one of them, none left behind a "more":
-  each allow or review rule with every field it has (id, tier, tools, command, path, input, check,
+  each allow rule with every field it has (id, tier, tools, command, path, input, check,
   member, profile and reason), each disabled rule, each model, each check's name, timeout and every
   argument on a line of its own in quotes, and each secret pattern's id, level, regex, label and kind.
   One value per line after a `|` bar, as the file has it: not cut and not redacted. Secrets
@@ -592,8 +644,8 @@ line of your own that holds nothing else:
   that is not yours, such as a finished task) or when it is used, whichever is first. A session
   allowance lasts until `/clear` and survives your messages; it is offered only where an allow rule
   could be (not for a script, a long or multi-line command, a command whose words expand when it
-  runs, or one with a possible secret in it: for those `session` records nothing and Claude says so,
-  and you type the once form).
+  runs or that has an unquoted `*`, `?`, `[`, `{` or `~`, a big operation, or one with a possible
+  secret in it: for those `session` records nothing and Claude says so, and you type the once form).
 - **The folder is part of the call.** The code, and a once or session allowance, stand for the call
   in the working folder it was refused in. The folder follows a `cd` between Claude's commands, so
   the same call made from another folder is another call: it is refused again, with a code of its
@@ -708,23 +760,32 @@ the question, writes nothing, and the same rule isn't offered again this session
   "tier": "allow",
   "tools": ["Bash"],
   "command": "^apt update$",
-  "input": "\"command\":\" *sudo +apt +update *\"",
-  "reason": "You allowed this exact call after the council stopped it, and added this rule."
+  "input": "^(?!.*\"dangerouslyDisableSandbox\":true).*\"command\":\" *sudo +apt +update *\"",
+  "reason": "You allowed this call once after the council stopped it, and added this rule: it allows this exact command text, in any folder, without review."
 }
 ```
 
-The rule is as narrow as the call. `command` names the part that was gated, and `input` pins the
-whole command, so `sudo`, a redirect (`> file`) or another command chained on can't ride along.
-Only the same command passes (spacing may differ). A file edit gets that tool on that path; an MCP
-tool gets that tool by name. Before offering it, the council checks that the rule would really let
-this call through. If one of your own rules would still decide first, nothing is offered.
+The question says what the rule allows, by kind of call:
+
+- **A shell command:** exactly that command text, in any folder, without review. `command` names the
+  part that was gated, and `input` pins the whole command (and a call with the sandbox disabled is
+  left out), so `sudo`, a redirect (`> file`) or another command chained on can't ride along. Only the
+  same command passes (spacing may differ).
+- **A file tool (`Write`, `Edit`, `NotebookEdit`):** every later write to that file by that tool,
+  whatever it writes, without review. The rule pins the tool and the path, not the content.
+- **Any other tool (an MCP tool, for one):** that tool with exactly the same arguments. The input is
+  pinned as its JSON text, escaped; an input over 300 characters is not offered a rule.
+
+Before offering it, the council checks that the rule would really let this call through. If one of
+your own rules would still decide first, nothing is offered.
 
 No rule is offered for:
 
 - a call the rules block, or one touching a protected path;
 - a call the secrets scan flagged at any level (an allow rule would skip the low-confidence scan);
 - a script or inline code (what runs isn't in the command);
-- a command whose words expand when it runs (`$VAR`, `$(…)`, backticks), one over several lines, or one over 300 characters;
+- a command whose words expand when it runs (`$VAR`, `$(…)`, backticks), one with an unquoted `*`, `?`, `[`, `{` or `~` (any one counts, even unpaired; a quoted or escaped one is still offered), one over several lines, or one over 300 characters;
+- a big operation (a push, a merge into a protected branch, a migration, anything your `bigOperations` list): an allow rule would skip the full council from then on. When the current branch is not known, as here, every merge counts as big;
 - a call you then refused at Claude Code's own prompt, or one that didn't run.
 
 A broken `rules.json` is never rewritten: the rule isn't written, and a transcript line says why.
@@ -778,6 +839,8 @@ substitutions in an unquoted heredoc body. The gaps that remain:
 - **Wrapper and runner options are read as the program reads them, and an unknown one means review.** Clusters are read letter by letter (`timeout -vs KILL 5`, `env -iu NAME`), long options by unique prefix, and global options before a runner's subcommand (`pnpm -r exec`, `npm -s exec`, `yarn workspace web exec`, `uv -q run`). An option the mod's tables do not list sends the call to review. A wrapper or runner that changes the directory or the root (`env -C`, `sudo -D`/`-R`, `chroot`, `nsenter`, `mise -C`, `npm --prefix`, `pnpm --dir`, `uv --directory`) is judged from `/` as well as from where the session is.
 - **A protected path counts wherever the command names it.** Every word as written, the value of `name=value` and `--opt=value`, and a value glued to an option are tested, including a wrapper's or runner's own option value (`op run --env-file=.env`, `fakeroot -s .env`, `firejail --profile=.env`).
 - **Code inside interpreters isn't parsed.** `python -c "shutil.rmtree('/')"` is review (script execution); the reviewer sees the code, but no rule reads it. The same holds for code fed on standard input and for a script file's contents.
+- **tmux key sequences of several keys are reviewed, not read.** `tmux send-keys` with one word reads that word as a command line; several keys typed at once (`send-keys ls Space -l Enter`) cannot be turned into the line they type, so the call is reviewed (`command-unreadable`), as is a command file a multiplexer is told to load.
+- **`nix run` is judged by the app name only.** `nix run nixpkgs#curl -- …` is read as `curl …`; what the flake's app really runs is not known.
 - **Encoded or downloaded payloads** (`base64 -d | sh`, `curl | sh`) are caught only as "piped into a shell" (review).
 - **Shell symbolic links aren't resolved.** File-tool paths are resolved to their real path; paths in shell commands are not.
 - **Two-sided glob intersection isn't computed.** A glob that names a protected file directly (`cat .en*`) is caught, but a glob with a wildcard in a middle segment against a protected `**` glob (`cat .github/*/ci.yml`) may not be.

@@ -5,20 +5,33 @@ import type { Rule } from '../config/types.js'
 import { classify, FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
 import type { Call, Classification, ClassifyContext } from '../rules/classify.js'
 import { text } from '../strings.js'
+import { bigOperationOf } from './council.js'
 
 /**
  * After "allow once": the allow rule the user may add for that call, shown
  * as the exact JSON and written only on their confirm (register.ts).
  *
- * The rule is as narrow as the call. A shell rule anchors `command` on the
- * gated part's core and pins the whole command text through `input`, so a
- * wrapper (`sudo`), a redirect or another part the core does not show can't
- * ride on it. Before it is offered, the call is classified again with the
+ * The rule is as narrow as the call, except for a file tool. A shell rule
+ * anchors `command` on the gated part's core and pins the whole command text
+ * through `input`, so a wrapper (`sudo`), a redirect or another part the core
+ * does not show can't ride on it; it holds in any folder. A file tool's rule
+ * pins the tool and the path only, so it allows every later write to that file
+ * by that tool, whatever it writes. Any other tool's rule pins the tool and its
+ * whole input. Before it is offered, the call is classified again with the
  * rule in place: it is offered only if it would make this call allow.
+ *
+ * No rule is offered for a big operation (an allow rule would skip the full
+ * council from then on), nor for a shell command whose unquoted words the
+ * shell expands (globs, braces, `~`, `$`, backticks): the text would not pin
+ * what the command touches.
  */
+
+/** What the rule covers; decides the question's and the reason's wording. */
+export type SuggestionKind = 'shell' | 'file' | 'tool'
 
 export type Suggestion = {
   rule: Rule
+  kind: SuggestionKind
   /** What identifies the pattern, whatever its id: a declined one is not offered again. */
   key: string
 }
@@ -30,19 +43,43 @@ export type NoSuggestion =
   | 'script'
   | 'unparsed'
   | 'expansion'
+  | 'big'
   | 'too-long'
   | 'declined'
   | 'not-allowed'
 
 export type Suggested = { kind: 'rule'; suggestion: Suggestion } | { kind: 'none'; why: NoSuggestion }
 
-/** Longer commands are not offered a rule: the dialog shows the rule whole. */
+/** Longer commands, and longer tool inputs, are not offered a rule: the dialog shows the rule whole. */
 const MAX_COMMAND_CHARS = 300
 
 const MAX_ID_CHARS = 40
 
 /** Words whose meaning is decided only when the command runs: the text does not pin the target. */
 const EXPANDS = /[$`]/
+
+/** The characters the shell expands when they are not quoted: globs, braces and the home folder. */
+const UNQUOTED_EXPANDS = '*?[{~'
+
+/**
+ * Whether the command has one of `UNQUOTED_EXPANDS` outside quotes. A character
+ * inside quotes, or after a backslash, is literal. Any such character counts,
+ * paired or not: the safer reading. An unclosed quote hides the rest.
+ */
+function expandsUnquoted(command: string): boolean {
+  let quote: string | undefined
+  for (let index = 0; index < command.length; index++) {
+    const char = command.charAt(index)
+    if (quote === "'") {
+      if (char === "'") quote = undefined
+    } else if (char === '\\') index++
+    else if (quote === '"') {
+      if (char === '"') quote = undefined
+    } else if (char === "'" || char === '"') quote = char
+    else if (UNQUOTED_EXPANDS.includes(char)) return true
+  }
+  return false
+}
 
 const SCRIPT_RULES = /^script-/
 
@@ -80,7 +117,7 @@ function shellPattern(call: Call, classification: Classification): Pattern | NoS
   const parts = classification.findings.flatMap(finding => (finding.part !== undefined ? [finding.part] : []))
   if (parts.length === 0) return 'unparsed'
   if (parts.some(part => part.coreWords.some(word => word === '' || EXPANDS.test(word) || /\s/.test(word)))) return 'expansion'
-  if (EXPANDS.test(command)) return 'expansion'
+  if (EXPANDS.test(command) || expandsUnquoted(command)) return 'expansion'
   const cores = [...new Set(parts.map(part => part.core))]
   const anchored = cores.map(escapeRegex)
   const words = command.split(/ +/)
@@ -101,6 +138,13 @@ function filePattern(classification: Classification, tool: string): Pattern | No
   const [path] = subjects
   if (subjects.length !== 1 || path === undefined) return 'unparsed'
   return { tools: [tool], path: `^${escapeRegex(path)}$` }
+}
+
+/** Any other tool: the tool with exactly this input, pinned as the JSON text the rules see. */
+function toolPattern(call: Call): Pattern | NoSuggestion {
+  const json = JSON.stringify(call.input)
+  if (json.length > MAX_COMMAND_CHARS) return 'too-long'
+  return { tools: [call.tool], input: `^${escapeRegex(json)}$` }
 }
 
 /** The config with `rule` as the last project rule: project rules decide in file order. */
@@ -135,11 +179,13 @@ export function suggestRule(
   if (classification.findings.some(finding => UNPARSED_RULES.has(finding.ruleId))) return none('unparsed')
   if (classification.findings.some(finding => SCRIPT_RULES.test(finding.ruleId))) return none('script')
 
-  const pattern: Pattern | NoSuggestion = SHELL_TOOLS.has(call.tool)
-    ? shellPattern(call, classification)
-    : FILE_PATH_FIELDS[call.tool] !== undefined
-      ? filePattern(classification, call.tool)
-      : { tools: [call.tool] }
+  // An allow rule would skip the full council for it from then on. The current
+  // branch is not known here: a merge then counts as big, the safer reading.
+  if (bigOperationOf(classification, compiled) !== undefined) return none('big')
+
+  const kind: SuggestionKind = SHELL_TOOLS.has(call.tool) ? 'shell' : FILE_PATH_FIELDS[call.tool] !== undefined ? 'file' : 'tool'
+  const pattern: Pattern | NoSuggestion =
+    kind === 'shell' ? shellPattern(call, classification) : kind === 'file' ? filePattern(classification, call.tool) : toolPattern(call)
   if (typeof pattern === 'string') return none(pattern)
   // A tool name with glob or regex syntax would match more than this tool.
   if (/[*?]|^\//.test(call.tool)) return none('unparsed')
@@ -153,7 +199,7 @@ export function suggestRule(
     id: idFor(first ?? (FILE_PATH_FIELDS[call.tool] !== undefined ? `${call.tool}-${classification.findings[0]?.subject ?? ''}` : call.tool), taken),
     tier: 'allow',
     ...pattern,
-    reason: text('suggest.reason', {}, 'plain'),
+    reason: text(`suggest.reason.${kind}`, {}, 'plain'),
   }
   if (validateOverrides({ schemaVersion: 1, rules: [rule] }).overrides === undefined) return none('not-allowed')
   const applied = withRule(compiled, rule)
@@ -163,8 +209,12 @@ export function suggestRule(
     const sandboxed = { ...call, input: { ...call.input, dangerouslyDisableSandbox: true } }
     if (classify(sandboxed, applied, where).tier === 'allow') return none('not-allowed')
   }
-  return { kind: 'rule', suggestion: { rule, key } }
+  return { kind: 'rule', suggestion: { rule, kind, key } }
 }
 
 /** The rule as the dialog shows it, and as it is written: the same pretty-printed JSON. */
 export const ruleJson = (rule: Rule): string => JSON.stringify(rule, null, 2)
+
+/** The question asked about the rule: what it allows, by kind, and the exact rule. */
+export const suggestQuestion = (suggestion: Suggestion, path: string): string =>
+  text(`suggest.question.${suggestion.kind}`, { path, json: ruleJson(suggestion.rule) })

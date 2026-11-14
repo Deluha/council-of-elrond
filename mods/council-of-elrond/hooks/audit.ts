@@ -28,6 +28,11 @@ export type AuditRecord = {
   opKey: string | null
   tier: string
   ruleId: string | null
+  /**
+   * The ids of rules from a project rules file nobody had confirmed that also
+   * matched: they only added to the shipped decision, whose id `ruleId` keeps.
+   */
+  alsoRuleIds?: readonly string[]
   member: string | null
   profile: string | null
   model: string | null
