@@ -1,5 +1,7 @@
+import { redact, SECRET_PATTERNS } from '../redact.js'
+import type { SecretPattern } from '../redact.js'
 import type { GIMLI_KEYS, GOLLUM_KEYS, TOP_KEYS } from './schema.js'
-import type { ModelSlot, Overrides, Rule, Tier } from './types.js'
+import type { GimliCommand, GollumPattern, ModelSlot, Overrides, Rule, Tier } from './types.js'
 
 /**
  * Which settings of a project's rules file take effect before anyone has
@@ -61,15 +63,18 @@ export const TIER_TRUST: Readonly<Record<Tier, 'always' | 'needs-trust'>> = {
   block: 'always',
 }
 
-/** What confirming a file would switch on, by kind: every value is from the file, so shown only cleaned. */
+/**
+ * What confirming a file would switch on, by kind, each item whole (every field the schema allows on it, so
+ * the listing cannot leave one out). Every value is from the file: shown only cleaned, never cut or redacted.
+ */
 export type TrustSummary = {
-  rules: { id: string; tier: Tier; tools: readonly string[]; command?: string; path?: string; input?: string }[]
+  rules: Rule[]
   disabledRules: string[]
   /** How many entries; never the entries, which may be exact secrets. */
   allowlist: number
   models: { slot: ModelSlot; model: string }[]
-  checks: { name: string; argv: readonly string[] }[]
-  patterns: { id: string }[]
+  checks: GimliCommand[]
+  patterns: GollumPattern[]
 }
 
 export type TrustCounts = { rules: number; disabled: number; allowlist: number; models: number; checks: number; patterns: number; total: number }
@@ -127,19 +132,12 @@ export function splitByTrust(overrides: Overrides): Split {
   }
   const held = needs as unknown as Overrides
   const summary: TrustSummary = {
-    rules: (held.rules ?? []).map(rule => ({
-      id: rule.id,
-      tier: rule.tier,
-      tools: rule.tools,
-      ...(rule.command !== undefined && { command: rule.command }),
-      ...(rule.path !== undefined && { path: rule.path }),
-      ...(rule.input !== undefined && { input: rule.input }),
-    })),
+    rules: (held.rules ?? []).map(rule => ({ ...rule })),
     disabledRules: [...(held.disableRules ?? [])],
     allowlist: held.gollum?.allowlist?.length ?? 0,
     models: Object.entries(held.models ?? {}).map(([slot, model]) => ({ slot: slot as ModelSlot, model: model as string })),
-    checks: (held.gimli?.commands ?? []).map(command => ({ name: command.name, argv: command.argv })),
-    patterns: (held.gollum?.patterns ?? []).map(pattern => ({ id: pattern.id })),
+    checks: (held.gimli?.commands ?? []).map(command => ({ ...command })),
+    patterns: (held.gollum?.patterns ?? []).map(pattern => ({ ...pattern })),
   }
   return { always: always as unknown as Overrides, needsTrust: held, summary, counts: countsOf(summary) }
 }
@@ -199,26 +197,66 @@ export async function hashOf(text: string): Promise<string> {
   return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
-/** What a person types to confirm a file: the start of its hash. */
+/** What a person types to confirm a file: 8 hex characters, derived from a per-session secret and the file's hash. */
 export const CODE_CHARS = 8
 
-export const codeOf = (hash: string): string => hash.slice(0, CODE_CHARS)
+/**
+ * The code shown for a file's content: the start of SHA-256 over the session's nonce and the content hash. The
+ * nonce is never shown or written, so the code cannot be worked out from the file alone (DESIGN §16).
+ */
+export const codeOf = async (nonce: string, hash: string): Promise<string> => (await hashOf(`${nonce}${hash}`)).slice(0, CODE_CHARS)
 
-/** A typed code: at least CODE_CHARS hex characters (more of the hash is accepted). */
-export const isCode = (value: string): boolean => /^[0-9a-f]{8,64}$/.test(value)
+/** A typed code: exactly CODE_CHARS hex characters. */
+export const isCode = (value: string): boolean => /^[0-9a-f]{8}$/.test(value)
 
 export type CodeMatch<T> = { kind: 'none' } | { kind: 'ambiguous' } | { kind: 'match'; files: T[] }
 
 /**
- * The files whose current hash starts with the code. Several files with the
- * very same content share a code and are confirmed together (the person saw
- * that content); matches with different content confirm nothing.
+ * The files whose code is the one typed. Several files with the very same
+ * content share a code and are confirmed together (the person saw that
+ * content); matches with different content confirm nothing.
  */
-export function matchCode<T extends { hash: string }>(files: readonly T[], code: string): CodeMatch<T> {
-  const found = files.filter(file => file.hash.startsWith(code))
+export function matchCode<T extends { hash: string; code: string }>(files: readonly T[], code: string): CodeMatch<T> {
+  const found = files.filter(file => file.code === code)
   const [first] = found
   if (first === undefined) return { kind: 'none' }
   return found.every(file => file.hash === first.hash) ? { kind: 'match', files: found } : { kind: 'ambiguous' }
+}
+
+// What the listing shows of the file's own text, and what makes a file impossible to confirm from the session
+// (DESIGN §16): a value is shown whole and as it is, or the file is not confirmed on the strength of the listing.
+
+/** At most this many held-back settings in one file can be confirmed from the session. */
+export const MAX_ITEMS = 40
+
+/** The longest a value may be, after cleaning, to be confirmed from the session. */
+export const MAX_VALUE_CHARS = 400
+
+// What a terminal can be made to act on or to hide: C0 and C1 controls, DEL, and the Unicode line and paragraph separators.
+const CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g
+
+// What changes how text reads without showing: direction marks and overrides, isolates, zero-width and joining characters, the byte order mark.
+const HIDDEN = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g
+
+/** A value from a file with controls replaced by a space and invisible or direction-changing characters removed. */
+export const cleanText = (value: string): string => value.replace(CONTROLS, ' ').replace(HIDDEN, '')
+
+export type Inspected = {
+  /** The value cleaned: whole, not cut and not redacted. */
+  text: string
+  /** The value, or its cleaned form, is one `redact()` would change: it may hold a secret. */
+  isSecret: boolean
+  /** The cleaned value is over MAX_VALUE_CHARS. */
+  isLong: boolean
+  /** Cleaning removed or replaced something: the value held a character the person could not see or that a terminal acts on. */
+  isUnclean: boolean
+}
+
+/** One value of a held-back setting, looked at once: what the listing may show of it and what it does to the file's confirmability. */
+export function inspectValue(value: string, patterns: readonly SecretPattern[]): Inspected {
+  const text = cleanText(value)
+  const changes = (candidate: string): boolean => redact(candidate, SECRET_PATTERNS) !== candidate || redact(candidate, patterns) !== candidate
+  return { text, isSecret: changes(value) || changes(text), isLong: text.length > MAX_VALUE_CHARS, isUnclean: text !== value }
 }
 
 /** The `trustProjectRules` option: `always` or anything else (`confirm`). */

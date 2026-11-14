@@ -9,7 +9,7 @@ import { text } from './strings.js'
  */
 
 export const INITIAL_SESSION: CouncilSession = {
-  v: 5,
+  v: 6,
   latestPrompt: '',
   promptEpoch: 0,
   tokensSpent: 0,
@@ -29,6 +29,8 @@ export const INITIAL_SESSION: CouncilSession = {
   chatOffers: [],
   chatAllowances: [],
   chatDenials: [],
+  trustNonce: '',
+  trustListed: [],
 }
 
 const MAX_WRITTEN = 100
@@ -95,6 +97,11 @@ const isAllowance = (value: unknown): boolean => isRecord(value) && typeof value
 
 const isDenial = (value: unknown): boolean => isRecord(value) && typeof value.callKey === 'string'
 
+/** A trust nonce: 32 hex characters (128 bits), or empty while none was made. */
+const NONCE = /^(?:[0-9a-f]{32})?$/
+
+const HASH = /^[0-9a-f]{64}$/
+
 const isOp = (value: unknown): boolean => isRecord(value) && isNumber(value.rounds) && isNumber(value.wipes)
 
 const isCounts = (value: unknown): boolean =>
@@ -108,7 +115,7 @@ const isCounts = (value: unknown): boolean =>
 export function isSession(value: unknown): value is CouncilSession {
   return (
     isRecord(value) &&
-    value.v === 5 &&
+    value.v === 6 &&
     typeof value.latestPrompt === 'string' &&
     isNumber(value.promptEpoch) &&
     isNumber(value.tokensSpent) &&
@@ -136,21 +143,26 @@ export function isSession(value: unknown): value is CouncilSession {
     Array.isArray(value.chatAllowances) &&
     value.chatAllowances.every(isAllowance) &&
     Array.isArray(value.chatDenials) &&
-    value.chatDenials.every(isDenial)
+    value.chatDenials.every(isDenial) &&
+    typeof value.trustNonce === 'string' &&
+    NONCE.test(value.trustNonce) &&
+    Array.isArray(value.trustListed) &&
+    value.trustListed.every(hash => typeof hash === 'string' && HASH.test(hash))
   )
 }
 
-/** A valid version 4 value as version 5, with no chat records; undefined for anything else. */
+/** A valid version 4 or 5 value as version 6: no chat records (from v4), no trust nonce or listing; undefined for anything else. */
 function migrated(value: unknown): CouncilSession | undefined {
-  if (!isRecord(value) || value.v !== 4) return undefined
-  const upgraded = { ...value, v: 5, chatOffers: [], chatAllowances: [], chatDenials: [] }
+  if (!isRecord(value) || (value.v !== 4 && value.v !== 5)) return undefined
+  const upgraded = { ...value, v: 6, ...(value.v === 4 && { chatOffers: [], chatAllowances: [], chatDenials: [] }), trustNonce: '', trustListed: [] }
   return isSession(upgraded) ? upgraded : undefined
 }
 
 /**
  * A value of another shape version, or of no valid shape, reads as a fresh
- * session. The one exception is a valid v4 value, which reads as v5 with no chat
- * records: an upgrade mid-session must not clear its rounds and lockouts.
+ * session. The exceptions are a valid v4 value (read as v6 with no chat records and
+ * no trust record) and a valid v5 value (read as v6 with no trust record): an
+ * upgrade mid-session must not clear its rounds and lockouts.
  */
 export const sessionOf = (value: unknown): CouncilSession => (isSession(value) ? value : (migrated(value) ?? INITIAL_SESSION))
 
@@ -330,6 +342,27 @@ export const grantChat = (session: CouncilSession, grants: readonly ChatGrant[])
           },
     session,
   )
+
+// ── Trusting a rules file (DESIGN §16): the code's nonce and what was listed ─
+
+const MAX_LISTED = 20
+
+/** The nonce the code is derived from: the one already made stands, else `candidate` (32 random hex characters made by the caller). */
+export const withTrustNonce = (session: CouncilSession, candidate: string): CouncilSession =>
+  session.trustNonce !== '' || !NONCE.test(candidate) || candidate === '' ? session : { ...session, trustNonce: candidate }
+
+/** Notes the content hashes `/council trust` has just listed in full, newest last, the oldest dropped past the cap. */
+export const noteListed = (session: CouncilSession, hashes: readonly string[]): CouncilSession =>
+  hashes.length === 0 ? session : { ...session, trustListed: [...session.trustListed.filter(known => !hashes.includes(known)), ...hashes].slice(-MAX_LISTED) }
+
+/** Whether this very content was listed in full in this session. */
+export const isListed = (session: CouncilSession, hash: string): boolean => session.trustListed.includes(hash)
+
+/** A listing is spent by the confirmation it led to: the next one needs a new listing. */
+export const withoutListed = (session: CouncilSession, hashes: readonly string[]): CouncilSession => ({
+  ...session,
+  trustListed: session.trustListed.filter(known => !hashes.includes(known)),
+})
 
 // ── The debate: what the pane and the band show ─────────────────────────────
 

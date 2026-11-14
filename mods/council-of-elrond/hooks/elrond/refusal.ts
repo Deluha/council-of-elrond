@@ -1,3 +1,5 @@
+import { cleanText } from '../config/trust.js'
+import { label } from '../members/shared.js'
 import { redact } from '../redact.js'
 import { text } from '../strings.js'
 import type { Mode, StringKey } from '../strings.js'
@@ -14,7 +16,16 @@ export type Refusal = {
   alternative: string
   roundsLeft?: number
   instruction?: string
+  /** The reason is a project rule's: text from the repository's rules file, cleaned, capped and introduced as the project's, never as the council's own. */
+  isProjectReason?: boolean
 }
+
+/**
+ * A project rule's reason as Claude and the audit log read it: redacted, on one line, with control, invisible and
+ * direction-changing characters gone, capped at 200 characters, after a lead-in that says whose words they are.
+ */
+export const projectReasonText = (reason: string, mode: Mode = 'plain'): string =>
+  text('refusal.reasonProject', { reason: label(cleanText(redact(reason))) }, mode)
 
 export function refusalText(refusal: Refusal, mode: Mode = 'plain'): string {
   const lines = [
@@ -23,7 +34,7 @@ export function refusalText(refusal: Refusal, mode: Mode = 'plain'): string {
     ...(refusal.instruction !== undefined
       ? [text('refusal.instruction', { text: redact(refusal.instruction) }, mode)]
       : []),
-    text('refusal.reason', { reason: redact(refusal.reason) }, mode),
+    refusal.isProjectReason === true ? projectReasonText(refusal.reason, mode) : text('refusal.reason', { reason: redact(refusal.reason) }, mode),
     text('refusal.alternative', { alternative: redact(refusal.alternative) }, mode),
     ...(refusal.roundsLeft !== undefined ? [text('refusal.rounds', { rounds: refusal.roundsLeft }, mode)] : []),
     text('refusal.noRetry', {}, mode),

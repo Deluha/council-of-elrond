@@ -12,10 +12,12 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 
 ### Added
 - **`/council trust`, `/council trust <code>`, `/council untrust` and the option "Trust project rules
-  files".** `trust` lists what a project's rules file would enable once confirmed (counts, each allow
-  or review rule, disabled rule, model, check and pattern id, redacted and capped; secrets allowlist
-  entries counted, never shown) with the file's code; `trust <code>` confirms the file whose hash
-  starts with that code, as it stands now; `untrust` takes the confirmation back. Only a person's own
+  files".** `trust` lists what a project's rules file would enable once confirmed, all of it, each
+  setting in full with every field it has (each allow or review rule, disabled rule, model, check with
+  every argument on its own line, and secret pattern; secrets allowlist entries counted, never shown),
+  with the file's code, or says why the file cannot be confirmed from the session; `trust <code>`
+  confirms the file with that code, as it stands now, only if it was listed in this session;
+  `untrust` takes the confirmation back. Only a person's own
   command runs `trust`. The option `trustProjectRules` is `confirm` (default) or `always`. See the
   first entry under "Changed".
 - **Rules per repository under one root.** When the session root is the parent of several
@@ -83,7 +85,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   session), a code is answered only in your next message, a once-allowance ends at your next prompt,
   and a protected path, a block rule or a high-confidence secret is never offered. The audit log
   records `chat-allow`, `chat-session` and `chat-deny`, and `/council report` counts the first two
-  with the calls you allowed. The session record is now version 5; a version 4 record is read as 5,
+  with the calls you allowed. The session record is now version 6; a version 4 or 5 record is read as 6,
   so an upgrade keeps its rounds and lockouts. See "Where nothing draws" in the README.
 - **`sqlite3` joins the database reviewer's clients.** Its SQL is read from `-cmd`, from the
   statement after the database file (`sqlite3 app.db "DROP TABLE x"`) and from `-init` files.
@@ -191,6 +193,25 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   content (a hash in the plugin's own store); a file that has not been confirmed can never make the
   gate weaker than no file, and a project check it names is reported as not run, never dropped.
   `/council trust` needs a person at the composer, as `/council off` does.
+- **Confirming a rules file can no longer confirm settings you were not shown.** `/council trust`
+  now lists every setting that waits (it used to show ten of each kind, then "and N more", and
+  `trust <code>` confirmed them all), each in full, with every field it has, not cut and not redacted.
+  A file that cannot be listed in full cannot be confirmed from the session, and the listing says
+  why instead of giving a code: more than 40 settings waiting, a value over 400 characters, a value
+  that looks like a secret, or a value with a control, invisible or direction-changing character in
+  it. The code, now derived from a per-session secret as well as the file's hash, works only for
+  content listed in this session, so a code worked out from the file, by Claude or anyone else who
+  can read it, confirms nothing; and each listing is used up by the confirmation it leads to.
+  `trustProjectRules=always` is unchanged. The session record gains the secret and the list of
+  what was listed.
+- **A project rule's reason is no longer said in the council's voice.** In Claude's refusal and in the
+  audit line, the reason of a rule from the project's file, trusted or not, is introduced as "The
+  project's rules file says", on one line of at most 200 characters, with control, invisible and
+  direction-changing characters removed. Shipped rules' reasons are as they were.
+- **The names in a rules file are short and plain.** A rule id, a secret pattern id and a check name
+  are at most 64 characters, each a letter, a digit, `.`, `_` or `-`; a file with another name is
+  invalid and ignored whole, like any other error, so such a name can no longer carry text into a
+  refusal, a dialog or a listing.
 - **A reformatted command is reviewed again.** An approval used to be reused for a later command that differed only in whitespace. Whitespace can change what a shell command does, so the verdict cache and chat approvals now match a command exactly.
 - **A heredoc body is read when the shell expands it.** With an unquoted delimiter (`<<EOF`,
   `<<-EOF`) the shell runs the `$(...)` and backticks in the body; those commands are now classified

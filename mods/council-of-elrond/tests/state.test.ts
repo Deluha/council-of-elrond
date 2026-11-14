@@ -7,13 +7,17 @@ import {
   grantChat,
   holdsChat,
   INITIAL_SESSION,
+  isListed,
   isSession,
+  noteListed,
   noteOffer,
   noteWritten,
   openDebate,
   resetForPrompt,
   sessionOf,
   useChat,
+  withoutListed,
+  withTrustNonce,
 } from '../hooks/state.js'
 import type { CouncilDebate, CouncilSession } from '../types'
 
@@ -46,6 +50,8 @@ const FULL: CouncilSession = openDebate(
         chatOffers: [OFFER],
         chatAllowances: [{ callKey: 'bbbbbb0123456789', scope: 'once' }, { callKey: 'cccccc0123456789', scope: 'session' }],
         chatDenials: [{ callKey: 'dddddd0123456789' }],
+        trustNonce: 'a'.repeat(32),
+        trustListed: ['b'.repeat(64)],
       },
       'gandalf',
       'approve',
@@ -66,7 +72,7 @@ describe('the session shape check', () => {
   })
 
   test('not an object, or another version, is not a session', () => {
-    for (const value of [undefined, null, 4, 'v5', [], [FULL], { ...FULL, v: 3 }, { ...FULL, v: 6 }, { ...FULL, v: '5' }]) {
+    for (const value of [undefined, null, 4, 'v6', [], [FULL], { ...FULL, v: 3 }, { ...FULL, v: 7 }, { ...FULL, v: '6' }]) {
       expect(isSession(value), JSON.stringify(value)).toBe(false)
       expect(sessionOf(value)).toBe(INITIAL_SESSION)
     }
@@ -93,6 +99,8 @@ describe('the session shape check', () => {
       chatOffers: [null, {}, 'x', undefined],
       chatAllowances: [null, {}, 'x', undefined],
       chatDenials: [null, {}, 'x', undefined],
+      trustNonce: [1, null, undefined, 'abc', 'A'.repeat(32), 'a'.repeat(31), 'a'.repeat(33)],
+      trustListed: [null, {}, 'x', undefined],
     }
     for (const [field, values] of Object.entries(bad)) {
       for (const value of values) expect(isSession(with_({ [field]: value })), `${field} = ${String(value)}`).toBe(false)
@@ -131,6 +139,8 @@ describe('the session shape check', () => {
       ['an allowance with no key', { chatAllowances: [{ scope: 'once' }] }],
       ['a denial that is a string', { chatDenials: ['k'] }],
       ['a denial with a numeric key', { chatDenials: [{ callKey: 3 }] }],
+      ['a number among the listed hashes', { trustListed: ['b'.repeat(64), 3] }],
+      ['a listed hash that is not a SHA-256 in hex', { trustListed: ['abc'] }],
       ['a debate that is a string', { debates: ['x'] }],
       ['a debate with no id', { debates: [{ ...DEBATE, id: undefined }] }],
       ['a debate of an unknown kind', { debates: [{ ...DEBATE, kind: 'other' }] }],
@@ -159,13 +169,13 @@ describe('the session shape check', () => {
 })
 
 describe('the version 4 record', () => {
-  const { v: _v, chatOffers: _offers, chatAllowances: _allowances, chatDenials: _denials, ...rest } = FULL
+  const { v: _v, chatOffers: _offers, chatAllowances: _allowances, chatDenials: _denials, trustNonce: _nonce, trustListed: _listed, ...rest } = FULL
   const V4 = { ...rest, v: 4, ops: { 'shell:rm build': { rounds: 2, wipes: 3 } }, latestPrompt: 'delete the build' }
 
-  test('reads as version 5 with the chat records empty, rounds and lockouts intact', () => {
+  test('reads as version 6 with the chat records and the trust record empty, rounds and lockouts intact', () => {
     expect(isSession(V4)).toBe(false)
     const read = sessionOf(V4)
-    expect(read).toEqual({ ...V4, v: 5, chatOffers: [], chatAllowances: [], chatDenials: [] })
+    expect(read).toEqual({ ...V4, v: 6, chatOffers: [], chatAllowances: [], chatDenials: [], trustNonce: '', trustListed: [] })
     expect(read.ops).toEqual({ 'shell:rm build': { rounds: 2, wipes: 3 } })
     expect(read).not.toBe(INITIAL_SESSION)
     expect(isSession(read)).toBe(true)
@@ -176,6 +186,58 @@ describe('the version 4 record', () => {
     expect(sessionOf({ ...V4, cache: 'abc' })).toBe(INITIAL_SESSION)
     // Chat fields that a version 4 record carries are not trusted: they start empty.
     expect(sessionOf({ ...V4, chatOffers: 'x' }).chatOffers).toEqual([])
+  })
+})
+
+describe('the version 5 record', () => {
+  const { v: _v, trustNonce: _nonce, trustListed: _listed, ...rest } = FULL
+  const V5 = { ...rest, v: 5, ops: { 'shell:rm build': { rounds: 2, wipes: 3 } }, chatDenials: [{ callKey: 'dddddd0123456789' }] }
+
+  test('reads as version 6 with no nonce and nothing listed; rounds, lockouts and the chat records intact', () => {
+    expect(isSession(V5)).toBe(false)
+    const read = sessionOf(V5)
+    expect(read).toEqual({ ...V5, v: 6, trustNonce: '', trustListed: [] })
+    expect(read.chatDenials).toEqual([{ callKey: 'dddddd0123456789' }])
+    expect(read.ops).toEqual({ 'shell:rm build': { rounds: 2, wipes: 3 } })
+    expect(isSession(read)).toBe(true)
+  })
+
+  test('a version 5 record that is not valid otherwise reads as fresh; a nonce it carries is not trusted', () => {
+    expect(sessionOf({ ...V5, ops: { k: 3 } })).toBe(INITIAL_SESSION)
+    expect(sessionOf({ ...V5, trustNonce: 'a'.repeat(32), trustListed: ['b'.repeat(64)] })).toEqual({ ...V5, v: 6, trustNonce: '', trustListed: [] })
+  })
+})
+
+describe('the trust record: the nonce and what was listed', () => {
+  const H = (n: number): string => n.toString(16).padStart(64, '0')
+
+  test('the first nonce stands; a candidate that is not 32 hex characters is not taken', () => {
+    const first = withTrustNonce(INITIAL_SESSION, 'a'.repeat(32))
+    expect(first.trustNonce).toBe('a'.repeat(32))
+    expect(withTrustNonce(first, 'b'.repeat(32))).toBe(first)
+    for (const bad of ['', 'abc', 'A'.repeat(32), 'g'.repeat(32), 'a'.repeat(33)]) expect(withTrustNonce(INITIAL_SESSION, bad), bad).toBe(INITIAL_SESSION)
+  })
+
+  test('listed hashes: newest last, no repeat, at most twenty; spent by withoutListed; none by default', () => {
+    expect(isListed(INITIAL_SESSION, H(1))).toBe(false)
+    const one = noteListed(INITIAL_SESSION, [H(1), H(2)])
+    expect(one.trustListed).toEqual([H(1), H(2)])
+    expect(isListed(one, H(2))).toBe(true)
+    expect(noteListed(one, [H(1)]).trustListed).toEqual([H(2), H(1)])
+    expect(noteListed(one, [])).toBe(one)
+    const many = noteListed(INITIAL_SESSION, Array.from({ length: 25 }, (_, n) => H(n)))
+    expect(many.trustListed).toHaveLength(20)
+    expect(many.trustListed[0]).toBe(H(5))
+    expect(many.trustListed.at(-1)).toBe(H(24))
+    expect(withoutListed(one, [H(1)]).trustListed).toEqual([H(2)])
+  })
+
+  test('a person\'s prompt and another prompt keep the nonce and what was listed: they last the session', () => {
+    const held = noteListed(withTrustNonce(INITIAL_SESSION, 'c'.repeat(32)), [H(1)])
+    for (const after of [resetForPrompt(held, 'next'), forOtherPrompt(held)]) {
+      expect(after.trustNonce).toBe('c'.repeat(32))
+      expect(after.trustListed).toEqual([H(1)])
+    }
   })
 })
 

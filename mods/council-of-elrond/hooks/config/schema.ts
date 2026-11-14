@@ -80,7 +80,17 @@ export const TOP_KEYS = [
 ] as const
 
 export const GIMLI_KEYS = ['commands'] as const
-const GIMLI_COMMAND_KEYS = ['name', 'argv', 'timeoutMs'] as const
+export const GIMLI_COMMAND_KEYS = ['name', 'argv', 'timeoutMs'] as const
+
+/**
+ * What a rule id, a check name and a secret pattern's id may be: they are shown to the person and to
+ * Claude, so they are short and plain (DESIGN §16).
+ */
+export const MAX_NAME_CHARS = 64
+export const NAME_CHARS = /^[A-Za-z0-9._-]+$/
+
+const nameProblem = (value: string): string | undefined =>
+  value.length > MAX_NAME_CHARS || !NAME_CHARS.test(value) ? `at most ${MAX_NAME_CHARS} characters, each a letter, a digit, '.', '_' or '-'` : undefined
 
 /** A check command's timeout: 120 s unless set, between 1 s and 10 minutes (the most a process may run). */
 export const GIMLI_TIMEOUT = { default: 120_000, min: 1_000, max: 600_000 } as const
@@ -89,14 +99,14 @@ export const GIMLI_TIMEOUT = { default: 120_000, min: 1_000, max: 600_000 } as c
 export const MAX_GIMLI_COMMANDS = 8
 
 export const GOLLUM_KEYS = ['patterns', 'allowlist'] as const
-const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label', 'kind'] as const
+export const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label', 'kind'] as const
 
 /** A fingerprint as the dialog shows it; anything else in the allowlist is an exact string. */
 export const SECRET_FINGERPRINT = /^sha256:[0-9a-f]{16}$/
 
 const MAX_ALLOWLIST_ENTRY = 500
 
-const RULE_KEYS = [
+export const RULE_KEYS = [
   'id',
   'tier',
   'tools',
@@ -150,6 +160,7 @@ function validateRule(raw: unknown, field: string, errors: string[]): Rule | und
     if (!includes(RULE_KEYS, key)) errors.push(`${field}.${key}: unknown field`)
   }
   if (typeof raw.id !== 'string' || raw.id === '') errors.push(`${field}.id: required string`)
+  else if (nameProblem(raw.id) !== undefined) errors.push(`${field}.id: ${nameProblem(raw.id)}`)
   if (!includes(TIERS, raw.tier)) errors.push(`${field}.tier: one of ${TIERS.join(', ')}`)
   const tools = stringList(raw.tools, `${field}.tools`, errors)
   if (Array.isArray(raw.tools) && raw.tools.length === 0) {
@@ -225,6 +236,7 @@ function validateGollum(raw: unknown, errors: string[]): Overrides['gollum'] {
           if (!includes(GOLLUM_PATTERN_KEYS, key)) errors.push(`${field}.${key}: unknown field`)
         }
         if (typeof item.id !== 'string' || item.id === '') errors.push(`${field}.id: required string`)
+        else if (nameProblem(item.id) !== undefined) errors.push(`${field}.id: ${nameProblem(item.id)}`)
         else if (seen.has(item.id)) errors.push(`${field}.id: "${item.id}" is used twice`)
         if (!includes(SECRET_LEVELS, item.level)) errors.push(`${field}.level: one of ${SECRET_LEVELS.join(', ')}`)
         const problem = regexError(item.regex, 'g')
@@ -284,6 +296,7 @@ function validateGimli(raw: unknown, errors: string[]): Overrides['gimli'] {
       if (!includes(GIMLI_COMMAND_KEYS, key)) errors.push(`${field}.${key}: unknown field`)
     }
     if (typeof item.name !== 'string' || item.name.trim() === '') errors.push(`${field}.name: required string`)
+    else if (nameProblem(item.name) !== undefined) errors.push(`${field}.name: ${nameProblem(item.name)}`)
     else if (seen.has(item.name.trim())) errors.push(`${field}.name: "${item.name.trim()}" is used twice`)
     if (!Array.isArray(item.argv) || item.argv.length === 0) {
       errors.push(`${field}.argv: a non-empty list of strings (the command and its arguments; no shell)`)

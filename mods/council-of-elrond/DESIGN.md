@@ -175,7 +175,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 ```
 
 - **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`: one file per member, `brief.ts` pairing each member and profile with its prompts, `gimli.ts` the checks' outcomes), routing, the full council's seats (`elrond/council.ts`) and its verdict (`elrond/combine.ts`), escalation, refusal, model choice, the allow rule offered after "allow once" (`elrond/suggest.ts`), the report (`elrond/report.ts`) and the rows the debate pane and the band draw (`elrond/view.ts`) (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
-- **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 5), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt a person sends (composer or bridge origin) except a `/council` command: it clears rounds, failed attempts, lockouts and the cache. Any other prompt, `sdk` included, clears only the cache (§14.3).
+- **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 6), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt a person sends (composer or bridge origin) except a `/council` command: it clears rounds, failed attempts, lockouts and the cache. Any other prompt, `sdk` included, clears only the cache (§14.3). Two fields last the whole session and no prompt resets them: the trust nonce and the content hashes `/council trust` has listed (§16 item 1).
 - **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load, after the mod's own writes (an allowlist entry, an allow rule), and on `/council reload` (never by watching the file). Both writes go through `editOverrides` (`config/write.ts`). Where the session root is the parent of several repositories, each repository's own file is read the same way, once per repository, and a call is classified against the repositories it touches (§14.5).
 
 ## 4. Failure modes
@@ -200,6 +200,8 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | `$.ui.ask` dismissed / "Chat about this" | Refuse, a failed attempt (recorded as `dismissed`; the two cannot be told apart, §12.4). "Talk first" refuses without counting (recorded as `chat`). |
 | Overrides file broken, unknown version, invalid field | Ignored whole; shipped rules enforce; a transcript line lists errors by field, plus a toast. Each repository's file under a multi-repository root is checked on its own and warns once (§14.5). |
 | The trust record cannot be read (`$.store.get` rejects, or the stored value is not the expected shape) | Nothing is trusted by it: a rules file with settings that wait for confirmation is held back, exactly as with no record. The tightening part of the file still applies. `/council trust <code>` then confirms nothing and says the record could not be read or saved (§15 item 22). With `trustProjectRules` at `always` the store is never read. |
+| A rules file that cannot be listed in full or safely read (more than 40 settings waiting, a value over 400 characters after cleaning, a value `redact()` would change, a value that held a control, invisible or direction-changing character, or more than 20 files waiting) | Listed as far as it can be, each such value named and marked, with the line "This file cannot be confirmed from the session because …" in place of a code. Its hash is never noted as listed, so `/council trust <code>` for it confirms nothing and says the same (§16 item 1). The way out is to fix the file, or the option at `always`. |
+| `/council trust <code>` for content that was not listed in this session (before any listing, or a file edited after its listing), or whose listing a confirmation already used up | Confirms nothing; says to run `/council trust` first and read what it lists (`trust.notListed`), or, when the code fits no file now, that none has it (`trust.noMatch`). |
 | The trust record cannot be saved (`$.store.set` rejects) | `/council trust <code>` confirms nothing and says why. After the mod's own write (the rule or allowlist offer the person answered), the new content is simply not trusted: a transcript line (`notice.trustNotSaved`) says to run `/council trust`. |
 | A rules file's content differs from the one confirmed (any byte; a copy at another path; a link that now points elsewhere) | Untrusted: the hash, or the real path, no longer matches the record. Its settings that wait for confirmation are held back at the next load (session start, `/council reload`, or when a call first reaches a repository below a multi-repository root); a session already running keeps the content it loaded and confirmed. |
 | Audit write fails | Logged to the debug log (`notice.auditFailed`); never changes a decision, and the queue goes on to the next line. Nothing waits for the queue: a write that never returns holds back only the lines queued after it, never a decision or a later call (§13.4 d). `/council log` and `/council report` read the files, so they may not show a line still queued. |
@@ -1461,7 +1463,9 @@ decided; the live list of what still passes is the README's "Known gaps in shell
       from the file. `/council rules` and `status` show per file: trusted (confirmed), trusted by the
       option, or not trusted with the counts ignored, and say that no allow rule or allowlist entry is
       offered meanwhile.
-    - **Confirming.** `/council trust` lists, per untrusted file in scope (the root's, or each
+    - **Confirming.** *(Amended by §16 item 1: the listing is complete or the file is not confirmable by code, the
+      code is derived from a per-session secret, and it works only for a listing shown in this session. What
+      follows describes the first version.)* `/council trust` lists, per untrusted file in scope (the root's, or each
       repository below a multi-repository root, §14.5), the counts and every allow or review rule
       (id, tools, patterns), disabled rule id, model, check (its argv) and pattern id, then the
       file's code, the first 8 hex characters of its hash. Allowlist entries are counted, never
@@ -1491,7 +1495,8 @@ decided; the live list of what still passes is the README's "Known gaps in shell
       `projectReasons`: each reviewer's prompt shows them inside a `project-rule-reason` data block
       under a lead-in that says they are the project's text, and the dialog shows them after the
       gutter under "the project's own words". This applies to a trusted file as well.
-    - **Not covered.** The reason of a project block or ask rule is still part of the refusal Claude
+    - **Not covered.** *(Amended by §16 item 1: the reason is now introduced as the project's text in both.)*
+      The reason of a project block or ask rule is still part of the refusal Claude
       reads and of the audit line, as before. A project regex in an `ask` or `block` rule, or in
       `bigOperations`, is compiled and run on call text before trust, as before: it can only tighten,
       but a pattern that backtracks without end could stall the hook (the engine's own 10 s budget
@@ -1505,3 +1510,111 @@ decided; the live list of what still passes is the README's "Known gaps in shell
     the edited-file and record tests; running the checks of an untrusted file fails the spawn test;
     reading review rules as tightening fails the table and the never-looser test; dropping the
     not-run check fails its test; offering the rule for an untrusted file fails the offer tests.
+
+## 16. Hardening, round 2
+
+An adversarial review of the confirmation in §15 item 22 found that a person could be led to confirm
+settings they had not been shown. Every decision below is a **tightening**: nothing can be confirmed that
+could not be before, `trust` still needs a person, and `trustProjectRules=always` behaves as it did. They
+are recorded as decided.
+
+1. **Confirming a rules file confirms only what was listed in full in this session** (a tightening;
+   brief of the second review round). What was wrong:
+   - the listing showed ten items per kind and "and N more", and `trust <code>` confirmed all of them;
+   - each shown value was redacted and cut to 300 characters, so the file's author chose what was
+     blanked or pushed off the line;
+   - a held-back rule's `check`, `member`, `profile` and `reason` were not shown;
+   - `trust <code>` worked with no listing, and the code (a prefix of the content hash) can be worked
+     out by anyone who can read the file, the gated model included, which could then ask the person to
+     type it;
+   - an unconfirmed file's `block` or `ask` rule reason reached Claude in the refusal in the gate's own
+     voice.
+
+   Decided, in order:
+   - **The listing is complete, or the file cannot be confirmed by code.** `/council trust` lists every
+     held-back setting, no cap per kind. The summary (`TrustSummary`) now holds each item whole (a
+     rule, a check and a pattern as the schema validated them), and `trustListing` (`elrond/commands.ts`)
+     prints one line per field by iterating the schema's own key lists (`RULE_KEYS`,
+     `GIMLI_COMMAND_KEYS`, `GOLLUM_PATTERN_KEYS`, now exported), so a field added to the schema is listed
+     without anyone remembering it; `trust.test.ts` fails when a key list and its fixture differ. A list
+     (`tools`, `argv`) has a line per element, in JSON string form (`argv[1]: "run test"`), so where one
+     argument ends is not in doubt. Every line is after the gutter. Decided beyond the brief: `reason`,
+     a pattern's `kind` and a check's `timeoutMs` are listed too (they are fields); the allowlist stays a
+     count and counts towards the 40; a model and a disabled rule show their one value.
+   - **What the listing shows of a value** (`inspectValue`, `config/trust.ts`): the value cleaned, whole,
+     neither cut nor redacted. Cleaning replaces C0, DEL, C1 (U+0085 too), U+2028 and U+2029 with a
+     space and removes bidi and zero-width characters: U+200B to U+200F, U+202A to U+202E, U+2066 to
+     U+2069, U+FEFF (the brief's set), and, decided as a tightening, U+061C, U+2060 to U+2064. The file's
+     folder, which is the person's own path and not a setting, is cleaned, redacted and cut to 300
+     as before.
+   - **Limits that make a file unconfirmable in the session** instead of hiding anything: more than 40
+     held-back items in total (`MAX_ITEMS`; the first 40 are printed); a value longer than 400
+     characters after cleaning (`MAX_VALUE_CHARS`; the first 400 are printed, marked with the length);
+     a value that `redact()` with the shipped patterns, or with the patterns now in force, would change
+     (shown as "[not shown: looks like a secret]"); a value that held a character the cleaning removed
+     or replaced (marked on its line). Each is counted per value and named in the closing line, "This
+     file cannot be confirmed from the session because …; shorten or fix the file, or set
+     `trustProjectRules` to `always` if you control which repositories this host opens", which takes the
+     place of the code. More than 20 files waiting: the 21st on is not listed and says so. A false
+     positive of the redaction test (a long mixed-case token in a regex source) costs a confirmation
+     from the session, not safety.
+   - **A code works only for a listing shown in this session.** The session record (version 6, migrated
+     from 4 and 5 with both fields empty, so rounds, lockouts and chat records survive) gains
+     `trustListed`, the content hashes the listing printed in full (newest last, at most 20; never a
+     file that cannot be confirmed), noted through `noteListed` before the listing is shown. `trust
+     <code>` confirms a file only if its current hash is in the list and the file is confirmable now;
+     otherwise it confirms nothing. Decided beyond the brief: a confirmation removes the hash
+     (`withoutListed`), so each listing authorises one confirmation. Neither field is reset by a prompt.
+   - **The code cannot be worked out from the file.** It is the first 8 hex characters of SHA-256 over
+     a 128-bit nonce and the content hash (`codeOf`, async, `config/trust.ts`, which takes the nonce as
+     an argument and stays pure). `register.ts` makes the nonce on first use from `newNonce()` (the
+     source of the reviewers' data-tag nonces, `crypto.getRandomValues`) called twice, keeps it in
+     `trustNonce` in the session record (`withTrustNonce` keeps the first), and it appears in no output,
+     log, audit line, file or relayed text (a test searches every recorded output of a trust flow for
+     it). The stored trust record is unchanged: a path and the content hash. A typed code is exactly 8
+     hex characters; the old 8-to-64 form is gone. Two files with the same content share a code and are
+     confirmed together; two with different content and the same code (about 2^-32) confirm nothing.
+   - **The names a file gives are short and plain** (`config/schema.ts`). A rule id, a secret pattern's
+     id and a check's name are at most 64 characters of `[A-Za-z0-9._-]`, checked on the name as
+     written (the check's name was trimmed before; a padded one is now invalid). The existing rules
+     (required, unique, not a shipped id, not a big-operation check name) stay. A file that breaks it is
+     invalid and ignored whole, like any other error. The ids the mod writes itself (`suggest.ts`) are
+     within it. The rule id is the one project string that reaches Claude in the nobody-to-ask refusal,
+     so it can no longer carry text there.
+   - **A project rule's reason is introduced as the project's** (`refusal.ts`). In the refusal and in
+     the audit line, the reason of a rule whose source is `project`, trusted or not, goes through
+     `projectReasonText`: redacted, control, invisible and direction-changing characters gone, on one
+     line, capped at 200 characters (`label`), after the new string `refusal.reasonProject` ("The
+     project's rules file says (its text, not the council's): …"), never after "Reason:". `Refusal`
+     gains `isProjectReason`; `refusalText` is still the one builder. A shipped rule's reason, and every
+     other refusal, is byte for byte as before. Where Claude can read a reason today it is the block
+     rule's; an ask rule's reaches the audit line and the dialog (which already marked it), and Claude
+     is told only the rule's id where nobody can be asked.
+   - **The mounted pane** draws every line it is given as a column of `Text`; its scroll is the engine's
+     (`Pane`'s `scroll.bodyRows`, moved by the person's keys), so a listing of 40 items, a few hundred
+     lines at most, is reachable by scrolling and the cap in B needs no lowering. `terminal.test.ts`
+     draws a 40-item listing and finds its last item and the code; the paint is
+     `docs/TERMINAL-CHECK.md` C10.
+
+   Not covered. The dialog's own one-line cleaner (`escalation.ts`) strips controls but not bidi or
+   zero-width characters; the project's reason there is shown after the gutter on one line, as before.
+   `/council rules` and `/council test` print a project rule's reason as before (relayed to Claude only in
+   a redacted data block where nothing draws). A person who confirms without reading is out of
+   reach of any listing; the limits only make what cannot be read in full unconfirmable.
+
+   Tests: `trust.test.ts` (the listing of 11 rules and of every field, the schema-key guard, 40 and 41
+   items, a value of 400 and of 401 characters, a value redaction changes, each hidden character, files
+   past the twentieth, the code against the nonce, no code before a listing, after an edit and after a
+   confirmation, two sessions, the nonce in no output, the id caps, the reason of a block rule and an ask
+   rule trusted and not, shipped reasons unchanged), `terminal.test.ts` (the pane), `state.test.ts`
+   (version 6, the migration of 4 and 5, the helpers). Changed to the stricter behaviour, each for its
+   reason: the old "and N more" tests (the listing is complete); the redaction-in-the-listing tests (a
+   secret is not shown and the file is unconfirmable); the 8-hex-prefix-of-the-hash code tests (the code
+   is derived and needs a listing); the hostile fixtures that put text in a rule id, a pattern id or a
+   check name (those names are now capped, so the hostile text moved to fields the schema leaves free);
+   the state tests that pinned version 5. Mutations, each confirmed to fail the suite and reverted:
+   restoring ten per kind with "and N more" still confirmable (5 tests); accepting a code with no
+   listing (3); deriving the code from the hash alone (4); redacting in the listing and still allowing
+   confirmation (3); printing the project's reason with no introduction in the refusal (3), in the audit
+   line (4) and by emptying the string (5); also printing the nonce (1), not counting hidden characters
+   (3), long values (4), dropping either id cap (1 each) and the 40 limit (2).

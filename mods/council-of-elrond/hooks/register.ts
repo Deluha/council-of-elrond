@@ -7,14 +7,14 @@ import type { AuditRecord, Decision } from './audit.js'
 import { OVERRIDES_PATH, SHIPPED } from './config/defaults.js'
 import { loadConfig, MODEL_ID } from './config/schema.js'
 import type { LoadedConfig } from './config/schema.js'
-import { hashOf, ignoredChecksOf, isHeldBack, isTrusted, matchCode, parseRecord, recordValue, TRUST_KEY, trustMode, withoutTrusted, withTrusted } from './config/trust.js'
+import { codeOf, hashOf, ignoredChecksOf, isHeldBack, isTrusted, matchCode, parseRecord, recordValue, TRUST_KEY, trustMode, withoutTrusted, withTrusted } from './config/trust.js'
 import type { RulesFile, TrustCounts, TrustRecord } from './config/trust.js'
 import { MODEL_SLOTS } from './config/types.js'
 import type { GimliCommand, MemberName, ModelSlot } from './config/types.js'
 import { withAllowlistEntry, withRule } from './config/write.js'
 import type { FileEdit } from './config/write.js'
-import { countsText, isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput, trustedOutput, trustLines, trustOutput } from './elrond/commands.js'
-import { callKeyOf, codeOf, isOfferable, parseChatLines } from './elrond/chat.js'
+import { countsText, isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput, trustedOutput, trustLines, trustListing } from './elrond/commands.js'
+import { callKeyOf, codeOf as chatCodeOf, isOfferable, parseChatLines } from './elrond/chat.js'
 import { combine, hasRealBlock } from './elrond/combine.js'
 import type { Voice } from './elrond/combine.js'
 import { bigOperationOf, councilSeats, needsCurrentBranch, rangeOf } from './elrond/council.js'
@@ -39,7 +39,7 @@ import {
   roundsLeft,
 } from './elrond/operations.js'
 import type { WipePolicy } from './elrond/operations.js'
-import { refusalText } from './elrond/refusal.js'
+import { projectReasonText, refusalText } from './elrond/refusal.js'
 import { isRelayed, noticeText, nobodyToAsk, relayContext, untrustedNotice } from './elrond/relay.js'
 import { reportOutput } from './elrond/report.js'
 import { bandRows, debateRows, voiceNote } from './elrond/view.js'
@@ -81,10 +81,12 @@ import {
   grantChat,
   holdsChat,
   INITIAL_SESSION,
+  isListed,
   isReadable,
   isShadow,
   markDebateOpened,
   noteCheck,
+  noteListed,
   noteOffer,
   noteVoice,
   noteWritten,
@@ -96,8 +98,10 @@ import {
   useChat,
   withBypass,
   withEpic,
+  withoutListed,
   withSessionModel,
   withShadow,
+  withTrustNonce,
 } from './state.js'
 import type { ChatUse } from './state.js'
 import type { CouncilDebate, CouncilSession } from '../types'
@@ -1391,23 +1395,51 @@ async function readRulesFiles($: EngineInterface, ctx: Context): Promise<RulesRe
   return files
 }
 
-/** `/council trust` lists what confirming would enable; `/council trust <code>` confirms the file with that code, as it stands now. */
+/**
+ * The nonce the trust code is derived from: made on first use from the same source as the reviewers' tags,
+ * twice over (128 bits), kept in the session record and shown nowhere.
+ */
+async function trustNonceOf($: EngineInterface): Promise<string> {
+  const candidate = `${newNonce()}${newNonce()}`
+  await update($, session, value => withTrustNonce(sessionOf(value), candidate))
+  return sessionOf(await read($, session)).trustNonce
+}
+
+/**
+ * `/council trust` lists every setting a file holds back, in full, and the code to type; the listing is noted in
+ * the session. `/council trust <code>` confirms a file only if its content was listed in full in this session,
+ * is as it was then, and the code is the one derived for it (DESIGN §16).
+ */
 async function trustCommand($: EngineInterface, command: Extract<CouncilCommand, { kind: 'trust' }>, mode?: Mode): Promise<Output> {
   const title = text('cmd.title')
-  const inMode = (build: () => Output): Output => (mode === undefined ? build() : withMode(mode, build))
+  const inMode = <T extends (Record<string, unknown> & { then?: never }) | string | number | boolean | null | undefined>(build: () => T): T => (mode === undefined ? build() : withMode(mode, build))
   if (settings.trustProjectRules === 'always') return inMode(() => ({ title, lines: [text('trust.option')] }))
   const ctx = await contextOf($)
   const stored = await readTrust($)
   const record = stored.ok ? stored.record : []
   const waiting = (await readRulesFiles($, ctx)).filter(file => !isTrusted(record, file.key, file.hash))
-  const views = waiting.flatMap(file => (file.loaded.needsTrust === undefined ? [] : [{ where: file.dir, hash: file.hash, summary: file.loaded.needsTrust.summary, counts: file.loaded.needsTrust.counts }]))
-  if (command.code === undefined) return inMode(() => trustOutput(views, ctx.patterns))
+  const nonce = await trustNonceOf($)
+  const coded: (RulesRead & { code: string })[] = []
+  for (const file of waiting) coded.push({ ...file, code: await codeOf(nonce, file.hash) })
+  const views = coded.flatMap(file => (file.loaded.needsTrust === undefined ? [] : [{ where: file.dir, hash: file.hash, code: file.code, summary: file.loaded.needsTrust.summary, counts: file.loaded.needsTrust.counts }]))
+  const listing = inMode(() => trustListing(views, ctx.patterns))
+  if (command.code === undefined) {
+    // Noted before the listing is shown: a code is only ever typed after it.
+    await update($, session, value => noteListed(sessionOf(value), listing.listed))
+    return listing.output
+  }
   if (!stored.ok) return inMode(() => ({ title, lines: [text('trust.saveFailed', { problem: stored.problem })] }))
-  const match = matchCode(waiting, command.code)
+  const match = matchCode(coded, command.code)
   if (match.kind === 'none') return inMode(() => ({ title, lines: [text('trust.noMatch', { code: command.code ?? '' })] }))
   if (match.kind === 'ambiguous') return inMode(() => ({ title, lines: [text('trust.ambiguous', { code: command.code ?? '' })] }))
+  const hash = match.files[0]?.hash ?? ''
+  const blocked = listing.blocked.find(entry => entry.hash === hash)
+  if (blocked !== undefined && !listing.listed.includes(hash)) return inMode(() => ({ title, lines: [text('trust.unconfirmable', { why: blocked.why })] }))
+  if (!listing.listed.includes(hash) || !isListed(sessionOf(await read($, session)), hash)) return inMode(() => ({ title, lines: [text('trust.notListed')] }))
   const problem = await saveTrust($, match.files.reduce((kept, file) => withTrusted(kept, file.key, file.hash), record))
   if (problem !== undefined) return inMode(() => ({ title, lines: [text('trust.saveFailed', { problem })] }))
+  // The listing is spent by this confirmation.
+  await update($, session, value => withoutListed(sessionOf(value), [hash]))
   await reloadContext($)
   return inMode(() =>
     trustedOutput(match.files.flatMap(file => (file.loaded.needsTrust === undefined ? [] : [{ where: file.dir, counts: file.loaded.needsTrust.counts }]))),
@@ -1818,7 +1850,8 @@ export const register: Register = (on, options) => {
     let model: string | null = null
     let tokens = 0
     let verdictText: string | null = null
-    let reasonText: string | null = decided?.reason ?? null
+    // A project rule's reason is the repository's text: in the audit line, as in the refusal, it is cleaned, capped and introduced as such.
+    let reasonText: string | null = decided === undefined ? null : decided.source === 'project' ? projectReasonText(decided.reason) : decided.reason
     let decision: Decision | null = null
     let isCached = false
     let isShadowed = false
@@ -1953,7 +1986,7 @@ export const register: Register = (on, options) => {
           callKey === undefined
             ? undefined
             : {
-                code: codeOf(callKey),
+                code: chatCodeOf(callKey),
                 // The deciding scope's config and root, the pair its classification came from.
                 canSession: suggestRule(call, classification, ctx.loaded.compiled, { ...where, root: ctx.gitDir }, { hadSecret, declined: [] }).kind === 'rule',
               }
@@ -2037,7 +2070,10 @@ export const register: Register = (on, options) => {
 
     // 4. Block tier.
     if (classification.tier === 'block') {
-      return refuse({ who: 'who.rules', verdict: 'block', reason: decided?.reason ?? '', alternative: text('alternative.narrower') }, true)
+      return refuse(
+        { who: 'who.rules', verdict: 'block', reason: decided?.reason ?? '', ...(decided?.source === 'project' && { isProjectReason: true }), alternative: text('alternative.narrower') },
+        true,
+      )
     }
 
     // 5. Lockout: too many failed attempts on this operation since the user last wrote.

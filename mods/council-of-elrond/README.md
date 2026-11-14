@@ -242,13 +242,14 @@ Put project overrides in `.claude/council-of-elrond/rules.json`:
 - `path`: a regex matched against the file path relative to the project root.
 - `input`: a regex matched against the call's JSON.
 - `member` and `profile`: who reviews (`gandalf`, `legolas`, `aragorn` with `git` or `database`).
+- `id` (a rule, and a secret pattern) and a check's `name`: at most 64 characters, each a letter, a digit, `.`, `_` or `-`. A file with another name is broken, like any other error.
 
 **How overrides combine with the shipped rules:**
 - **Overrides win.** A matching project rule decides before the shipped rules.
 - **Two things can't be lowered.** No project rule goes below a shipped block rule or a protected path, and block rules can't be disabled.
 - **Lists only grow.** Lists add to the shipped ones.
 - **Some settings wait for you.** Until you confirm the file with `/council trust`, its allow and review rules, disabled rules, models, patterns, allowlist and checks are ignored ([Trusting a project's rules file](#trusting-a-projects-rules-file)).
-- **A project rule's reason is the project's text.** Reviewers see it inside a data block under a lead-in that says so, not after "Flagged because", and the dialog shows it after the `|` bar; either way on one line of at most 200 characters.
+- **A project rule's reason is the project's text.** Reviewers see it inside a data block under a lead-in that says so, not after "Flagged because", and the dialog shows it after the `|` bar. Claude's refusal and the audit line introduce it as "The project's rules file says" and never as the council's own sentence. Everywhere it is on one line of at most 200 characters, with control, invisible and direction-changing characters removed.
 
 **A broken file is ignored whole.** The shipped rules stay in force, and the errors are listed by
 field in the transcript.
@@ -286,14 +287,25 @@ content), trusted by the option, or not trusted, with how many settings are igno
 
 **Confirming.**
 - `/council trust` lists, for each file in scope that has settings waiting (a session root that
-  holds several repositories has one per repository), the counts and each allow or review rule (id,
-  tools and patterns), each disabled rule, each model, each check's command line and each pattern's id,
-  one value per line after a `|` bar, redacted, cut to 300 characters, ten per kind and then "and N
-  more". Secrets allowlist entries are counted and never shown. Then the file's code, the first 8
-  characters of its hash, and the line to type.
-- `/council trust <code>` reads the files again and confirms the one whose hash starts with that
-  code. A code that fits nothing, or files with different content, confirms nothing and says so.
-  It then reloads and says what is now in force.
+  holds several repositories has one per repository), every one of them, none left behind a "more":
+  each allow or review rule with every field it has (id, tier, tools, command, path, input, check,
+  member, profile and reason), each disabled rule, each model, each check's name, timeout and every
+  argument on a line of its own in quotes, and each secret pattern's id, level, regex, label and kind.
+  One value per line after a `|` bar, as the file has it: not cut and not redacted. Secrets
+  allowlist entries are counted and never shown. Then the file's code and the line to type.
+- **Some files cannot be confirmed from the session**, because the listing would not show you all
+  of them or could mislead you: more than 40 settings waiting (or more than 20 files, past the twentieth); a value over 400 characters; a value that looks like a
+  secret (it is shown as "not shown: looks like a secret"); a value with a control, invisible or
+  direction-changing character in it. `/council trust` still prints what it can, names each such
+  value, and says the file cannot be confirmed from the session instead of giving a code. Shorten or fix the file, or, if you control
+  which repositories this host opens, set `trustProjectRules` to `always`.
+- `/council trust <code>` reads the files again and confirms the one with that code, but only if
+  that very content was listed in full in this session and is unchanged since. The code is 8 hex
+  characters worked out from the file's hash and a secret the session made for itself and shows
+  nowhere, so no one who can read the file, Claude included, can work it out; it differs from one
+  session to the next. A code typed before the listing, for a file
+  edited since it, or for a file that cannot be confirmed from the session, confirms nothing and says
+  so. A listing is used up by the confirmation it leads to. It then reloads and says what is now in force.
 - `/council untrust` takes the confirmation back for the files in scope.
 - Any change to the file, one byte or a copy at another path, makes it untrusted again; it is read
   again at the next `/council reload` or session. `/council reload` itself never trusts anything.
@@ -472,7 +484,7 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | `/council rules` | Every effective rule with its source (`shipped` or `project`), and the lists. |
 | `/council test "<command>"` | Which tier, rule, reviewer (and profile, and why it fell back to Gandalf if it did) and operation key a shell command would get. For a big operation it shows the full council's seats, model and checks. Runs nothing, so a merge is assumed to land on a protected branch and a force push of the current branch is asked about (its branch is not read). |
 | `/council model [<member> <model> [--save]]` | Lists each slot's model and where it came from, or switches one for this session (`default` clears the switch). `--save` also writes the `/config` row when the model is one of its picker values. |
-| `/council trust`, `/council trust <code>`, `/council untrust` | Lists what a rules file with settings that wait would enable, with its code; confirms the file whose code you type, as it stands now; removes the confirmation. See [Trusting a project's rules file](#trusting-a-projects-rules-file). |
+| `/council trust`, `/council trust <code>`, `/council untrust` | Lists everything a rules file with settings that wait would enable, with its code (or why it cannot be confirmed from the session); confirms the file whose code you type, if it was listed in this session and is unchanged; removes the confirmation. See [Trusting a project's rules file](#trusting-a-projects-rules-file). |
 | `/council reload` | Reads `rules.json` again (every repository's, when the session root holds several). It never trusts a file. |
 | `/council report` | A summary of the audit log, rotated files included (see below). |
 | `/council debate` | Opens the [debate pane](#debate-pane-and-council-check) at any width (where nothing draws, prints its rows as transcript lines). |
