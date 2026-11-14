@@ -142,6 +142,10 @@ export type World = {
   fsCalls: number
   /** Whether a `clock.now` read is refused (the call rejects), when the clock is mocked. */
   clockFails: () => boolean
+  /** Whether the plugin's own store refuses a read or a write (the call rejects). */
+  storeFails: () => boolean
+  /** What the plugin's own store holds now, as JSON data: the start entries, then every write that landed. */
+  stored: Record<string, unknown>
   notices: { id: string; text: string | undefined }[]
   panes: string[]
   /** Every pane the mod opened, as it asked. */
@@ -176,6 +180,8 @@ export function world(
     isClockMocked?: boolean
     /** The engine's own band above the prompt, beneath the plugin: it draws "engine band". */
     isBandDrawn?: boolean
+    /** What the plugin's own store holds at the start (the trust record, key `trustedRules`); nothing when not given. */
+    store?: Record<string, unknown>
     /**
      * C5: the root is the parent of two repositories, not one itself. `/work/app` holds `.git` and a
      * rules file (an allow rule for `npm publish`, the protected path `config/secret/**`, one check
@@ -218,6 +224,8 @@ export function world(
     writeHangs: () => false,
     fsCalls: 0,
     clockFails: () => false,
+    storeFails: () => false,
+    stored: structuredClone(setup.store ?? {}),
     notices: [],
     panes: [],
     opens: [],
@@ -248,6 +256,19 @@ export function world(
     )
   }
 
+  // The plugin's own store (the trust record): in memory, as the engine keeps it.
+  const gatedStore = ((name: string, ...rest: unknown[]) => {
+    const register = on as unknown as (...args: unknown[]) => unknown
+    const hook = rest[rest.length - 1] as (...args: unknown[]) => unknown
+    return register(name, ...rest.slice(0, -1), (...args: unknown[]) => {
+      if (w.storeFails()) return { deny: 'the store is down' }
+      const e = args[1] as { key?: string; value?: unknown }
+      if (name === 'store.set' && e.key !== undefined) w.stored[e.key] = JSON.parse(JSON.stringify(e.value))
+      if (name === 'store.delete' && e.key !== undefined) delete w.stored[e.key]
+      return hook(...args)
+    })
+  }) as unknown as On
+  mock.store(gatedStore, setup.store)
   on('session.root', () => ({ value: ROOT }))
   on('session.cwd', () => {
     if (setup.cwdFails === true) throw new Error('no cwd')

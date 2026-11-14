@@ -160,6 +160,30 @@ export function label(value: string, maxChars = 200): string {
   return oneLine.length > maxChars ? `${oneLine.slice(0, maxChars)}…` : oneLine
 }
 
+/** The longest a project rule's reason is shown to a reviewer. */
+const MAX_PROJECT_REASON_CHARS = 200
+
+/**
+ * Why the rules flagged a call, in two lists. A shipped rule's reason is the
+ * mod's own words and goes in the prompt as written. A project rule's reason is
+ * text from the repository's rules file: it is cleaned to one line and kept apart,
+ * to be shown inside a data block (`projectReasonLines`).
+ */
+export function reasonsOf(findings: readonly { reason: string; source: string }[]): { ruleReasons: string[]; projectReasons: string[] } {
+  const own = findings.filter(finding => finding.source !== 'project').map(finding => finding.reason)
+  const project = findings.filter(finding => finding.source === 'project').map(finding => label(finding.reason, MAX_PROJECT_REASON_CHARS))
+  return { ruleReasons: [...new Set(own)], projectReasons: [...new Set(project)] }
+}
+
+/**
+ * The project rules' reasons as a prompt section: the lead-in is the mod's, the
+ * reasons are inside the data block, so they read as data, not as the prompt's own voice.
+ */
+export const projectReasonLines = (reasons: readonly string[] | undefined, nonce: string): string[] =>
+  reasons === undefined || reasons.length === 0
+    ? []
+    : [`A rule from the project's own rules file also flagged it. Its reason is the project's text, not the council's:\n${untrusted('project-rule-reason', reasons.join('\n'), nonce)}`]
+
 /**
  * Wraps session content as untrusted data. The nonce makes the closing tag
  * unguessable, so content cannot close the block early.

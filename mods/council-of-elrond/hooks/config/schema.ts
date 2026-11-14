@@ -1,6 +1,8 @@
 import { globToRegExp, protectedMatcher, slashRegex, toolMatcher } from '../rules/globs.js'
 import type { ProtectedMatcher } from '../rules/globs.js'
 import { SHIPPED } from './defaults.js'
+import { splitByTrust } from './trust.js'
+import type { RulesFile, TrustCounts, TrustSummary } from './trust.js'
 import {
   BIG_CHECKS,
   CHECKS,
@@ -58,9 +60,13 @@ export type LoadedConfig = {
   origin: 'shipped' | 'shipped+project'
   /** Problems with the overrides file, by field; non-empty means it was ignored. */
   errors: readonly string[]
+  /** What the file holds that takes effect only once its content is trusted; absent when it holds none. */
+  needsTrust?: { summary: TrustSummary; counts: TrustCounts; isIgnored: boolean }
+  /** How the file stands with trust, set by the caller that reads the trust record (register.ts). */
+  file?: RulesFile
 }
 
-const TOP_KEYS = [
+export const TOP_KEYS = [
   'schemaVersion',
   'rules',
   'disableRules',
@@ -73,7 +79,7 @@ const TOP_KEYS = [
   'gimli',
 ] as const
 
-const GIMLI_KEYS = ['commands'] as const
+export const GIMLI_KEYS = ['commands'] as const
 const GIMLI_COMMAND_KEYS = ['name', 'argv', 'timeoutMs'] as const
 
 /** A check command's timeout: 120 s unless set, between 1 s and 10 minutes (the most a process may run). */
@@ -82,7 +88,7 @@ export const GIMLI_TIMEOUT = { default: 120_000, min: 1_000, max: 600_000 } as c
 /** At most this many project checks, in one rules file or across the repositories a call touches. */
 export const MAX_GIMLI_COMMANDS = 8
 
-const GOLLUM_KEYS = ['patterns', 'allowlist'] as const
+export const GOLLUM_KEYS = ['patterns', 'allowlist'] as const
 const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label', 'kind'] as const
 
 /** A fingerprint as the dialog shows it; anything else in the allowlist is an exact string. */
@@ -500,8 +506,12 @@ export function compileConfig(config: Config, projectRuleIds: ReadonlySet<string
  * The effective config from the overrides file's text (undefined: no file).
  * A file that does not parse or validate is ignored whole, and the shipped
  * defaults stand, with the errors reported. It never turns the gate off.
+ *
+ * `isTrusted` false: only the settings that cannot loosen the gate apply
+ * (`splitByTrust`); the rest are held back, as if absent, and reported in
+ * `needsTrust`. The default is the file in full.
  */
-export function loadConfig(fileText: string | undefined, shipped: Config = SHIPPED): LoadedConfig {
+export function loadConfig(fileText: string | undefined, shipped: Config = SHIPPED, isTrusted = true): LoadedConfig {
   const shippedOnly = (errors: readonly string[]): LoadedConfig => ({
     compiled: compileConfig(shipped, new Set()),
     origin: 'shipped',
@@ -518,10 +528,13 @@ export function loadConfig(fileText: string | undefined, shipped: Config = SHIPP
   const result = validateOverrides(raw, shipped)
   if (result.overrides === undefined) return shippedOnly(result.errors)
 
-  const merged = mergeConfig(shipped, result.overrides)
-  const projectIds = new Set((result.overrides.rules ?? []).map(rule => rule.id))
+  const split = splitByTrust(result.overrides)
+  const used = isTrusted ? result.overrides : split.always
+  const merged = mergeConfig(shipped, used)
+  const projectIds = new Set((used.rules ?? []).map(rule => rule.id))
+  const needsTrust = split.counts.total > 0 ? { needsTrust: { summary: split.summary, counts: split.counts, isIgnored: !isTrusted } } : {}
   try {
-    return { compiled: compileConfig(merged, projectIds), origin: 'shipped+project', errors: [] }
+    return { compiled: compileConfig(merged, projectIds), origin: 'shipped+project', errors: [], ...needsTrust }
   } catch (error) {
     return shippedOnly([`(file): ${error instanceof Error ? error.message : String(error)}`])
   }

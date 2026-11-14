@@ -220,7 +220,7 @@ describe('config', () => {
     expect(w.toasts).toHaveLength(1)
   })
 
-  test('a project model choice reaches the request', async ($, on) => {
+  test('a project model choice reaches the request', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on)
     w.files.set(`${ROOT}/.claude/council-of-elrond/rules.json`, JSON.stringify({ schemaVersion: 1, models: { gandalf: 'fable' } }))
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })

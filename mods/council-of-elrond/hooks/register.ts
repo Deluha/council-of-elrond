@@ -4,14 +4,16 @@ import type { EngineInterface, PluginOptions, ProcessRunResult, ProcessSpawnResu
 import type { CouncilPanel } from '../types'
 import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, isRotation, ROTATED_FILES } from './audit.js'
 import type { AuditRecord, Decision } from './audit.js'
-import { OVERRIDES_PATH } from './config/defaults.js'
+import { OVERRIDES_PATH, SHIPPED } from './config/defaults.js'
 import { loadConfig, MODEL_ID } from './config/schema.js'
 import type { LoadedConfig } from './config/schema.js'
+import { hashOf, ignoredChecksOf, isHeldBack, isTrusted, matchCode, parseRecord, recordValue, TRUST_KEY, trustMode, withoutTrusted, withTrusted } from './config/trust.js'
+import type { RulesFile, TrustCounts, TrustRecord } from './config/trust.js'
 import { MODEL_SLOTS } from './config/types.js'
 import type { GimliCommand, MemberName, ModelSlot } from './config/types.js'
 import { withAllowlistEntry, withRule } from './config/write.js'
 import type { FileEdit } from './config/write.js'
-import { isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
+import { countsText, isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput, trustedOutput, trustLines, trustOutput } from './elrond/commands.js'
 import { callKeyOf, codeOf, isOfferable, parseChatLines } from './elrond/chat.js'
 import { combine, hasRealBlock } from './elrond/combine.js'
 import type { Voice } from './elrond/combine.js'
@@ -38,7 +40,7 @@ import {
 } from './elrond/operations.js'
 import type { WipePolicy } from './elrond/operations.js'
 import { refusalText } from './elrond/refusal.js'
-import { isRelayed, noticeText, nobodyToAsk, relayContext } from './elrond/relay.js'
+import { isRelayed, noticeText, nobodyToAsk, relayContext, untrustedNotice } from './elrond/relay.js'
 import { reportOutput } from './elrond/report.js'
 import { bandRows, debateRows, voiceNote } from './elrond/view.js'
 import type { Row } from './elrond/view.js'
@@ -52,13 +54,13 @@ import { isCommandCut, requestOf, whoOf } from './members/brief.js'
 import type { Brief } from './members/brief.js'
 import { formatPreviewCut, INSPECTION_TIMEOUT_MS, MAX_LISTED, mergePlace, planPreview, rangeDiffInspections, runsElsewhere, unreadCommitsNote, unseenPushNote } from './members/galadriel.js'
 import type { Inspection, InspectionResult } from './members/galadriel.js'
-import { isGimliBlock, keepTail, problemOf, statusOf, tailOf } from './members/gimli.js'
+import { isGimliBlock, keepTail, notRunCheck, problemOf, statusOf, tailOf } from './members/gimli.js'
 import type { GimliRun } from './members/gimli.js'
 import { patternsWith, scanCall, warnsPasswordFingerprint } from './members/gollum.js'
 import { callDiff, LEGOLAS_LIMITS } from './members/legolas.js'
 import type { CallDiff, Current } from './members/legolas.js'
 import type { GollumFinding } from './members/gollum.js'
-import { addOmitted, cut, newNonce, parseVerdict } from './members/shared.js'
+import { addOmitted, cut, newNonce, parseVerdict, reasonsOf } from './members/shared.js'
 import type { Omitted, Shown, Verdict } from './members/shared.js'
 import { redact } from './redact.js'
 import type { SecretPattern } from './redact.js'
@@ -194,6 +196,8 @@ type Settings = {
   gollumEnabled: boolean
   galadrielEnabled: boolean
   plainMode: boolean
+  /** `confirm`: a rules file's settings that loosen the gate or run code wait for `/council trust`; `always`: every file is trusted. */
+  trustProjectRules: 'confirm' | 'always'
 }
 
 const modelSetting = (value: unknown): string => (typeof value === 'string' ? value : 'default')
@@ -223,6 +227,7 @@ const settingsOf = (options: PluginOptions): Settings => ({
   gollumEnabled: options.gollumEnabled !== false,
   galadrielEnabled: options.galadrielEnabled !== false,
   plainMode: options.plainMode === true,
+  trustProjectRules: trustMode(options.trustProjectRules),
 })
 
 type Context = {
@@ -297,6 +302,56 @@ function warnOnce($: EngineInterface, key: string, line: string, toast?: string)
   if (toast !== undefined) $.ui.toast(toast, { timeoutMs: 8_000 })
 }
 
+/** The real path of a rules file, links resolved: the key its trust is recorded under. */
+const rulesKeyOf = async ($: EngineInterface, path: string): Promise<string> => (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath ?? path
+
+/** The trust record; a store that cannot be read says why, and nothing is then trusted by it. */
+async function readTrust($: EngineInterface): Promise<{ ok: true; record: TrustRecord } | { ok: false; problem: string }> {
+  try {
+    return { ok: true, record: parseRecord(await $.store.get(TRUST_KEY)) }
+  } catch (error) {
+    return { ok: false, problem: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** Stores the record; the problem when it could not be. */
+async function saveTrust($: EngineInterface, record: TrustRecord): Promise<string | undefined> {
+  try {
+    await $.store.set(TRUST_KEY, recordValue(record))
+    return undefined
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
+/**
+ * How a rules file stands. Only a file with settings that wait for trust has a
+ * question to answer; with the option at `always` there is no record to read.
+ * Trusted means the file's exact text, as read, hashes to what a person confirmed for that path.
+ */
+async function fileTrustOf($: EngineInterface, path: string, fileText: string, loaded: LoadedConfig): Promise<RulesFile> {
+  if (loaded.needsTrust === undefined) return { path, state: 'nothing' }
+  if (settings.trustProjectRules === 'always') return { path, state: 'option' }
+  const key = await rulesKeyOf($, path)
+  const hash = await hashOf(fileText)
+  const stored = await readTrust($)
+  return { path: key, hash, state: stored.ok && isTrusted(stored.record, key, hash) ? 'confirmed' : 'untrusted' }
+}
+
+/** Once per session per file content, when its settings are held back: a line and a toast, and where nothing draws a row Claude relays. Counts only. */
+async function noticeUntrusted($: EngineInterface, file: RulesFile, counts: TrustCounts): Promise<void> {
+  const key = `trust:${file.path}:${file.hash ?? ''}`
+  if (warned.has(key)) return
+  warnOnce($, key, text('notice.rulesUntrusted', { summary: countsText(counts) }), text('notice.rulesUntrustedShort'))
+  try {
+    if ((await $.session.surfaces()).length > 0) return
+    const result = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: untrustedNotice(counts) }] } })
+    if (result.deny !== undefined) $.ui.log(text('notice.appendFailed', { problem: result.deny }), { to: 'debug' })
+  } catch (error) {
+    $.ui.log(text('notice.appendFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
+  }
+}
+
 /** Reads and validates the rules file of one directory; a broken one warns once under `key`. */
 async function loadRules($: EngineInterface, dir: string, key: string): Promise<{ loaded: LoadedConfig; hasFile: boolean }> {
   const path = `${dir}/${OVERRIDES_PATH}`
@@ -309,7 +364,7 @@ async function loadRules($: EngineInterface, dir: string, key: string): Promise<
       return undefined
     })
   }
-  const loaded = readProblem !== undefined ? { ...loadConfig(undefined), errors: [readProblem] } : loadConfig(fileText)
+  let loaded = readProblem !== undefined ? { ...loadConfig(undefined), errors: [readProblem] } : loadConfig(fileText)
   if (loaded.errors.length > 0) {
     warnOnce(
       $,
@@ -317,6 +372,13 @@ async function loadRules($: EngineInterface, dir: string, key: string): Promise<
       text('notice.configBroken', { path: OVERRIDES_PATH, errors: loaded.errors.join('; ') }),
       text('notice.configBrokenShort'),
     )
+  }
+  if (fileText !== undefined && loaded.errors.length === 0) {
+    const file = await fileTrustOf($, path, fileText, loaded)
+    // Held back: the same text again, with only what cannot loosen the gate in force.
+    if (file.state === 'untrusted') loaded = loadConfig(fileText, SHIPPED, false)
+    loaded = { ...loaded, file }
+    if (file.state === 'untrusted' && loaded.needsTrust !== undefined) await noticeUntrusted($, file, loaded.needsTrust.counts)
   }
   return { loaded, hasFile }
 }
@@ -676,7 +738,8 @@ async function briefOf(
   notes: readonly string[],
   ctx: Context,
 ): Promise<Brief> {
-  const ruleReasons = [...new Set(classification.findings.map(finding => finding.reason))]
+  const { ruleReasons, projectReasons } = reasonsOf(classification.findings)
+  const withProject = projectReasons.length > 0 ? { projectReasons } : {}
   const shown = callText(call, ctx.patterns)
   const latestPrompt = state.latestPrompt
   const withPreview = preview !== undefined ? { preview: preview.text, ...(preview.omitted !== undefined && { previewOmitted: preview.omitted }) } : {}
@@ -684,13 +747,13 @@ async function briefOf(
   // Routing seats the diff reviewer on file tools only, which always have a diff.
   const file = seat.member === 'gandalf' || seat.profile === 'git' ? undefined : await fileDiffOf($, call, cwd, realPath, ctx)
   if (seat.member === 'legolas' && file !== undefined) {
-    return { member: 'legolas', context: { tool: call.tool, path: file.path, diff: file.diff, ruleReasons, latestPrompt, ...withPreview } }
+    return { member: 'legolas', context: { tool: call.tool, path: file.path, diff: file.diff, ruleReasons, ...withProject, latestPrompt, ...withPreview } }
   }
   if (seat.member === 'aragorn' && seat.profile === 'git') {
     return {
       member: 'aragorn',
       profile: 'git',
-      context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, protectedBranches: ctx.loaded.compiled.config.protectedBranches, ...withPreview, ...withNotes },
+      context: { tool: call.tool, call: shown, ruleReasons, ...withProject, latestPrompt, protectedBranches: ctx.loaded.compiled.config.protectedBranches, ...withPreview, ...withNotes },
     }
   }
   if (seat.member === 'aragorn') {
@@ -703,11 +766,11 @@ async function briefOf(
     return {
       member: 'aragorn',
       profile: 'database',
-      context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, sql, production, ...(unseenSqlFiles > 0 && { unseenSqlFiles }), ...(file !== undefined && { diff: file.diff }) },
+      context: { tool: call.tool, call: shown, ruleReasons, ...withProject, latestPrompt, sql, production, ...(unseenSqlFiles > 0 && { unseenSqlFiles }), ...(file !== undefined && { diff: file.diff }) },
     }
   }
   const { scripts, unseen } = await scriptsOf($, classification, cwd, state.written, ctx)
-  return { member: 'gandalf', context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, scripts, ...(unseen > 0 && { unseenScripts: unseen }), ...withPreview, ...withNotes } }
+  return { member: 'gandalf', context: { tool: call.tool, call: shown, ruleReasons, ...withProject, latestPrompt, scripts, ...(unseen > 0 && { unseenScripts: unseen }), ...withPreview, ...withNotes } }
 }
 
 /**
@@ -995,18 +1058,40 @@ async function confirmAllowlist($: EngineInterface, finding: GollumFinding): Pro
 /**
  * Rewrites the project rules file with one confirmed change, read fresh: a
  * broken file is left alone, and a result that doesn't validate isn't written.
+ * A file with settings waiting for confirmation is not rewritten either (it was
+ * not offered; the change could not take effect). When the file was trusted
+ * before, or was not there, the person just confirmed this change, so its new
+ * content is recorded as trusted; no other path records trust.
  */
 async function writeOverrides($: EngineInterface, root: string, change: (current: string | undefined) => FileEdit): Promise<FileEdit> {
   const path = `${root}/${OVERRIDES_PATH}`
   try {
     const current = (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
+    const before = current === undefined ? undefined : await fileTrustOf($, path, current, loadConfig(current))
+    if (before?.state === 'untrusted') return { ok: false, problem: text('trust.writeRefused') }
     const edit = change(current)
-    if (edit.ok) await $.fs.write(path, edit.text)
+    if (edit.ok) {
+      await $.fs.write(path, edit.text)
+      if (settings.trustProjectRules === 'confirm') await recordTrust($, path, edit.text)
+    }
     return edit
   } catch (error) {
     return { ok: false, problem: error instanceof Error ? error.message : String(error) }
   }
 }
+
+/** Records the content just written as confirmed. A record that cannot be read or saved leaves the file untrusted, and says so. */
+async function recordTrust($: EngineInterface, path: string, written: string): Promise<void> {
+  const stored = await readTrust($)
+  const problem = stored.ok ? await saveTrust($, withTrusted(stored.record, await rulesKeyOf($, path), await hashOf(written))) : stored.problem
+  if (problem !== undefined) $.ui.log(text('notice.trustNotSaved', { problem }))
+}
+
+/** The config of the rules file in `dir`, among the scopes a call touched. */
+const loadedAt = (ctx: CallContext, dir: string): LoadedConfig => ctx.scopes.find(scope => scope.dir === dir)?.loaded ?? ctx.loaded
+
+/** Where the mod may write a rules entry for this call: its `writeDir`, unless that file's settings wait for confirmation (a rule or allowlist entry added there would not take effect). */
+const writableDir = (ctx: CallContext): string | undefined => (ctx.writeDir === undefined || isHeldBack(loadedAt(ctx, ctx.writeDir)) ? undefined : ctx.writeDir)
 
 /**
  * After "allow once" and a call that ran: offers the allow rule for it, showing
@@ -1277,6 +1362,84 @@ async function councilModel($: EngineInterface, command: Extract<CouncilCommand,
   return { title, lines }
 }
 
+/** A rules file in scope, read now: its content, hash and what in it waits for trust. */
+type RulesRead = { dir: string; key: string; hash: string; loaded: LoadedConfig }
+
+/** At most this many repositories below a multi-repository root are looked at for rules files. */
+const MAX_SCOPE_DIRS = 100
+
+/** The folders whose rules file `/council trust` and `untrust` deal with: the root's, or in a multi-repository root each repository below it. */
+async function rulesDirsInScope($: EngineInterface, ctx: Context): Promise<string[]> {
+  if (!ctx.isMulti) return [ctx.root]
+  const entries = await $.fs.list(ctx.root).catch(() => [])
+  const dirs = entries.filter(entry => entry.kind === 'dir' && !entry.isLink).map(entry => `${ctx.root.replace(/\/$/, '')}/${entry.name}`).slice(0, MAX_SCOPE_DIRS)
+  const found: string[] = []
+  for (const dir of dirs) if ((await $.fs.exists(`${dir}/.git`)) && (await $.fs.exists(`${dir}/${OVERRIDES_PATH}`))) found.push(dir)
+  return found
+}
+
+/** Every valid rules file in scope with settings that wait for trust, read and hashed at this moment. */
+async function readRulesFiles($: EngineInterface, ctx: Context): Promise<RulesRead[]> {
+  const files: RulesRead[] = []
+  for (const dir of await rulesDirsInScope($, ctx)) {
+    const path = `${dir}/${OVERRIDES_PATH}`
+    const fileText = (await $.fs.exists(path)) ? await $.fs.read(path).catch(() => undefined) : undefined
+    if (fileText === undefined) continue
+    const loaded = loadConfig(fileText)
+    if (loaded.needsTrust !== undefined) files.push({ dir, key: await rulesKeyOf($, path), hash: await hashOf(fileText), loaded })
+  }
+  return files
+}
+
+/** `/council trust` lists what confirming would enable; `/council trust <code>` confirms the file with that code, as it stands now. */
+async function trustCommand($: EngineInterface, command: Extract<CouncilCommand, { kind: 'trust' }>, mode?: Mode): Promise<Output> {
+  const title = text('cmd.title')
+  const inMode = (build: () => Output): Output => (mode === undefined ? build() : withMode(mode, build))
+  if (settings.trustProjectRules === 'always') return inMode(() => ({ title, lines: [text('trust.option')] }))
+  const ctx = await contextOf($)
+  const stored = await readTrust($)
+  const record = stored.ok ? stored.record : []
+  const waiting = (await readRulesFiles($, ctx)).filter(file => !isTrusted(record, file.key, file.hash))
+  const views = waiting.flatMap(file => (file.loaded.needsTrust === undefined ? [] : [{ where: file.dir, hash: file.hash, summary: file.loaded.needsTrust.summary, counts: file.loaded.needsTrust.counts }]))
+  if (command.code === undefined) return inMode(() => trustOutput(views, ctx.patterns))
+  if (!stored.ok) return inMode(() => ({ title, lines: [text('trust.saveFailed', { problem: stored.problem })] }))
+  const match = matchCode(waiting, command.code)
+  if (match.kind === 'none') return inMode(() => ({ title, lines: [text('trust.noMatch', { code: command.code ?? '' })] }))
+  if (match.kind === 'ambiguous') return inMode(() => ({ title, lines: [text('trust.ambiguous', { code: command.code ?? '' })] }))
+  const problem = await saveTrust($, match.files.reduce((kept, file) => withTrusted(kept, file.key, file.hash), record))
+  if (problem !== undefined) return inMode(() => ({ title, lines: [text('trust.saveFailed', { problem })] }))
+  await reloadContext($)
+  return inMode(() =>
+    trustedOutput(match.files.flatMap(file => (file.loaded.needsTrust === undefined ? [] : [{ where: file.dir, counts: file.loaded.needsTrust.counts }]))),
+  )
+}
+
+/** `/council untrust`: the record of every rules file in scope is removed, and the rules are read again. */
+async function untrustCommand($: EngineInterface, mode?: Mode): Promise<Output> {
+  const title = text('cmd.title')
+  const inMode = (build: () => Output): Output => (mode === undefined ? build() : withMode(mode, build))
+  const ctx = await contextOf($)
+  const stored = await readTrust($)
+  if (!stored.ok) return inMode(() => ({ title, lines: [text('trust.saveFailed', { problem: stored.problem })] }))
+  const keys: string[] = []
+  for (const dir of await rulesDirsInScope($, ctx)) {
+    const path = `${dir}/${OVERRIDES_PATH}`
+    if (await $.fs.exists(path)) keys.push(await rulesKeyOf($, path))
+  }
+  const removed = stored.record.filter(entry => keys.includes(entry.path)).length
+  if (removed > 0) {
+    const problem = await saveTrust($, withoutTrusted(stored.record, keys))
+    if (problem !== undefined) return inMode(() => ({ title, lines: [text('trust.saveFailed', { problem })] }))
+  }
+  // Said again for the same content if it comes back to be untrusted.
+  for (const key of [...warned]) if (key.startsWith('trust:')) warned.delete(key)
+  await reloadContext($)
+  return inMode(() => ({
+    title,
+    lines: [removed > 0 ? text('trust.untrusted', { n: removed }) : text('trust.untrustNone'), ...(settings.trustProjectRules === 'always' ? [text('trust.untrustOption')] : [])],
+  }))
+}
+
 /**
  * The output of one subcommand. The `$` reads come first; the pure builders then
  * run in `mode` when one is given (the copy Claude reads is built in plain). A
@@ -1305,7 +1468,8 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
         galadrielEnabled: settings.galadrielEnabled,
         tokenBudget: settings.tokenBudget,
       }
-      return inMode(() => statusOutput(input))
+      const scoped = await cwdContextOf($)
+      return inMode(() => statusOutput({ ...input, trust: trustLines(scoped.loaded) }))
     }
     case 'bypass':
       await update($, session, value => withBypass(sessionOf(value), command.on))
@@ -1327,7 +1491,7 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
     }
     case 'rules': {
       const ctx = await cwdContextOf($)
-      return inMode(() => rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors, mode !== undefined))
+      return inMode(() => rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors, mode !== undefined, trustLines(ctx.loaded)))
     }
     case 'test': {
       // Classification only: nothing the command names is run or read. The directories below the root
@@ -1355,6 +1519,7 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
               seats: councilSeats(call, classification, enabledMembers(), { ranges: settings.galadrielEnabled }),
               choice: modelChoice('council', ctx, state.models),
               checks: settings.gimliEnabled ? checksIn(ctx).map(check => check.command.name) : [],
+              ignoredChecks: settings.gimliEnabled ? ignoredChecksOf(ctx.scopes.map(scope => scope.loaded)) : 0,
               isBranchAssumed: big.entry === 'merge-to-protected' && needsCurrentBranch(classification, ctx.loaded.compiled),
             }
       const typed = redact(command.command, ctx.patterns)
@@ -1368,6 +1533,10 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
     }
     case 'model':
       return councilModel($, command)
+    case 'trust':
+      return trustCommand($, command, mode)
+    case 'untrust':
+      return untrustCommand($, mode)
     case 'reload': {
       const ctx = await reloadContext($)
       return inMode(() => {
@@ -1726,7 +1895,8 @@ export const register: Register = (on, options) => {
       const result = await proceed()
       if (outcomeOf(result) === 'ran') {
         // Only where one rules file is the call's own (DESIGN §14.5): never a root file that would end the lookup.
-        ruleAdded = ctx.writeDir === undefined ? undefined : await offerRule($, call, classification, writeWhere, ctx, hadSecret, ctx.writeDir).catch(() => undefined)
+        const writeDir = writableDir(ctx)
+        ruleAdded = writeDir === undefined ? undefined : await offerRule($, call, classification, writeWhere, ctx, hadSecret, writeDir).catch(() => undefined)
       }
       return finish(result)
     }
@@ -1744,16 +1914,17 @@ export const register: Register = (on, options) => {
         {
           call: shownCall(),
           ruleReason: decided?.reason ?? '',
+          ...(decided?.source === 'project' && { isProjectReason: true }),
           why,
           opinions,
           ...(preview !== undefined && { preview: preview.text }),
           ...(secrets.length > 0 && { secrets: secrets.map(finding => ({ label: finding.label, snippet: finding.snippet })) }),
-          canAllowlist: secrets.length === 1 && ctx.writeDir !== undefined,
+          canAllowlist: secrets.length === 1 && writableDir(ctx) !== undefined,
         },
         currentMode(),
       )
       // One entry per confirm: the allowlist is offered for a single finding only.
-      const answer = await escalate($, question, secrets.length === 1 && ctx.writeDir !== undefined)
+      const answer = await escalate($, question, secrets.length === 1 && writableDir(ctx) !== undefined)
       if (answer === 'unavailable') {
         decision = answer
         // Chat approval (ROADMAP C4): only where nothing draws, and never for a protected path or a block rule.
@@ -1818,7 +1989,7 @@ export const register: Register = (on, options) => {
       if (answer.kind === 'allowlist') {
         const finding = secrets[0]
         // Not offered without a rules file of its own to write to, so an answer without one is not honoured.
-        const writeDir = ctx.writeDir
+        const writeDir = writableDir(ctx)
         if (finding !== undefined && writeDir !== undefined && (await confirmAllowlist($, finding))) {
           const written = await writeOverrides($, writeDir, current => withAllowlistEntry(current, finding.fingerprint))
           if (written.ok) {
@@ -1943,7 +2114,7 @@ export const register: Register = (on, options) => {
       const choice = modelChoice('council', ctx, state.models)
       model = choice.model
       const range = rangeOf(classification)
-      const ruleReasons = [...new Set(classification.findings.map(finding => finding.reason))]
+      const { ruleReasons, projectReasons } = reasonsOf(classification.findings)
       const sittings: Sitting[] = []
       for (const seat of seats) {
         const who = whoOf(seat.member, seat.member === 'aragorn' ? seat.profile : undefined)
@@ -1968,6 +2139,7 @@ export const register: Register = (on, options) => {
                       range: { kind: seat.range, call: callText(call, ctx.patterns) },
                       diff: { diff: read.diff, ...(read.omitted !== undefined && { omitted: read.omitted }), isNew: false },
                       ruleReasons,
+                      ...(projectReasons.length > 0 && { projectReasons }),
                       latestPrompt: state.latestPrompt,
                       ...(notes.length > 0 && { notes }),
                     },
@@ -1980,6 +2152,8 @@ export const register: Register = (on, options) => {
         sittings.push({ seat, who, brief: await briefOf($, asked, call, classification, cwd, realPath, state, preview, previewNotes, ctx) })
       }
       const checks = checksIn(ctx)
+      // Checks the project asked for whose rules file is not trusted are not run: in their place one that could not be started, so the council blocks.
+      const notRun = settings.gimliEnabled && ignoredChecksOf(ctx.scopes.map(scope => scope.loaded)) > 0 ? [notRunCheck(text('gimli.untrustedName', {}, 'plain'), text('gimli.untrusted', {}, 'plain'))] : []
       const debate = debateOf(
         'council',
         sittings.map(sitting => ({
@@ -1988,7 +2162,7 @@ export const register: Register = (on, options) => {
           status: sitting.brief === undefined ? ('skipped' as const) : ('waiting' as const),
           ...(sitting.brief === undefined && sitting.skip !== undefined && { reason: tidyReason(sitting.skip) }),
         })),
-        checks.map(check => ({ name: check.command.name, status: 'running' as const })),
+        [...checks.map(check => ({ name: check.command.name, status: 'running' as const })), ...notRun.map(run => ({ name: run.name, status: run.status }))],
       )
       await update($, session, value => openDebate(sessionOf(value), debate)).catch(() => undefined)
       await openDebatePane($).catch(() => undefined)
@@ -2013,7 +2187,7 @@ export const register: Register = (on, options) => {
         return finish({ deny: refusalText({ who: 'who.fullCouncil', verdict: 'interrupted', reason: text('reason.aborted'), alternative: '' }) }, false)
       }
       // Redact before capping: a cut could split a secret the patterns would catch whole.
-      const runs = held.runs.map(run => ({
+      const runs = [...held.runs, ...notRun].map(run => ({
         ...run,
         tail: redact(run.tail, ctx.patterns),
         ...(run.problem !== undefined && { problem: problemOf(redact(run.problem, ctx.patterns)) }),

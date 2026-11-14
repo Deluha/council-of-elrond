@@ -220,11 +220,7 @@ I5, P1, S3.
   agent, a prompt-injected agent, a hostile repository; and what is out of scope. New file
   `docs/THREAT-MODEL.md`, linked from the manual and from `SECURITY.md`. Classes only, no
   reproduction steps.
-- [ ] **M1.3 A trust rule for a repository-supplied rules file** (S, neutral; AM8). What a rules
-  file that arrives with a cloned repository may do (rules, protected paths, project checks,
-  models), what a person is told about it, and what no project file can lower. The brief writes
-  the options and brings them to the maintainer; it does not choose. A behaviour change that
-  follows is its own brief with its own gate label.
+- [x] **M1.3 A trust rule for a repository-supplied rules file** (S, tightens; AM8). Decided and built in the hardening pull request (DESIGN §15).
 - [ ] **M1.4 Shorten the terminal check** (M, neutral; finding P1, decision D5; was M1.1). Go
   through the fifteen screens of the v1 check. Each one a mounted tree (`$.ui.mount`) or a headless
   stream can prove becomes a test. What is left becomes `docs/TERMINAL-CHECK.md`: numbered steps,

@@ -23,6 +23,17 @@ past the gate in a way the documentation says it should not is in scope.
   mod takes part in Claude Code's permission decision.
 - Secrets reaching the audit log, a model prompt or the dialog unredacted.
 - An allow rule or allowlist entry written to `rules.json` without the user's confirmation.
+- A setting of a project's `rules.json` that loosens the gate or runs code taking effect before a
+  person confirmed that exact file content (see [Trusting a project's rules file](mods/council-of-elrond/README.md#trusting-a-projects-rules-file)).
+
+## A project's rules file
+
+A `rules.json` that arrives with a cloned repository is trusted like code only after a person has
+confirmed that exact content (`/council trust`), kept as a hash in the plugin's own store. Until
+then its settings that loosen the gate or run code are ignored and its tightening ones apply, so it
+can never make the gate weaker than no file. The option `trustProjectRules=always` turns this off for
+a host whose owner controls which repositories it opens; it is the plugin's own configuration, never
+read from a rules file.
 
 ## Out of scope
 

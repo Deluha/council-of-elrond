@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, cut, fenced, label, noteLines, OMISSION_RULES, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, cut, fenced, label, noteLines, OMISSION_RULES, projectReasonLines, untrustedRules } from './shared.js'
 import type { Omitted, Shown } from './shared.js'
 import type { Call } from '../rules/classify.js'
 
@@ -34,6 +34,8 @@ export type LegolasContext = {
   /** The diff, redacted already. */
   diff: CallDiff
   ruleReasons: readonly string[]
+  /** The project rules' reasons, cleaned (`reasonsOf`); shown inside a data block. */
+  projectReasons?: readonly string[]
   /** The read-only preview: the file's diff stat and whether git tracks it. */
   preview?: string
   /** What the preview's own cut left out, when it was cut before it got here. */
@@ -309,6 +311,7 @@ export function legolasPrompt(context: LegolasContext, nonce: string): string {
       ? [`Command:\n${fenced('call', context.range.call, nonce, { limits: { lines: limits.rangeCallLines, chars: limits.rangeCallChars } })}`, `The changes the ${context.range.kind} would ${context.range.kind === "push" ? "send" : "bring in"}: ${label(context.path)}`]
       : [`File: ${label(context.path)}${context.diff.isNew ? ' (new file)' : ''}`]),
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
+    ...projectReasonLines(context.projectReasons, nonce),
     ...(context.diff.note !== undefined ? [NOTES[context.diff.note]] : []),
     context.range !== undefined ? 'The changes, as a diff:' : 'Proposed change:',
     fenced('diff', context.diff.diff, nonce, context.diff.omitted === undefined ? {} : { earlier: context.diff.omitted }),

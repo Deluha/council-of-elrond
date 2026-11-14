@@ -570,7 +570,7 @@ describe('in the pipeline', () => {
     expect(w.ran).toEqual([])
   })
 
-  test('a configured pattern from the rules file is enforced and redacted', async ($, on) => {
+  test('a configured pattern from the rules file is enforced and redacted', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on)
     w.files.set(RULES, JSON.stringify({ schemaVersion: 1, gollum: { patterns: [{ id: 'acme', level: 'high', regex: 'ACME-[0-9]{8}', label: 'Acme key' }] } }))
     const deny = denyOf(await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/a.ts`, content: 'k = "ACME-12345678"' }))
@@ -607,7 +607,7 @@ describe('allowed calls', () => {
     expect(await auditLines(w)).toEqual([])
   })
 
-  test('an allowlisted high secret runs', async ($, on) => {
+  test('an allowlisted high secret runs', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on)
     const [finding] = (await scanText(AWS)).high
     w.files.set(RULES, JSON.stringify({ schemaVersion: 1, gollum: { allowlist: [finding?.fingerprint] } }))

@@ -1,8 +1,10 @@
 import { OVERRIDES_PATH } from '../config/defaults.js'
+import type { TrustCounts } from '../config/trust.js'
 import { untrusted } from '../members/shared.js'
 import { redact } from '../redact.js'
 import type { SecretPattern } from '../redact.js'
 import { text } from '../strings.js'
+import { countsText } from './commands.js'
 import type { CouncilCommand, Output } from './commands.js'
 import type { MemberOpinion } from './escalation.js'
 
@@ -36,6 +38,9 @@ export const routeText = (): string => text('relay.route', { path: OVERRIDES_PAT
 
 /** The session-start notice appended as a row the model reads. */
 export const noticeText = (): string => text('notice.noSurface', { chatRoute: text('relay.chatRoute', {}, 'plain'), route: routeText() }, 'plain')
+
+/** Where nothing draws: that a project rules file waits for the person's confirmation. Counts only, never a word from the file. */
+export const untrustedNotice = (counts: TrustCounts): string => text('relay.rulesUntrusted', { summary: countsText(counts, 'plain') }, 'plain')
 
 /** The nobody-to-ask refusal: what was refused, what is behind it (names only) and the way forward. */
 export type NobodyToAsk = {

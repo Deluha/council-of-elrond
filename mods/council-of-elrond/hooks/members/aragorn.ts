@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, fenced, label, noteLines, OMISSION_RULES, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, fenced, label, noteLines, OMISSION_RULES, projectReasonLines, untrustedRules } from './shared.js'
 import type { Omitted } from './shared.js'
 import type { CallDiff } from './legolas.js'
 import { seatOf } from '../elrond/routing.js'
@@ -14,6 +14,8 @@ export type AragornGitContext = {
   /** The command, redacted already. */
   call: string
   ruleReasons: readonly string[]
+  /** The project rules' reasons, cleaned (`reasonsOf`); shown inside a data block. */
+  projectReasons?: readonly string[]
   /** The read-only preview: branch, remote and the commits a push would send, or recent history. */
   preview?: string
   /** What the preview's own cut left out, when it was cut before it got here. */
@@ -32,6 +34,8 @@ export type AragornDatabaseContext = {
   /** The command or the call's arguments, redacted already. */
   call: string
   ruleReasons: readonly string[]
+  /** The project rules' reasons, cleaned (`reasonsOf`); shown inside a data block. */
+  projectReasons?: readonly string[]
   /** SQL the call runs or writes: inline (`-c`, heredoc), files it names, or a file tool's diff. Redacted whole already; the prompt cuts it. */
   sql: readonly SqlPiece[]
   /** SQL files the call names that are not in `sql`: outside the project, missing or unreadable, or past the cap. */
@@ -170,6 +174,7 @@ export function aragornGitPrompt(context: AragornGitContext, nonce: string): str
   const sections = [
     `Tool: ${context.tool}`,
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
+    ...projectReasonLines(context.projectReasons, nonce),
     `Protected branches: ${context.protectedBranches.join(', ') || '(none configured)'}`,
     'Proposed command:',
     fenced('call', context.call, nonce, { limits: { lines: limits.callLines, chars: limits.callChars } }),
@@ -211,6 +216,7 @@ export function aragornDatabasePrompt(context: AragornDatabaseContext, nonce: st
   const sections = [
     `Tool: ${context.tool}`,
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
+    ...projectReasonLines(context.projectReasons, nonce),
     `Looks like production: ${context.production.length > 0 ? context.production.map(hit => JSON.stringify(hit)).join(', ') : 'nothing matched the configured patterns'}`,
     context.diff !== undefined ? `Proposed change${context.diff.isNew ? ' (new file)' : ''}:` : 'Proposed call:',
     context.diff !== undefined

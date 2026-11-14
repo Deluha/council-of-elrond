@@ -209,7 +209,7 @@ describe('Esc during a review (DESIGN §10.9)', () => {
     expect(after.debates).toMatchObject([{ id: expect.any(String), status: 'done', verdict: 'aborted' }])
   })
 
-  test('mid-council: the same, and the running check is ended', { plugins: [ESC] }, async ($, on) => {
+  test('mid-council: the same, and the running check is ended', { plugins: [ESC], options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true, answer: KEEP_BLOCKED })
     const state = watchState(on)
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
@@ -234,7 +234,7 @@ describe('Esc during a review (DESIGN §10.9)', () => {
 })
 
 describe('the checks do not outlive the council (DESIGN §13.4 b)', () => {
-  test('a council that throws ends the check it started, not at its own timeout', { options: { councilSequential: true } }, async ($, on) => {
+  test('a council that throws ends the check it started, not at its own timeout', { options: { trustProjectRules: 'always', councilSequential: true } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
     w.spawnReply = () => ({ hang: true })
@@ -257,7 +257,7 @@ describe('the checks do not outlive the council (DESIGN §13.4 b)', () => {
     expect(w.ran).toEqual([])
   })
 
-  test('without a throw, a passing check ends by itself and nothing is stopped', async ($, on) => {
+  test('without a throw, a passing check ends by itself and nothing is stopped', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
     expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })

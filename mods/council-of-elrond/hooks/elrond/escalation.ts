@@ -1,4 +1,4 @@
-import { cut } from '../members/shared.js'
+import { cut, label } from '../members/shared.js'
 import { redact } from '../redact.js'
 import { text } from '../strings.js'
 import type { Mode, StringKey } from '../strings.js'
@@ -17,6 +17,8 @@ export type MemberOpinion =
 export type Question = {
   call: string
   ruleReason: string
+  /** The reason is a project rule's: text from the repository's rules file, shown after the gutter, cleaned and capped. */
+  isProjectReason?: boolean
   why: StringKey
   opinions: readonly MemberOpinion[]
   /** The read-only preview, when there is one. */
@@ -73,7 +75,11 @@ export function questionText(question: Question, mode: Mode = 'plain'): string {
     text('ask.title', {}, mode),
     text(question.why, {}, mode),
     text('ask.call', { call: excerptOf(redact(question.call), 12, 600, mode) }, mode),
-    ...(question.ruleReason !== '' ? [text('ask.rule', { reason: question.ruleReason }, mode)] : []),
+    ...(question.ruleReason === ''
+      ? []
+      : question.isProjectReason === true
+        ? [text('ask.ruleProject', { reason: `${text('ask.gutter', {}, mode)}${label(oneLine(redact(question.ruleReason)))}` }, mode)]
+        : [text('ask.rule', { reason: question.ruleReason }, mode)]),
     ...(question.secrets ?? []).map(secret =>
       text('ask.secret', { label: oneLine(secret.label), snippet: oneLine(redact(secret.snippet)) }, mode),
     ),

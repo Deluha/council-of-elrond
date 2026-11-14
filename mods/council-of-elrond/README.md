@@ -183,6 +183,7 @@ what counts.
 }
 ```
 
+- **They run only after you confirm the file.** `gimli.commands` waits for `/council trust` (see [Trusting a project's rules file](#trusting-a-projects-rules-file)); until then a big operation is refused with "not run: the rules file is not trusted".
 - **Only these commands run.** They run by argument vector with no shell, in the project root (with several repositories under one root, in each repository's own directory), and nothing comes from Claude or the call. `rules.json` is a protected path, so Claude can't add a command without asking you.
 - **Pass or fail by exit code.** A failure, a timeout or a command that can't start is a block. Claude gets the check's last 20 lines (redacted) so it can fix the cause, and for a command that can't start, the error (a missing program, say; redacted); the audit log keeps none of them.
 - **Each command has its own timeout:** 120 s unless `timeoutMs` says otherwise, at most 600 s. It runs outside the reviewers' deadline, so a council can take as long as the longer of the two.
@@ -244,6 +245,8 @@ Put project overrides in `.claude/council-of-elrond/rules.json`:
 - **Overrides win.** A matching project rule decides before the shipped rules.
 - **Two things can't be lowered.** No project rule goes below a shipped block rule or a protected path, and block rules can't be disabled.
 - **Lists only grow.** Lists add to the shipped ones.
+- **Some settings wait for you.** Until you confirm the file with `/council trust`, its allow and review rules, disabled rules, models, patterns, allowlist and checks are ignored ([Trusting a project's rules file](#trusting-a-projects-rules-file)).
+- **A project rule's reason is the project's text.** Reviewers see it inside a data block under a lead-in that says so, not after "Flagged because", and the dialog shows it after the `|` bar; either way on one line of at most 200 characters.
 
 **A broken file is ignored whole.** The shipped rules stay in force, and the errors are listed by
 field in the transcript.
@@ -255,6 +258,63 @@ the session root. When the session root is the parent of several repositories, e
 directly below it has its own, at its own top (see the next section). No other depth counts: a
 file in an arbitrary subfolder is never read, so a planted file cannot set rules for the calls
 beneath it.
+
+### Trusting a project's rules file
+
+A rules file arrives with a cloned repository, so what it holds is not yours until you have read
+it. The settings that can only make the gate stricter apply at once; the ones that loosen it or run
+code wait until you confirm that exact file.
+
+| Applies at once | Waits until you confirm the file |
+| :- | :- |
+| `block` and `ask` rules, `protectedPaths`, `protectedBranches`, `productionPatterns`, `bigOperations` | `allow` and `review` rules, `disableRules`, `models`, `gollum.patterns`, `gollum.allowlist`, `gimli.commands` |
+
+Until then the waiting settings are as if absent: an allow rule lets nothing through, a shipped
+rule you disabled still fires, the built-in models are used, your patterns are not applied, and the
+project checks are not run. A big operation whose checks are among them is refused with "not run:
+the rules file is not trusted", the same as a check that could not be started, so a check the
+project asked for is never dropped silently. A `review` rule waits because a project rule decides
+before a shipped one and can lower a shipped `ask` to a review.
+
+**Telling you.** Once per session per file the council says, in a transcript line and a toast, that
+the file has settings that are ignored, with counts and no text from the file. Where nothing draws
+the same notice reaches you through Claude, with counts only (see [Where nothing draws](#where-nothing-draws)).
+`/council rules` and `/council` show, for the file in scope, whether it is trusted (you confirmed this
+content), trusted by the option, or not trusted, with how many settings are ignored.
+
+**Confirming.**
+- `/council trust` lists, for each file in scope that has settings waiting (a session root that
+  holds several repositories has one per repository), the counts and each allow or review rule (id,
+  tools and patterns), each disabled rule, each model, each check's command line and each pattern's id,
+  one value per line after a `|` bar, redacted, cut to 300 characters, ten per kind and then "and N
+  more". Secrets allowlist entries are counted and never shown. Then the file's code, the first 8
+  characters of its hash, and the line to type.
+- `/council trust <code>` reads the files again and confirms the one whose hash starts with that
+  code. A code that fits nothing, or files with different content, confirms nothing and says so.
+  It then reloads and says what is now in force.
+- `/council untrust` takes the confirmation back for the files in scope.
+- Any change to the file, one byte or a copy at another path, makes it untrusted again; it is read
+  again at the next `/council reload` or session. `/council reload` itself never trusts anything.
+- Only a person's own command runs `trust`, as `off` does: not a plugin, another session, a
+  scheduled prompt, `claude -p` or the SDK.
+
+The confirmation is kept in the plugin's own store (a file under your Claude Code configuration
+folder), never in the repository, as a path and the SHA-256 of the exact text; at most 200 files. A
+store that cannot be read trusts nothing.
+
+**The mod's own writes.** When you answer "Add the rule" after "allow once", or add an allowlist
+entry, the file is written and its new content recorded as trusted, because you just confirmed that
+entry. If the file has settings waiting, the offer is not made (it would not take effect); run
+`/council trust` first.
+
+**For a host with nobody to confirm.** Set the option "Trust project rules files" to `always`
+(`trustProjectRules=always` in the plugin's configuration) and every rules file is trusted, as it was
+before this rule existed. Use it where the owner of the environment decides which repositories it
+opens (a cloud or CI setup), never for repositories you did not choose. It is the plugin's own
+configuration; no rules file can set it.
+
+**If you used a rules file before this rule.** Its waiting settings stop applying on upgrade, so a push
+with project checks is refused until you run `/council trust` and type the code, or set the option.
 
 ### Several repositories under one root
 
@@ -303,8 +363,10 @@ own write to a repository's file reloads that one. A repository created after th
 is seen after `/council reload`. A session root that has a `rules.json`, or is itself a repository,
 keeps the single set of rules it always had. The lookup is on for any root with neither, even one
 that holds no repository: a plain folder is then offered no allow rule or allowlist entry for calls
-outside a repository, so give it a `rules.json` (even `{"schemaVersion": 1}`) to get them back. The
-cloud guide has the setup:
+outside a repository, so give it a `rules.json` (even `{"schemaVersion": 1}`) to get them back. Each
+repository's file is trusted on its own ([Trusting a project's rules file](#trusting-a-projects-rules-file)):
+confirming one does not confirm another. The cloud guide has the setup, and the one option a cloud
+environment usually sets, `trustProjectRules=always`, since nobody there can confirm a file:
 [Cloud sessions](../../docs/INSTALL.md#cloud-sessions).
 
 ## Models
@@ -352,6 +414,7 @@ overrides the deadline.
 | Preview line limit | 80 |
 | Diff line limit | 200 |
 | Tool errors count as failed attempts | on |
+| Trust project rules files | `confirm`: the settings of a rules file that loosen the gate or run code wait for `/council trust`. `always`: every file is trusted, for a host whose owner controls the repositories it opens (see [Trusting a project's rules file](#trusting-a-projects-rules-file)) |
 
 ## Modes
 
@@ -407,17 +470,18 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | `/council rules` | Every effective rule with its source (`shipped` or `project`), and the lists. |
 | `/council test "<command>"` | Which tier, rule, reviewer (and profile, and why it fell back to Gandalf if it did) and operation key a shell command would get. For a big operation it shows the full council's seats, model and checks. Runs nothing, so a merge is assumed to land on a protected branch and a force push of the current branch is asked about (its branch is not read). |
 | `/council model [<member> <model> [--save]]` | Lists each slot's model and where it came from, or switches one for this session (`default` clears the switch). `--save` also writes the `/config` row when the model is one of its picker values. |
-| `/council reload` | Reads `rules.json` again (every repository's, when the session root holds several). |
+| `/council trust`, `/council trust <code>`, `/council untrust` | Lists what a rules file with settings that wait would enable, with its code; confirms the file whose code you type, as it stands now; removes the confirmation. See [Trusting a project's rules file](#trusting-a-projects-rules-file). |
+| `/council reload` | Reads `rules.json` again (every repository's, when the session root holds several). It never trusts a file. |
 | `/council report` | A summary of the audit log, rotated files included (see below). |
 | `/council debate` | Opens the [debate pane](#debate-pane-and-council-check) at any width (where nothing draws, prints its rows as transcript lines). |
 
-**`off`, `shadow on` and `model` only run when a person types them.** They loosen the gate (bypass,
-reviewers that never refuse, a different reviewing model), so a command that arrives from a plugin,
+**`off`, `shadow on`, `model` and `trust` only run when a person types them.** They loosen the gate (bypass,
+reviewers that never refuse, a different reviewing model, a project file's settings), so a command that arrives from a plugin,
 another Claude session or a scheduled prompt is refused with one line and changes nothing. Typing
 them at the prompt (the cloud web client included) or through the Remote Control bridge works.
-`claude -p` and the SDK are not a person, so those three are refused there; set them in `/config` or
+`claude -p` and the SDK are not a person, so those four are refused there; set them in `/config` or
 the plugin's options instead. `on`, `shadow off`, the `model` listing, `reload` and the rest answer
-from any origin.
+from any origin (`untrust` too: it only tightens).
 
 ### `/council report`
 
@@ -460,6 +524,7 @@ attached, nothing changes and Claude reads none of it.
   shows an exact-string allowlist entry as `(an exact string, not shown)` instead of its first three
   characters. (A command does not start a reply by itself: Claude repeats the lines when you next
   write to it, for example "go on".)
+- **A notice when a project rules file has settings waiting for your confirmation**, once per file, with counts only (nothing from the file), telling Claude to tell you and how: run `/council trust` in a terminal, or set the option "Trust project rules files" to `always` for a host you control. `/council trust` itself prints to the transcript lines, which are not shown here, so this is not a place to confirm.
 - **A notice at the start of the session**, saying the council is active, that a call needing your
   approval is refused here with the reason, and that Claude should tell you which call was refused
   and why.
@@ -471,7 +536,7 @@ attached, nothing changes and Claude reads none of it.
 **What never goes through Claude:** the read-only preview and any secrets finding (its label, its
 snippet and the secret), a diff, the call's own text or what a write would put in a file, a
 reviewer's reason or failure, and every other subcommand (`log`, `off`, `on`, `shadow`, `model`,
-`models`, `reload`, `debate`). Only a person's own command is answered this way: one that arrives
+`models`, `trust`, `untrust`, `reload`, `debate`). Only a person's own command is answered this way: one that arrives
 from a plugin, another Claude session, a scheduled prompt, `claude -p` or the SDK gets nothing
 back, so Claude cannot probe how a command would be classified.
 

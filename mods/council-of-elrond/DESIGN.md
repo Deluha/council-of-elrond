@@ -77,15 +77,19 @@ hooks: session.start, session.detach, session.attach, prompt.submit, command.run
        ui.render{component=AbovePrompt}, ui.render{component=SessionMode}, tool.call
 calls: $.clock.after (via epicDrop, runCheck), $.clock.now, $.command.register,
        $.config.set (via councilModel), $.env.get (via loadContext), $.fs.exists,
-       $.fs.list (via previewOf), $.fs.read (via appendAudit, councilOutput, fileDiffOf, loadRules,
-       reportFrom, scriptsOf, sqlFilesOf, writeOverrides), $.fs.stat (via gitDirOf, loadChild,
-       loadContext, previewOf, realPathOf, sqlFilesOf), $.fs.write (via appendAudit, writeOverrides),
+       $.fs.list (via previewOf, rulesDirsInScope), $.fs.read (via appendAudit, councilOutput,
+       fileDiffOf, loadRules, readRulesFiles, reportFrom, scriptsOf, sqlFilesOf, writeOverrides),
+       $.fs.stat (via loadChild, loadContext, previewOf, realDirInside, realPathOf, rulesKeyOf,
+       sqlFilesOf),
+       $.fs.write (via appendAudit, writeOverrides),
        $.model.complete (via probeModel, review), $.process.run (via currentBranchOf,
-       runGitInspection), $.process.spawn (via runCheck), $.session.append (via announce), $.session.cwd,
+       runGitInspection), $.process.spawn (via runCheck),
+       $.session.append (via announce, noticeUntrusted), $.session.cwd,
        $.session.root (via loadContext),
-       $.session.surfaces (via announce, escalate, offerRule, openDebatePane, relayOf, show, showDebate,
-       syncIndicator),
-       $.state.get, $.state.set, $.ui.ask (via confirmAllowlist, escalate, offerRule), $.ui.log,
+       $.session.surfaces (via announce, escalate, noticeUntrusted, offerRule, openDebatePane, relayOf,
+       show, showDebate, syncIndicator),
+       $.state.get, $.state.set, $.store.get (via readTrust), $.store.set (via saveTrust),
+       $.ui.ask (via confirmAllowlist, escalate, offerRule), $.ui.log,
        $.ui.notice, $.ui.open (via openDebatePane, show, showDebate), $.ui.resolve,
        $.ui.status (via syncIndicator), $.ui.toast (via epicDrop, warnOnce)
 env reads: HOME
@@ -97,7 +101,11 @@ Re-run after C2 (§13.5): `session.detach` and `session.attach` hooks, and `$.se
 deliverables on 2.1.294: the lines were unchanged. Re-run on 2.1.296: unchanged
 but for `$.process.run`, now reached through `runGitInspection` (the push-range change after the
 final deliverables). Re-run on 2.1.299: unchanged. Re-run for C5 (§14.5): `loadContext`'s file read
-goes through `loadRules`, and `loadChild` joins the `$.fs.stat` callers.
+goes through `loadRules`, and `loadChild` joins the `$.fs.stat` callers. Re-run for the rules-file
+trust rule (§15 item 22): `$.store.get` and `$.store.set` are new (the trust record), `$.fs.list`
+gains `rulesDirsInScope`, `$.fs.read` gains `readRulesFiles`, `$.fs.stat` gains `rulesKeyOf`, and
+`noticeUntrusted` joins the `$.session.append` and `$.session.surfaces` callers; the hooks line is
+unchanged.
 
 There is no `tool.check` hook: the mod never takes part in the permission decision. The processes it
 starts are read-only `git` commands from Galadriel's table (§6, §8), and, for a big operation, the
@@ -179,6 +187,9 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | The status sync after a roster change fails (`session.attach`, `session.detach`) | Caught where it is made; the hook returns what `next(e)` gave. The status line keeps its last value until the next sync (§13.5 f). |
 | `$.ui.ask` dismissed / "Chat about this" | Refuse, a failed attempt (recorded as `dismissed`; the two cannot be told apart, §12.4). "Talk first" refuses without counting (recorded as `chat`). |
 | Overrides file broken, unknown version, invalid field | Ignored whole; shipped rules enforce; a transcript line lists errors by field, plus a toast. Each repository's file under a multi-repository root is checked on its own and warns once (§14.5). |
+| The trust record cannot be read (`$.store.get` rejects, or the stored value is not the expected shape) | Nothing is trusted by it: a rules file with settings that wait for confirmation is held back, exactly as with no record. The tightening part of the file still applies. `/council trust <code>` then confirms nothing and says the record could not be read or saved (§15 item 22). With `trustProjectRules` at `always` the store is never read. |
+| The trust record cannot be saved (`$.store.set` rejects) | `/council trust <code>` confirms nothing and says why. After the mod's own write (the rule or allowlist offer the person answered), the new content is simply not trusted: a transcript line (`notice.trustNotSaved`) says to run `/council trust`. |
+| A rules file's content differs from the one confirmed (any byte; a copy at another path; a link that now points elsewhere) | Untrusted: the hash, or the real path, no longer matches the record. Its settings that wait for confirmation are held back at the next load (session start, `/council reload`, or when a call first reaches a repository below a multi-repository root); a session already running keeps the content it loaded and confirmed. |
 | Audit write fails | Logged to the debug log (`notice.auditFailed`); never changes a decision, and the queue goes on to the next line. Nothing waits for the queue: a write that never returns holds back only the lines queued after it, never a decision or a later call (§13.4 d). `/council log` and `/council report` read the files, so they may not show a line still queued. |
 | Two Claude Code sessions in one project share the audit log | `$.fs` has no lock and no append, so each write reads the whole file and writes it back: lines of the two sessions can interleave, and a line can be lost when two writes cross. Each session's own writes are queued in order. `/council report` skips any line it cannot parse (§13.4 e). |
 | A preview inspection fails or times out (5 s) | That inspection is left out; no preview is never a reason to allow or block. |
@@ -1367,3 +1378,113 @@ decided; the live list of what still passes is the README's "Known gaps in shell
     refspec is read per refspec, as before, and has no such note. The shipped rules block `--all` and
     `--mirror` (`force-push-protected-branch`), so in practice the note shows for `--tags`; the
     plan and its tests cover all three. Test: `galadriel.test.ts`.
+22. **A project's rules file is trusted only after a person confirmed it** (a tightening; ROADMAP M1.3,
+    amendment AM8). A rules file arrives with a cloned repository and was honoured in full with
+    nobody confirming it: it could allow any tool, switch shipped review rules off, choose models,
+    blank what reviewers see with its own patterns, allowlist secrets and name commands the mod
+    spawns outside Claude Code's permission check. Decided by the maintainer on 2026-11-13: the
+    settings that loosen the gate or run code take effect only after a person has confirmed that
+    exact file content; until then they are ignored, and the settings that can only tighten still
+    apply, so an untrusted file can never make the gate weaker than no file.
+    - **The split** is one pure function, `splitByTrust` (`config/trust.ts`), driven by the table
+      `FIELD_TRUST` (a `Record` over every field of the schema, so a field added without a
+      classification fails the typecheck, and `trust.test.ts` compares the table with `TOP_KEYS`,
+      `GOLLUM_KEYS` and `GIMLI_KEYS`):
+
+      | Field | Held back until confirmed? | Why |
+      | :- | :- | :- |
+      | `rules` with tier `allow` | yes | lets a call through |
+      | `rules` with tier `review` | yes | see below |
+      | `rules` with tier `ask`, `block` | no | at or above every tier a project rule displaces |
+      | `disableRules` | yes | gates fewer calls |
+      | `protectedPaths`, `protectedBranches`, `productionPatterns` | no | lists that only add to the shipped ones |
+      | `bigOperations` | no | sends more calls to the full council |
+      | `models` | yes | names a model the mod sends the call to |
+      | `gollum.patterns` | yes | runs on call text and blanks what reviewers see |
+      | `gollum.allowlist` | yes | lets a secret through the scan |
+      | `gimli.commands` | yes | starts processes outside the permission prompts |
+
+      **`review` rules wait too (a tightening over the brief's first list).** A project rule decides
+      before the shipped non-block rules do (`classify`), so a project `review` rule that matches
+      what a shipped `ask` rule matches lowers it to a review: `sudo ls` under a project review rule
+      for `ls` is a review where the shipped rules ask. Tightening-only could not be shown for it,
+      so it is held back with the `allow` rules. `ask` and `block` rules cannot loosen anything
+      (block rules are a floor), so they apply at once. With the allow and review rules removed the
+      remaining project rules keep their order, and what they uncover is only ask or block.
+      `loadConfig(text, shipped, isTrusted)` merges only `split.always` when `isTrusted` is false
+      and reports the rest as `needsTrust` (counts and a summary); nothing held back is compiled,
+      so no held-back pattern is ever used as a regex on call text, and no held-back model id is
+      ever sent a request.
+    - **The record** is one value in the plugin's own store (`$.store`, key `trustedRules`):
+      `{ v: 1, files: [{ path, hash }] }`, oldest first, at most 200 (`TRUST_CAP`; the oldest is
+      dropped). `path` is the file's real path (`$.fs.stat` with `resolve`; the path as given when it
+      cannot be resolved) and `hash` the SHA-256, in hex, of the exact text as `$.fs.read` returned
+      it, the same text that is parsed, so what was hashed is what is enforced. A file is trusted
+      when its current hash equals the one stored for its path. Any change to the file, or a copy at
+      another path, is untrusted. A store that cannot be read, or holds another shape, trusts
+      nothing. The record lives outside the repository and outside session state.
+    - **The option.** `trustProjectRules` (`/config`): `confirm` (default) or `always`; any other value
+      is `confirm`. `always` trusts every file and reads no record (today's behaviour), for a host whose
+      owner controls which repositories it opens (cloud, CI). It is the user's configuration and is
+      never read from a rules file. Tests run with the manifest default, so those whose fixture holds
+      settings that wait set `{ options: { trustProjectRules: 'always' } }` on the test itself: the
+      shared fixture cannot set a default (the kit takes options per test): 31 tests in `council`,
+      `debate`, `done`, `gollum`, `pipeline`, `relay`, `robustness` and `scopes`, each with a project
+      file of allow rules, models, patterns, an allowlist or checks.
+    - **Project checks never silently drop.** A big operation whose touched scopes hold held-back
+      `gimli.commands` runs none of them (no process is spawned) and gets in their place one check
+      result, `project checks`, status `error`, problem `not run: the rules file is not trusted ...`
+      (`notRunCheck`), which `combine` counts as a check that could not be started: a block, with
+      the reason to Claude. With Gimli switched off in `/config` nothing is dropped, so nothing is
+      said. A trusted scope's checks in the same call still run. `/council test` says the council
+      would block.
+    - **The person is told** once per session per file content (`warnOnce` under `trust:<path>:<hash>`):
+      a transcript line and a toast with counts only, and, where nothing draws, one model-readable row
+      through the relay (`relay.rulesUntrusted`, like the start notice) that holds counts and no text
+      from the file. `/council rules` and `status` show per file: trusted (confirmed), trusted by the
+      option, or not trusted with the counts ignored, and say that no allow rule or allowlist entry is
+      offered meanwhile.
+    - **Confirming.** `/council trust` lists, per untrusted file in scope (the root's, or each
+      repository below a multi-repository root, §14.5), the counts and every allow or review rule
+      (id, tools, patterns), disabled rule id, model, check (its argv) and pattern id, then the
+      file's code, the first 8 hex characters of its hash. Allowlist entries are counted, never
+      shown (an entry may be the secret). Every value is redacted with the shipped patterns,
+      stripped of control characters (C0, C1, U+2028 and U+2029) so it is one line, capped at 300
+      characters and printed after the dialog's gutter (`ask.gutter`); ten items per kind, then
+      "and N more"; twenty files. `/council trust <code>` re-reads and re-hashes every file in
+      scope at that moment and confirms the ones whose hash starts with the code (8 to 64 hex
+      characters), records them, reloads the config and says what is now in force. No match, or
+      matches with different content, confirms nothing and says so; several files with the very same
+      content share a code and are confirmed together (decided: the person saw that content listed
+      for each). `/council untrust` removes the record of every file in scope and reloads. `trust`
+      (both forms) needs a person (`needsPerson`: `composer` or `bridge`, like `off`); `untrust`
+      only tightens and runs from any source. `/council reload` reads the record and trusts nothing.
+      The listing is not relayed where nothing draws (the relay's four subcommands stay four): such a
+      host sets the option.
+    - **The mod's own writes.** After the person answered "Add the rule" or confirmed an allowlist
+      entry, the content just written is recorded as trusted when the file was trusted before the
+      write, held nothing that waits, or did not exist (the person confirmed exactly that change). No
+      other path records trust. The offers themselves are skipped for a file that is held back (the
+      entry would not take effect), and `writeOverrides` re-reads and refuses the same case, so a
+      file that changed meanwhile is never rewritten. With the option at `always` nothing is recorded.
+    - **Project text is shown as the project's** (decided with the above). A project rule's
+      reason reached reviewers after "Flagged because" and the dialog as if it were the mod's own
+      words. `reasonsOf` (`members/shared.ts`) keeps the shipped rules' reasons as written and puts
+      the project's, cleaned (one line, control characters stripped, 200 characters), in their own
+      `projectReasons`: each reviewer's prompt shows them inside a `project-rule-reason` data block
+      under a lead-in that says they are the project's text, and the dialog shows them after the
+      gutter under "the project's own words". This applies to a trusted file as well.
+    - **Not covered.** The reason of a project block or ask rule is still part of the refusal Claude
+      reads and of the audit line, as before. A project regex in an `ask` or `block` rule, or in
+      `bigOperations`, is compiled and run on call text before trust, as before: it can only tighten,
+      but a pattern that backtracks without end could stall the hook (the engine's own 10 s budget
+      cuts the hook off from 2.1.299).
+    Tests: `trust.test.ts` (the table against the schema, the split per field, `loadConfig` held
+    back and never looser than no file, the record, the listing's redaction, caps and gutter, the
+    prompts and the dialog, and through `register` every effect before and after confirming, the
+    wrong and the stale code, an edited file, the `sdk` origin, `untrust`, the option, a failing
+    store, the mod's own writes, two repositories). Mutations: treating every file as trusted fails 22
+    tests; dropping `trust` from `needsPerson` fails the origin tests; comparing only the path fails
+    the edited-file and record tests; running the checks of an untrusted file fails the spawn test;
+    reading review rules as tightening fails the table and the never-looser test; dropping the
+    not-run check fails its test; offering the rule for an untrusted file fails the offer tests.

@@ -11,6 +11,13 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 ## [Unreleased]
 
 ### Added
+- **`/council trust`, `/council trust <code>`, `/council untrust` and the option "Trust project rules
+  files".** `trust` lists what a project's rules file would enable once confirmed (counts, each allow
+  or review rule, disabled rule, model, check and pattern id, redacted and capped; secrets allowlist
+  entries counted, never shown) with the file's code; `trust <code>` confirms the file whose hash
+  starts with that code, as it stands now; `untrust` takes the confirmation back. Only a person's own
+  command runs `trust`. The option `trustProjectRules` is `confirm` (default) or `always`. See the
+  first entry under "Changed".
 - **Rules per repository under one root.** When the session root is the parent of several
   repositories (no `rules.json` of its own, no `.git`), each repository directly below it can have
   its own `.claude/council-of-elrond/rules.json`. A call is decided by the repositories it touches
@@ -82,6 +89,26 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   statement after the database file (`sqlite3 app.db "DROP TABLE x"`) and from `-init` files.
 
 ### Changed
+- **A project's rules file is ignored where it loosens the gate or runs code, until you confirm it.
+  After upgrading, your `rules.json` is untrusted until you act.** A rules file arrives with a cloned
+  repository and used to be honoured in full with nobody confirming it. Now its allow and review
+  rules, `disableRules`, `models`, `gollum.patterns`, `gollum.allowlist` and `gimli.commands` take
+  effect only after a person has confirmed that exact file content; until then they are as if absent
+  (so a big operation whose project checks are among them is refused with "not run: the rules file is
+  not trusted"), and its block and ask rules, protected paths, protected branches, production
+  patterns and `bigOperations` still apply. **Two ways to get the old behaviour back:** run
+  `/council trust`, read what it lists and type `/council trust <code>` (any change to the file makes
+  it untrusted again, and `/council untrust` takes it back); or set the new option "Trust project
+  rules files" to `always` (`trustProjectRules=always`) for a host whose owner controls which
+  repositories it opens, such as a cloud or CI environment. The confirmation is kept in the plugin's
+  own store, never in the repository. `/council rules` and `/council` show where each file stands; the
+  mod does not offer an allow rule or allowlist entry for a file that waits, and after your own
+  "Add the rule" or allowlist answer the file is trusted at its new content. See "Trusting a
+  project's rules file" in the README.
+- **A project rule's reason is shown as the project's text.** In a reviewer's prompt it sits inside a
+  data block under a lead-in that says so (not after "Flagged because"), and in the dialog it is
+  shown after the `|` bar, on one line of at most 200 characters. A shipped rule's reason is as it
+  was.
 - **The nobody-to-ask refusal says what was refused.** Where nothing draws and a call needs you, the
   refusal names the operation (the audit log's redacted key), the rule behind it and the reviewers
   by name, and tells Claude to tell you and how you can let the call run. Never the call's text, a
@@ -144,6 +171,12 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 
 
 ### Security
+- **A repository's rules file can no longer loosen the gate or run code on its own say-so.** See the
+  first entry under "Changed": its allow and review rules, disabled shipped rules, model choices,
+  extra secret patterns, secrets allowlist and project checks wait for a person to confirm that exact
+  content (a hash in the plugin's own store); a file that has not been confirmed can never make the
+  gate weaker than no file, and a project check it names is reported as not run, never dropped.
+  `/council trust` needs a person at the composer, as `/council off` does.
 - **A reformatted command is reviewed again.** An approval used to be reused for a later command that differed only in whitespace. Whitespace can change what a shell command does, so the verdict cache and chat approvals now match a command exactly.
 - **A heredoc body is read when the shell expands it.** With an unquoted delimiter (`<<EOF`,
   `<<-EOF`) the shell runs the `$(...)` and backticks in the body; those commands are now classified

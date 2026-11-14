@@ -349,7 +349,7 @@ describe('the shared deadline', () => {
 })
 
 describe('the project checks', () => {
-  test('only the configured commands run, by argv, in the project root, and only for big operations', async ($, on) => {
+  test('only the configured commands run, by argv, in the project root, and only for big operations', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     withChecks(w, [
       { name: 'tests', argv: ['npm', 'test'] },
@@ -367,7 +367,7 @@ describe('the project checks', () => {
     expect((await auditLines(w))[1]?.council).toMatchObject({ checks: [{ name: 'tests', status: 'passed' }, { name: 'lint', status: 'passed' }] })
   })
 
-  test('a failing check blocks, with its last lines for Claude; none of its output reaches the audit log', async ($, on) => {
+  test('a failing check blocks, with its last lines for Claude; none of its output reaches the audit log', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
     w.spawnReply = () => ({ code: 1, output: 'PASS a.test.ts\nFAIL b.test.ts\n  expected 2, got 3\napi_key = "hunter2hunter2"\n' })
@@ -382,7 +382,7 @@ describe('the project checks', () => {
     expect((await auditLines(w))[0]).toMatchObject({ verdict: 'block', council: { checks: [{ name: 'tests', status: 'failed' }] } })
   })
 
-  test('a check that cannot start blocks', async ($, on) => {
+  test('a check that cannot start blocks', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     withChecks(w, [{ name: 'tests', argv: ['no-such-runner'] }])
     w.spawnReply = () => 'no-start'
@@ -394,7 +394,7 @@ describe('the project checks', () => {
     expect((await auditLines(w))[0]?.reason).toBe('the project checks (block): "tests" could not be started.')
   })
 
-  test('the error of a check that cannot start is redacted, and kept to one line of a few hundred characters', async ($, on) => {
+  test('the error of a check that cannot start is redacted, and kept to one line of a few hundred characters', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     // The refusal redacts with the shipped patterns again; a project's own pattern is only the call's.
     w.files.set(
@@ -415,7 +415,7 @@ describe('the project checks', () => {
     expect(JSON.stringify((await auditLines(w))[0])).not.toContain('spawn failed')
   })
 
-  test('a check past its own timeout is ended and blocks; the timeout is its own, outside the model deadline', async ($, on) => {
+  test('a check past its own timeout is ended and blocks; the timeout is its own, outside the model deadline', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     withChecks(w, [
       { name: 'tests', argv: ['npm', 'test'], timeoutMs: 90_000 },
@@ -439,7 +439,7 @@ describe('the project checks', () => {
     expect(w.ran).toEqual([])
   })
 
-  test('a member that blocks stops a check still running: its result can no longer matter', async ($, on) => {
+  test('a member that blocks stops a check still running: its result can no longer matter', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [BLOCK, APPROVE, APPROVE], isClockMocked: true })
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
     w.spawnReply = () => ({ hang: true })
@@ -460,7 +460,7 @@ describe('the project checks', () => {
 })
 
 describe('commands', () => {
-  test('/council test names the full council, its seats and checks, and runs nothing', async ($, on) => {
+  test('/council test names the full council, its seats and checks, and runs nothing', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { surfaces: [], isClockMocked: true })
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
     await council($, 'test "git merge feature"')

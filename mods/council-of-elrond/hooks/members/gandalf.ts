@@ -1,4 +1,4 @@
-import { ANSWER_FORMAT, fenced, label, noteLines, OMISSION_RULES, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, fenced, label, noteLines, OMISSION_RULES, projectReasonLines, untrustedRules } from './shared.js'
 import type { Omitted } from './shared.js'
 
 /**
@@ -11,8 +11,10 @@ export type GandalfContext = {
   tool: string
   /** The command, or the call's arguments as text; redacted already. */
   call: string
-  /** Why the rules sent it for review. */
+  /** Why the rules sent it for review: the shipped rules' reasons. */
   ruleReasons: readonly string[]
+  /** The project rules' reasons, cleaned (`reasonsOf`); shown inside a data block. */
+  projectReasons?: readonly string[]
   /** What the call would touch, from the read-only preview (stage 2). */
   preview?: string
   /** What the preview's own cut left out, when it was cut before it got here. */
@@ -62,6 +64,7 @@ export function gandalfPrompt(context: GandalfContext, nonce: string): string {
   const sections = [
     `Tool: ${context.tool}`,
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
+    ...projectReasonLines(context.projectReasons, nonce),
     'Proposed call:',
     fenced('call', context.call, nonce, { limits: { lines: limits.callLines, chars: limits.callChars } }),
     context.preview !== undefined
