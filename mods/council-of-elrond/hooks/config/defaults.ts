@@ -64,8 +64,19 @@ const ASK: readonly Rule[] = [
     id: 'plugin-manage',
     tier: 'ask',
     tools: SHELL,
-    command: String.raw`^((\S*/)?claude|@anthropic-ai/claude-code)\s(-\S+\s)*plugins?\s((disable|uninstall|remove|rm|update|install|enable)|marketplace\s(add|remove|rm|update))(\s|$)`,
+    // Global options (some with values) may stand before `plugin`, and options
+    // before the action; the actions and aliases are the ones the CLI lists.
+    command:
+      String.raw`^((\S*/)?claude|@anthropic-ai/claude-code(@\S+)?)\s(-\S+\s([^-\s]\S*\s){0,3}){0,12}plugins?\s(-\S+\s([^-\s]\S*\s)?){0,6}` +
+      String.raw`((disable|uninstall|remove|rm|update|install|i|enable|prune|autoremove|configure|restore-set-aside|init|new)|marketplace\s(-\S+\s){0,3}(add|remove|rm|update))(\s|$)`,
     reason: 'Installs, updates, enables, disables or removes a Claude Code plugin or marketplace, which can switch off this protection.',
+  },
+  {
+    id: 'claude-session',
+    tier: 'ask',
+    tools: SHELL,
+    check: 'claude-session',
+    reason: 'Starts a nested Claude Code session, or changes its MCP servers or configuration, which can run without this protection.',
   },
 ]
 
@@ -125,7 +136,7 @@ const REVIEW: readonly Rule[] = [
     id: 'shell-in-place-edit',
     tier: 'review',
     tools: SHELL,
-    command: String.raw`^(sed|perl|ruby)\s(.*\s)?(-[a-zA-Z]*i[a-zA-Z]*|--in-place)(\S*)(\s|$)`,
+    command: String.raw`^(sed|perl|ruby)\s(.*\s)?(-[a-zA-Z0-9]*i[a-zA-Z0-9]*|--in-place)(\S*)(\s|$)|^[gmn]?awk\s(.*\s)?(-i\s?inplace|--include[ =]inplace)(\s|$)`,
     reason: 'Edits files in place.',
   },
   {
@@ -146,7 +157,7 @@ const REVIEW: readonly Rule[] = [
     id: 'git-remote-or-history',
     tier: 'review',
     tools: SHELL,
-    command: String.raw`^git\s(push|merge|rebase|reset|tag|filter-branch|filter-repo|cherry-pick|revert|update-ref|replace)(\s|$)|^git\scommit\s(.*\s)?--amend(\s|$)`,
+    command: String.raw`^git\s(push|send-pack|merge|rebase|reset|tag|filter-branch|filter-repo|cherry-pick|revert|update-ref|replace)(\s|$)|^git\scommit\s(.*\s)?--amend(\s|$)|^git\s(subtree|lfs)\spush(\s|$)|^hub\spush(\s|$)|^jj\sgit\spush(\s|$)`,
     member: 'aragorn',
     profile: 'git',
     reason: 'Changes a remote or rewrites git history.',
@@ -180,7 +191,14 @@ const REVIEW: readonly Rule[] = [
     id: 'git-discard',
     tier: 'review',
     tools: SHELL,
-    command: String.raw`^git\s(clean|restore|worktree\sremove)(\s|$)|^git\sstash\s(drop|clear)(\s|$)|^git\sbranch\s(.*\s)?-[a-zA-Z]*D[a-zA-Z]*(\s|$)|^git\sbranch\s(.*\s)?(--delete|-d)\s(.*\s)?(--force|-f)(\s|$)|^git\scheckout\s(.*\s)?(--|-f|--force|\.)(\s|$)|^git\sgc\s(.*\s)?--prune|^git\sreflog\s(expire|delete)(\s|$)`,
+    command:
+      String.raw`^git\s(clean|restore|worktree\sremove)(\s|$)|^git\sstash\s(drop|clear)(\s|$)|^git\sbranch\s(.*\s)?-[a-zA-Z]*D[a-zA-Z]*(\s|$)` +
+      String.raw`|^git\sbranch\s(?=(.*\s)?(--delete|-d)(\s|$))(?=(.*\s)?(--force|-f)(\s|$))|^git\sbranch\s(.*\s)?-[a-zA-Z]*(d[a-zA-Z]*f|f[a-zA-Z]*d)[a-zA-Z]*(\s|$)` +
+      String.raw`|^git\scheckout\s(.*\s)?(--|-f|--force|\.)(\s|$)|^git\sgc\s(.*\s)?--prune|^git\sreflog\s(expire|delete)(\s|$)` +
+      // `git rm` of a tree or by force; `git checkout` of paths (two or more words, none of the forms that switch or create a branch); `git switch` that discards changes.
+      String.raw`|^git\srm\s(.*\s)?(-[a-zA-Z]*[rf][a-zA-Z]*|--force|--recursive)(\s|$)` +
+      String.raw`|^git\scheckout\s(?!(.*\s)?(-[a-zA-Z]*[bBt][a-zA-Z]*|--orphan|--track|--detach)(\s|$))(-\S+\s)*[^-\s]\S*\s(-\S+\s)*[^-\s]` +
+      String.raw`|^git\sswitch\s(.*\s)?(--discard-changes|--force|-[a-zA-Z]*f[a-zA-Z]*)(\s|$)`,
     reason: 'Discards git work that may not be recoverable.',
   },
   {
@@ -205,14 +223,19 @@ const REVIEW: readonly Rule[] = [
     id: 'infrastructure',
     tier: 'review',
     tools: SHELL,
-    command: String.raw`^(terraform|tofu)\s(apply|destroy|import|taint|state\s(rm|mv|push))|^kubectl\s(delete|apply|replace|patch|scale|drain|cordon|rollout\sundo|set)|^helm\s(install|upgrade|uninstall|delete|rollback)|^docker\s((container|image|volume|network|system|builder)\s)?(rm|rmi|prune)|^docker[\s-]compose\s(.*\s)?down|^(aws|gcloud|az)\s.*\s(delete|remove|rm|destroy|terminate)`,
+    command: String.raw`^(terraform|tofu)\s(apply|destroy|import|taint|state\s(rm|mv|push))|^kubectl\s(delete|apply|replace|patch|scale|drain|cordon|rollout\sundo|set)|^helm\s(install|upgrade|uninstall|delete|rollback)|^docker\s((container|image|volume|network|system|builder)\s)?(rm|rmi|prune)|^docker[\s-]compose\s(.*\s)?down|^(aws|gcloud|az)\s.*\s(delete|remove|rm|destroy|terminate|rb(\s|$)|--delete(\s|$))|^gsutil\s(.*\s)?(rm|rb)(\s|$)|^gsutil\s(.*\s)?rsync\s(.*\s)?-[a-zA-Z]*d|^pulumi\s(destroy|up|refresh|cancel|stack\s(rm|remove))(\s|$)`,
     reason: 'Changes or deletes infrastructure.',
   },
   {
     id: 'network-write',
     tier: 'review',
     tools: SHELL,
-    command: String.raw`^curl\s(.*\s)?(-X\s?(POST|PUT|PATCH|DELETE)|--request\s(POST|PUT|PATCH|DELETE)|-d|--data(-\w+)?|-F|--form|-T|--upload-file)(\s|$|=)|^wget\s(.*\s)?--(post|method|body)`,
+    command:
+      // curl: a short cluster of flags that ends in -d, -F or -T (the value glued or not; a letter that takes a value, such as -u, ends the cluster), a long data option, or a method other than GET given with -X or --request.
+      String.raw`^curl\s(.*\s)?(-[0-46aBfgGhiIjJklLMnNOpqRsSvVZ#:]*X\s?(?!(GET|HEAD|OPTIONS)(\s|$))\S|--request[\s=](?!(GET|HEAD|OPTIONS)(\s|$))\S|-[0-46aBfgGhiIjJklLMnNOpqRsSvVZ#:]*[dFT]|--(data|form|json|url-query|upload-file)(-\w+)?)` +
+      String.raw`|^wget\s(.*\s)?--(po|me|bo)` +
+      // HTTPie: a method other than GET, or a `key=value` or `key:=json` item.
+      String.raw`|^(https?|xhs?)\s(.*\s)?((?!(GET|HEAD|OPTIONS)(\s|$))[A-Z]{3,10}(\s|$)|[A-Za-z0-9_][\w.\[\]-]*(:=|=)([^=\s]|$))`,
     reason: 'Sends data to a remote service.',
   },
   {
@@ -226,8 +249,22 @@ const REVIEW: readonly Rule[] = [
     id: 'publish',
     tier: 'review',
     tools: SHELL,
-    command: String.raw`^(npm|pnpm|yarn)\s(.*\s)?publish(\s|$)|^cargo\spublish|^twine\supload|^gem\spush|^gh\s(release\s(create|delete|upload)|repo\s(delete|archive|edit)|pr\smerge|api\s.*-X\s?(POST|PUT|PATCH|DELETE))`,
+    command: String.raw`^(npm|pnpm|yarn)\s(.*\s)?publish(\s|$)|^cargo\spublish|^twine\supload|^gem\spush|^gh\s(release\s(create|delete|edit|upload)|repo\s(delete|archive|edit|rename)|pr\s(merge|close|create)|issue\s(close|delete|create|comment)|secret\s(set|delete|remove)|variable\s(set|delete)|workflow\s(run|enable|disable)|run\s(rerun|cancel|delete)|auth\s(?!status(\s|$))|auth\sstatus\s(.*\s)?(-t|--show-token)(\s|$)|api\s(.*\s)?(-X\s?(?!GET(\s|$))\S|--method[\s=](?!GET(\s|$))\S|-[fF]|--(field|raw-field|input)))`,
     reason: 'Publishes or changes something outside this machine.',
+  },
+  {
+    id: 'command-unreadable',
+    tier: 'review',
+    tools: SHELL,
+    check: 'unreadable-command',
+    reason: 'Hands a command line to another program in a form this tool cannot read (key sequences, a file of commands), so the command is not known.',
+  },
+  {
+    id: 'extract-outside-project',
+    tier: 'review',
+    tools: SHELL,
+    check: 'extract-outside-repo',
+    reason: 'Extracts an archive into a folder outside the project (or one only known at run time), which can overwrite files there.',
   },
   {
     id: 'script-shell',
@@ -244,12 +281,21 @@ const REVIEW: readonly Rule[] = [
     // are the attached and clustered forms (`-c'code'`, `-Bc`, `-ne`, `-pe`,
     // `--eval=code`), read only among the options before the script.
     command:
-      String.raw`^(python\d*(\.\d+)?|node|nodejs|deno|bun|ruby|perl|php|lua|Rscript|osascript|pwsh|powershell)\s(.*\s)?(-c|-e|--eval|-p|--print|-r|-|-Command)(\s|$)` +
-      String.raw`|^python\d*(\.\d+)?\s(-[WX]\s\S+\s|-\S+\s)*-[A-Za-z]*c\S*(\s|$)` +
+      String.raw`^(python\d*(\.\d+)?|pypy3?|node|nodejs|deno|bun|ruby|perl|php|lua\d*(\.\d+)?|luajit|Rscript|osascript|pwsh|powershell)\s(.*\s)?(-c|-e|--eval|-p|--print|-r|-|-Command)(\s|$)` +
+      String.raw`|^(python\d*(\.\d+)?|pypy3?)\s(-[WX]\s\S+\s|-\S+\s)*-[A-Za-z]*c\S*(\s|$)` +
       String.raw`|^(node|nodejs)\s(-\S+\s)*(-[chiv]*[ep]\S*|--(eval|print)=\S*)(\s|$)` +
       String.raw`|^perl\s(-I\s\S+\s|-\S+\s)*-[acdfhilnpsStTuUwWxX0-9]*[eE]\S*(\s|$)` +
       String.raw`|^ruby\s(-I\s\S+\s|-\S+\s)*-[acdFhilnpsSvwWx0-9]*e\S*(\s|$)` +
-      String.raw`|^php\s(-\S+\s)*-[aehilmnqsvwBEHR]*r\S*(\s|$)`,
+      String.raw`|^php\s(-\S+\s)*-[aehilmnqsvwBEHR]*r\S*(\s|$)|^php\s(-\S+\s)*-[a-zA-Z]*[BREF]\S*(\s|$)` +
+      // More runtimes and their eval flags; `deno eval`; PowerShell's command, file and encoded-command options (any case, any abbreviation).
+      String.raw`|^(R|julia|elixir|iex|erl|scala|groovy|racket|guile|sbcl|clisp|ghci|ghc|runghc|irb|pry|ts-node|tsx)\s(.*\s)?(-c|-e|-E|-x|-eval|--eval)(\s|$)|^deno\seval(\s|$)` +
+      String.raw`|^(pwsh|powershell)(\.exe)?\s(.*\s)?-+[eEcCfF]\S*(\s|$)` +
+      // A module that runs the code it is given.
+      String.raw`|^(python\d*(\.\d+)?|pypy3?)\s(-\S+\s)*-[A-Za-z]*m\s?(code|asyncio|timeit|pdb|runpy|idlelib|IPython|ptpython|bpython)(\.\S*)?(\s|$)` +
+      // awk with a program that runs a command or writes a file (system(), a pipe, getline from a file, print to a file), and a sed script with an `e` or `w` command or flag.
+      String.raw`|^[gmn]?awk\s.*(system\s*\(|\bprintf?\b[^;}]{0,200}[>|]|\|&?\s*getline|getline\b[^;}]{0,100}<|@include|@load)` +
+      String.raw`|^sed\s(.*[\s;{}!])?s(?<sdelim>[/|#,:@!%])(?:(?!\k<sdelim>).)*\k<sdelim>(?:(?!\k<sdelim>).)*\k<sdelim>[a-zA-Z0-9]*[ew]` +
+      String.raw`|^sed\s(.*[\s;{}!])?(\d+|\$)?(,(\d+|\$))?(\/[^/\s]*\/)?[ew](\s|$)`,
     reason: 'Runs inline code.',
   },
   {

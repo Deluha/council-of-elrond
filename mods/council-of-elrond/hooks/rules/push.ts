@@ -30,7 +30,47 @@ export type ParsedPush = {
   refspecs: readonly PushRefspec[]
 }
 
-const isForceFlag = (word: string): boolean => word === '--force' || word.startsWith('--force-') || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(word)
+const isForceFlag = (word: string): boolean => word === '--force' || word.startsWith('--force-') || /^-[a-zA-Z0-9]*f[a-zA-Z0-9]*$/.test(word)
+
+/**
+ * The long options of `git push` (and `send-pack`), as git resolves a written
+ * name: the exact name, else the one it is a unique prefix of. The value of a
+ * name in `LONG_WITH_ARG` is the next word unless it is written `--name=value`.
+ */
+const PUSH_LONG: readonly string[] = [
+  'all', 'branches', 'prune', 'mirror', 'delete', 'tags', 'follow-tags', 'signed', 'atomic', 'push-option', 'receive-pack', 'exec', 'repo',
+  'dry-run', 'porcelain', 'thin', 'force', 'force-with-lease', 'force-if-includes', 'set-upstream', 'progress', 'verbose', 'quiet', 'verify',
+  'recurse-submodules', 'ipv4', 'ipv6',
+]
+const LONG_WITH_ARG: ReadonlySet<string> = new Set(['push-option', 'receive-pack', 'exec', 'repo'])
+/** What each destructive long option does; a prefix several of them share does all of it (git refuses it, so nothing runs). */
+const LONG_EFFECT: Readonly<Record<string, 'force' | 'delete' | 'every'>> = {
+  force: 'force',
+  'force-with-lease': 'force',
+  'force-if-includes': 'force',
+  delete: 'delete',
+  all: 'every',
+  branches: 'every',
+  mirror: 'every',
+  prune: 'every',
+}
+
+type LongReading = { effects: ReadonlySet<'force' | 'delete' | 'every'>; takesNext: boolean }
+
+/** A `--name[=value]` word read the way git reads it: by its exact name or any prefix of it. */
+function readLong(word: string): LongReading {
+  const eq = word.indexOf('=')
+  const typed = (eq < 0 ? word : word.slice(0, eq)).slice(2)
+  const effects = new Set<'force' | 'delete' | 'every'>()
+  if (typed.length === 0 || typed.startsWith('no-')) return { effects, takesNext: false }
+  const exact = PUSH_LONG.includes(typed)
+  const candidates = exact ? [typed] : PUSH_LONG.filter(name => name.startsWith(typed))
+  for (const name of candidates) {
+    const effect = LONG_EFFECT[name]
+    if (effect !== undefined) effects.add(effect)
+  }
+  return { effects, takesNext: eq < 0 && candidates.length === 1 && LONG_WITH_ARG.has(candidates[0] as string) }
+}
 
 function refspecOf(text: string): PushRefspec {
   const isPlus = text.startsWith('+')
@@ -56,12 +96,19 @@ export function parsePush(words: readonly string[], options: { keepEmpty?: boole
     const word = words[i] as string
     if (PUSH_OPTIONS_WITH_ARG.has(word)) {
       i++ // `-o ci.skip`: the value is not the remote or a refspec
-    } else if (isForceFlag(word)) {
-      isForce = true
-    } else if (word === '--delete' || word === '-d') {
-      isDelete = true
-    } else if (word === '--mirror' || word === '--all' || word === '--prune') {
-      isEvery = true
+    } else if (word.startsWith('--') && word.length > 2) {
+      // A long option by any unique prefix (`--del`, `--mir`, `--forc`), as git resolves it.
+      const read = readLong(word)
+      if (isForceFlag(word) || read.effects.has('force')) isForce = true
+      if (read.effects.has('delete')) isDelete = true
+      if (read.effects.has('every')) isEvery = true
+      if (read.takesNext) i++
+    } else if (word.startsWith('-') && word !== '-' && word !== '--') {
+      // A short cluster, letter by letter: `f` forces, `d` deletes, and `o` takes
+      // a value (glued, or the next word when it is the last letter). Digits (`-4`) and other letters change nothing.
+      if (isForceFlag(word)) isForce = true
+      if (/^-[a-zA-Z0-9]*d/.test(word)) isDelete = true
+      if (word.endsWith('o') && /^-[a-zA-Z0-9]+$/.test(word)) i++
     } else if ((word !== '' || options.keepEmpty === true) && !word.startsWith('-')) {
       positional.push(word)
     }

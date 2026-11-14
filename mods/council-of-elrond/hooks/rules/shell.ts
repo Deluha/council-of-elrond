@@ -38,6 +38,10 @@ export type ShellPart = {
   movesDir: boolean
   /** What was glued to a wrapper or runner option (`-C.git`, `--dir=x`): words that may name a file. */
   optionValues: readonly string[]
+  /** Set on the copy of a wrapper or runner call whose options were not all read: the inner command is not known. */
+  isUnresolved?: boolean
+  /** Set when the part hands a command line to another program in a form that could not be read (a key sequence, a file of commands). */
+  isUnreadable?: boolean
 }
 
 export type Split = {
@@ -844,54 +848,322 @@ function scriptCommandOf(coreWords: readonly string[]): string | undefined {
   return command.length > 0 ? command.map(quoted).join(' ') : undefined
 }
 
-/** `tmux` subcommands that start a command in a pane or window, with their options that take a value. */
-const TMUX_SUBCOMMANDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ['new-session', setOf('-c', '-e', '-f', '-F', '-n', '-s', '-t', '-x', '-y')],
-  ['new', setOf('-c', '-e', '-f', '-F', '-n', '-s', '-t', '-x', '-y')],
-  ['new-window', setOf('-c', '-e', '-F', '-n', '-t')],
-  ['neww', setOf('-c', '-e', '-F', '-n', '-t')],
-  ['split-window', setOf('-c', '-e', '-F', '-l', '-p', '-t')],
-  ['splitw', setOf('-c', '-e', '-F', '-l', '-p', '-t')],
-  ['respawn-pane', setOf('-c', '-e', '-t')],
-  ['respawnp', setOf('-c', '-e', '-t')],
-])
+/** What a program that runs another command line makes of its arguments. */
+type Inline = {
+  /** Command lines to classify as `sh -c` is. */
+  scripts: string[]
+  /** Part of what it runs could not be read: the call is reviewed. */
+  isUnreadable: boolean
+}
 
-/** The shell command a `tmux new-session|new-window|split-window|respawn-pane` runs, from its trailing arguments. */
-function tmuxScriptOf(coreWords: readonly string[]): string | undefined {
-  let i = 1
-  // tmux's own options come first; `-c` there is a shell command too.
-  for (; i < coreWords.length && (coreWords[i] as string).startsWith('-'); i++) {
-    const option = coreWords[i] as string
-    if (option === '-c') return coreWords[i + 1]
-    if (['-L', '-S', '-f', '-T'].includes(option)) i++
-  }
-  const valued = TMUX_SUBCOMMANDS.get(coreWords[i] ?? '')
-  if (valued === undefined) return undefined
-  for (i++; i < coreWords.length; i++) {
-    const option = coreWords[i] as string
+const inline = (...scripts: (string | undefined)[]): Inline => ({ scripts: scripts.filter((script): script is string => script !== undefined && script !== ''), isUnreadable: false })
+const UNREADABLE: Inline = { scripts: [], isUnreadable: true }
+const merge = (parts: readonly Inline[]): Inline => ({ scripts: parts.flatMap(part => part.scripts), isUnreadable: parts.some(part => part.isUnreadable) })
+
+/** The command a program makes of its trailing words: one word is a shell string as written, several are an argument vector. */
+const commandOf = (rest: readonly string[]): string | undefined =>
+  rest.length === 0 ? undefined : rest.map((word, index) => (index === 0 && rest.length === 1 ? word : quoted(word))).join(' ')
+
+type TmuxKind = 'shell' | 'if' | 'tmux' | 'set-hook' | 'keys' | 'bind' | 'source' | 'menu' | 'none'
+type TmuxCommand = { name: string; alias: string; values: ReadonlySet<string>; kind: TmuxKind }
+
+const tmuxCommand = (name: string, alias: string, kind: TmuxKind = 'none', values: ReadonlySet<string> = new Set()): TmuxCommand => ({ name, alias, values, kind })
+
+/**
+ * Every `tmux` command, with the options of those that run something and
+ * take a value. tmux resolves a written name by an exact alias or name, else by
+ * a prefix of a name that no other name shares: the same here.
+ */
+const TMUX_COMMANDS: readonly TmuxCommand[] = [
+  tmuxCommand('attach-session', 'attach'), tmuxCommand('bind-key', 'bind', 'bind', setOf('-N', '-T')), tmuxCommand('break-pane', 'breakp'),
+  tmuxCommand('capture-pane', 'capturep'), tmuxCommand('choose-buffer', ''), tmuxCommand('choose-client', ''), tmuxCommand('choose-tree', ''),
+  tmuxCommand('clear-history', 'clearhist'), tmuxCommand('clear-prompt-history', 'clearphist'), tmuxCommand('clock-mode', ''),
+  tmuxCommand('command-prompt', ''), tmuxCommand('confirm-before', 'confirm', 'tmux', setOf('-c', '-p', '-t')), tmuxCommand('copy-mode', ''),
+  tmuxCommand('customize-mode', ''), tmuxCommand('delete-buffer', 'deleteb'), tmuxCommand('detach-client', 'detach'),
+  tmuxCommand('display-menu', 'menu', 'menu'), tmuxCommand('display-message', 'display'), tmuxCommand('display-panes', 'displayp'),
+  tmuxCommand('display-popup', 'popup', 'shell', setOf('-b', '-c', '-d', '-e', '-h', '-s', '-S', '-t', '-T', '-w', '-x', '-y')),
+  tmuxCommand('find-window', 'findw'), tmuxCommand('has-session', 'has'),
+  tmuxCommand('if-shell', 'if', 'if', setOf('-t')), tmuxCommand('join-pane', 'joinp'), tmuxCommand('kill-pane', 'killp'), tmuxCommand('kill-server', ''),
+  tmuxCommand('kill-session', ''), tmuxCommand('kill-window', 'killw'), tmuxCommand('last-pane', 'lastp'), tmuxCommand('last-window', 'last'),
+  tmuxCommand('link-window', 'linkw'), tmuxCommand('list-buffers', 'lsb'), tmuxCommand('list-clients', 'lsc'), tmuxCommand('list-commands', 'lscm'),
+  tmuxCommand('list-keys', 'lsk'), tmuxCommand('list-panes', 'lsp'), tmuxCommand('list-sessions', 'ls'), tmuxCommand('list-windows', 'lsw'),
+  tmuxCommand('load-buffer', 'loadb'), tmuxCommand('lock-client', 'lockc'), tmuxCommand('lock-server', 'lock'), tmuxCommand('lock-session', 'locks'),
+  tmuxCommand('move-pane', 'movep'), tmuxCommand('move-window', 'movew'),
+  tmuxCommand('new-session', 'new', 'shell', setOf('-c', '-e', '-f', '-F', '-n', '-s', '-t', '-x', '-y')),
+  tmuxCommand('new-window', 'neww', 'shell', setOf('-c', '-e', '-F', '-n', '-t')),
+  tmuxCommand('next-layout', 'nextl'), tmuxCommand('next-window', 'next'), tmuxCommand('paste-buffer', 'pasteb'),
+  tmuxCommand('pipe-pane', 'pipep', 'shell', setOf('-t')), tmuxCommand('previous-layout', 'prevl'), tmuxCommand('previous-window', 'prev'),
+  tmuxCommand('refresh-client', 'refresh'), tmuxCommand('rename-session', 'rename'), tmuxCommand('rename-window', 'renamew'),
+  tmuxCommand('resize-pane', 'resizep'), tmuxCommand('resize-window', 'resizew'),
+  tmuxCommand('respawn-pane', 'respawnp', 'shell', setOf('-c', '-e', '-t')), tmuxCommand('respawn-window', 'respawnw', 'shell', setOf('-c', '-e', '-t')),
+  tmuxCommand('rotate-window', 'rotatew'), tmuxCommand('run-shell', 'run', 'shell', setOf('-d', '-t')), tmuxCommand('save-buffer', 'saveb'),
+  tmuxCommand('select-layout', 'selectl'), tmuxCommand('select-pane', 'selectp'), tmuxCommand('select-window', 'selectw'),
+  tmuxCommand('send-keys', 'send', 'keys', setOf('-c', '-N', '-t')), tmuxCommand('send-prefix', ''), tmuxCommand('server-access', ''),
+  tmuxCommand('set-buffer', 'setb'), tmuxCommand('set-environment', 'setenv'), tmuxCommand('set-hook', '', 'set-hook', setOf('-t')),
+  tmuxCommand('set-option', 'set'), tmuxCommand('set-window-option', 'setw'), tmuxCommand('show-buffer', 'showb'), tmuxCommand('show-environment', 'showenv'),
+  tmuxCommand('show-hooks', ''), tmuxCommand('show-messages', 'showmsgs'), tmuxCommand('show-options', 'show'), tmuxCommand('show-prompt-history', 'showphist'),
+  tmuxCommand('show-window-options', 'showw'), tmuxCommand('source-file', 'source', 'source'),
+  tmuxCommand('split-window', 'splitw', 'shell', setOf('-c', '-e', '-F', '-l', '-p', '-t')), tmuxCommand('start-server', 'start'),
+  tmuxCommand('suspend-client', 'suspendc'), tmuxCommand('swap-pane', 'swapp'), tmuxCommand('swap-window', 'swapw'), tmuxCommand('switch-client', 'switchc'),
+  tmuxCommand('unbind-key', 'unbind'), tmuxCommand('unlink-window', 'unlinkw'), tmuxCommand('wait-for', 'wait'),
+]
+
+/** The tmux commands a written name stands for: one for an exact name or alias or a unique prefix, several when ambiguous (tmux refuses it), none when unknown. */
+function tmuxCommandsNamed(typed: string): readonly TmuxCommand[] {
+  const exact = TMUX_COMMANDS.find(command => command.alias === typed || command.name === typed)
+  if (exact !== undefined) return [exact]
+  return typed === '' ? [] : TMUX_COMMANDS.filter(command => command.name.startsWith(typed))
+}
+
+/** The options and the positional words of a tmux command's arguments, read as getopt does. */
+function tmuxOptions(args: readonly string[], valued: ReadonlySet<string>): { flags: ReadonlySet<string>; rest: string[] } {
+  const flags = new Set<string>()
+  let i = 0
+  for (; i < args.length; i++) {
+    const option = args[i] as string
     if (option === '--') {
       i++
       break
     }
     if (!option.startsWith('-') || option === '-') break
-    // getopt: the first letter that takes a value ends the cluster; the value
-    // is the rest of the word, or the next word when it was the last letter.
+    // The first letter that takes a value ends the cluster; its value is the
+    // rest of the word, or the next word when it was the last letter.
     for (let c = 1; c < option.length; c++) {
+      flags.add(option[c] as string)
       if (!valued.has(`-${option[c]}`)) continue
       if (c === option.length - 1) i++
       break
     }
   }
+  return { flags, rest: args.slice(i) }
+}
+
+const KEY_ENTER = /^(?:Enter|C-m|C-j|KPEnter)$/
+
+/** The command lines a list of tmux commands (`a ; b`) runs. */
+function tmuxList(words: readonly string[], depth = 0): Inline {
+  if (depth > MAX_DEPTH) return UNREADABLE
+  // `\;` reaches here as `;`, or glued to the last word of a command (`Enter;`).
+  const commands: string[][] = [[]]
+  for (const word of words) {
+    const current = commands[commands.length - 1] as string[]
+    if (word === ';') commands.push([])
+    else if (word.endsWith(';') && !word.endsWith('\\;')) {
+      current.push(word.slice(0, -1))
+      commands.push([])
+    } else current.push(word)
+  }
+  return merge(commands.filter(command => command.length > 0).map(command => tmuxOne(command, depth)))
+}
+
+function tmuxOne(command: readonly string[], depth: number): Inline {
+  const [typed, ...args] = command
+  const named = tmuxCommandsNamed(typed as string)
+  if (named.length === 0) return inline()
+  // An ambiguous prefix is refused by tmux; it is reviewed if any command it could be runs something.
+  if (named.length > 1) return named.some(candidate => candidate.kind !== 'none') ? UNREADABLE : inline()
+  const found = named[0] as TmuxCommand
+  const { flags, rest } = tmuxOptions(args, found.values)
+  const asTmux = (text: string | undefined): Inline => (text === undefined || text === '' ? inline() : inline(`tmux ${text}`))
+  switch (found.kind) {
+    case 'shell':
+      // run-shell -C takes a tmux command, not a shell command.
+      return found.name === 'run-shell' && flags.has('C') ? asTmux(rest[0]) : inline(commandOf(rest))
+    case 'if':
+      return merge([flags.has('F') ? inline() : inline(rest[0]), asTmux(rest[1]), asTmux(rest[2])])
+    case 'tmux':
+      return asTmux(rest[0])
+    case 'set-hook':
+      return flags.has('u') || flags.has('R') ? inline() : asTmux(rest[1])
+    case 'bind':
+      // A binding only registers its command (a reload of a config file is the usual one): what it would run is read, a file it would load is not a finding.
+      return rest.length > 1 ? inline(...tmuxList(rest.slice(1), depth + 1).scripts) : inline()
+    case 'keys': {
+      if (flags.has('X')) return inline()
+      if (flags.has('H')) return UNREADABLE
+      // Each run of keys up to an Enter is typed into a shell: a single word is a command line, several are keys this cannot read.
+      const segments: string[][] = [[]]
+      for (const key of rest) {
+        if (KEY_ENTER.test(key)) segments.push([])
+        else (segments[segments.length - 1] as string[]).push(key)
+      }
+      return merge(
+        segments
+          .filter(keys => keys.length > 0)
+          .map(keys => (keys.length === 1 ? inline(keys[0]) : { scripts: [keys.join(' ')], isUnreadable: true })),
+      )
+    }
+    case 'source':
+    case 'menu':
+      return found.kind === 'menu' && rest.length === 0 ? inline() : UNREADABLE
+    case 'none':
+      return inline()
+  }
+}
+
+/** The command lines a `tmux` call runs, from its words. */
+function tmuxInline(coreWords: readonly string[]): Inline {
+  let i = 1
+  // tmux's own options come first; `-c` there is a shell command too.
+  for (; i < coreWords.length && (coreWords[i] as string).startsWith('-'); i++) {
+    const option = coreWords[i] as string
+    if (option === '-c') return inline(coreWords[i + 1])
+    if (['-L', '-S', '-f', '-T'].includes(option)) i++
+  }
+  return tmuxList(coreWords.slice(i))
+}
+
+/** `screen [options] command args`, `screen -X stuff 'text'`: the command line it starts or types. */
+function screenInline(coreWords: readonly string[]): Inline {
+  let i = 1
+  for (; i < coreWords.length; i++) {
+    const word = coreWords[i] as string
+    if (word === '--') {
+      i++
+      break
+    }
+    if (!word.startsWith('-') || word === '-') break
+    if (['-ls', '-list', '-wipe', '-v'].includes(word)) continue
+    for (let c = 1; c < word.length; c++) {
+      const letter = word[c] as string
+      if (letter === 'X') {
+        const rest = word.length > c + 1 ? [word.slice(c + 1), ...coreWords.slice(i + 1)] : coreWords.slice(i + 1)
+        const [action, ...args] = rest
+        if (action === 'stuff') return inline(args[0])
+        if (action === 'screen' || action === 'exec') {
+          // `screen [-opts] [n] cmd args`: the options and a window number come first.
+          let at = 0
+          while (at < args.length && (args[at] as string).startsWith('-')) at++
+          if (/^\d+$/.test(args[at] ?? '')) at++
+          return inline(commandOf(args.slice(at)))
+        }
+        return action === 'eval' || action === 'source' ? UNREADABLE : inline()
+      }
+      if ('cehpsStT'.includes(letter)) {
+        if (c === word.length - 1) i++
+        break
+      }
+    }
+  }
+  return inline(commandOf(coreWords.slice(i)))
+}
+
+/** `zellij run -- cmd`, `zellij action write-chars 'text'`. */
+function zellijInline(coreWords: readonly string[]): Inline {
+  const at = coreWords.findIndex((word, index) => index > 0 && ['run', 'r', 'action', 'ac'].includes(word))
+  if (at < 0) return inline()
+  const rest = coreWords.slice(at + 1)
+  const afterSeparator = (): readonly string[] => {
+    const separator = rest.indexOf('--')
+    return separator < 0 ? [] : rest.slice(separator + 1)
+  }
+  if (coreWords[at] === 'run' || coreWords[at] === 'r') {
+    if (rest.includes('--')) return inline(commandOf(afterSeparator()))
+    const valued = new Set(['-n', '--name', '-d', '--direction', '--cwd', '-x', '-y', '--width', '--height', '--pinned'])
+    let j = 0
+    for (; j < rest.length && (rest[j] as string).startsWith('-'); j++) if (valued.has(rest[j] as string)) j++
+    return inline(commandOf(rest.slice(j)))
+  }
+  const [action, ...args] = rest
+  if (action === 'write-chars') return inline(args[0])
+  if (action === 'write') return UNREADABLE
+  if (action === 'new-pane' || action === 'new-tab') return inline(commandOf(afterSeparator()))
+  return inline()
+}
+
+/** `nix develop|shell -c cmd`, `nix run REF -- args`: the command line it runs. */
+function nixInline(coreWords: readonly string[]): Inline {
+  const at = coreWords.findIndex((word, index) => index > 0 && ['develop', 'shell', 'run'].includes(word))
+  if (at < 0) return inline()
+  const rest = coreWords.slice(at + 1)
+  if (coreWords[at] !== 'run') {
+    const flag = rest.findIndex(word => word === '-c' || word === '--command')
+    return flag < 0 ? inline() : inline(commandOf(rest.slice(flag + 1)))
+  }
+  // `nix run REF -- args` runs the app REF names: its name and the arguments are the command.
+  const separator = rest.indexOf('--')
+  const own = separator < 0 ? rest : rest.slice(0, separator)
+  const ref = own.find(word => !word.startsWith('-') && word.includes('#')) ?? own.find(word => !word.startsWith('-'))
+  const name = ref === undefined ? undefined : /^[^#]*#([A-Za-z0-9_.+-]+)(?:\^\S*)?$/.exec(ref)?.[1]
+  if (name === undefined) return UNREADABLE
+  return inline(commandOf([name, ...(separator < 0 ? [] : rest.slice(separator + 1))]))
+}
+
+/** `git submodule foreach`, `git bisect run`, `git rebase --exec`, `git filter-branch --tree-filter`: the command lines git runs. */
+function gitInline(coreWords: readonly string[]): Inline {
+  const [, sub, ...rest] = coreWords
+  if (sub === 'submodule' && rest[0] === 'foreach') {
+    const options = rest.slice(1).findIndex(word => !word.startsWith('-'))
+    return options < 0 ? inline() : inline(commandOf(rest.slice(1 + options)))
+  }
+  if (sub === 'bisect' && rest[0] === 'run') return inline(commandOf(rest.slice(1)))
+  if (sub === 'rebase') {
+    return inline(
+      ...rest.map((word, index) => {
+        if (word === '--exec' || /^-[a-zA-Z]*x$/.test(word)) return rest[index + 1]
+        const glued = /^(?:--exec=|-x)([\s\S]+)$/.exec(word)
+        return glued?.[1]
+      }),
+    )
+  }
+  if (sub === 'filter-branch') {
+    return inline(...rest.map((word, index) => (/^--(?:tree|index|msg|env|commit|tag-name|parent)-filter$|^--setup$/.test(word) ? rest[index + 1] : undefined)))
+  }
+  return inline()
+}
+
+/** `find ... -exec cmd {} ;`, `-execdir`, `-ok`, `-okdir`: each command it runs. */
+function findInline(coreWords: readonly string[]): Inline {
+  const found: (string | undefined)[] = []
+  for (let i = 1; i < coreWords.length; i++) {
+    if (!['-exec', '-execdir', '-ok', '-okdir'].includes(coreWords[i] as string)) continue
+    let end = i + 1
+    while (end < coreWords.length && coreWords[end] !== ';' && !(coreWords[end] === '+' && coreWords[end - 1] === '{}')) end++
+    found.push(commandOf(coreWords.slice(i + 1, end)))
+    i = end
+  }
+  return inline(...found)
+}
+
+/** `entr [-acdnprsz] cmd args`: the utility it runs when a file changes (with `-s`, a shell command line). */
+function entrInline(coreWords: readonly string[]): Inline {
+  let i = 1
+  let isShell = false
+  for (; i < coreWords.length && (coreWords[i] as string).startsWith('-') && coreWords[i] !== '-'; i++) if (/^-[a-zA-Z]*s/.test(coreWords[i] as string)) isShell = true
   const rest = coreWords.slice(i)
-  return rest.length === 0 ? undefined : rest.map((word, index) => (index === 0 && rest.length === 1 ? word : quoted(word))).join(' ')
+  return inline(isShell ? rest.join(' ') : commandOf(rest))
+}
+
+/** `parallel [options] cmd args ::: inputs`: the command it runs for each input. */
+function parallelInline(coreWords: readonly string[]): Inline {
+  const valued = new Set(['-j', '-S', '-a', '-N', '-n', '-L', '-l', '-I', '-d', '-C', '-E', '-P', '--jobs', '--sshlogin', '--arg-file', '--max-args', '--max-lines', '--delimiter', '--colsep', '--joblog', '--results', '--delay', '--timeout', '--retries', '--eof'])
+  let i = 1
+  for (; i < coreWords.length && (coreWords[i] as string).startsWith('-') && coreWords[i] !== '-'; i++) if (valued.has(coreWords[i] as string)) i++
+  const rest = coreWords.slice(i)
+  const end = rest.findIndex(word => word.startsWith(':::'))
+  return inline(commandOf(end < 0 ? rest : rest.slice(0, end)))
+}
+
+/** The command lines a program runs for what it is given: a shell's `-c`, `eval`, `su -c`, a multiplexer, a runner, `find -exec`. */
+function inlineOf(coreWords: readonly string[]): Inline {
+  const program = coreWords[0]
+  if (program === undefined) return inline()
+  if (program === 'eval') return inline(coreWords.slice(1).join(' '))
+  if (program === 'tmux') return tmuxInline(coreWords)
+  if (program === 'screen') return screenInline(coreWords)
+  if (program === 'zellij') return zellijInline(coreWords)
+  if (program === 'nix') return nixInline(coreWords)
+  if (program === 'git') return gitInline(coreWords)
+  if (program === 'find') return findInline(coreWords)
+  if (program === 'entr') return entrInline(coreWords)
+  if (program === 'parallel') return parallelInline(coreWords)
+  return inline(inlineScriptOf(coreWords))
 }
 
 /** The script a shell runs with `-c` (any short-option cluster holding `c`). */
 function inlineScriptOf(coreWords: readonly string[]): string | undefined {
   const program = coreWords[0]
   if (program === undefined) return undefined
-  if (program === 'eval') return coreWords.slice(1).join(' ')
-  if (program === 'tmux') return tmuxScriptOf(coreWords)
   if (program === 'nix-shell') {
     for (let i = 1; i < coreWords.length; i++) {
       const word = coreWords[i] as string
@@ -1029,6 +1301,7 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
         out.isCut = true
       } else {
         const { wrappers, coreWords, nestedScripts, unresolved, movesDir, optionValues } = coreOf(words)
+        const { scripts, isUnreadable } = inlineOf(coreWords)
         const part: ShellPart = {
           text,
           words,
@@ -1043,15 +1316,15 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
           ...(parentScope !== undefined && { parentScope }),
           movesDir,
           optionValues,
+          ...(isUnreadable && { isUnreadable }),
         }
         out.parts.push(part)
         // A runner whose inner command was not found for sure: the words as
         // they stand are a part of their own, so a rule can review the call.
         if (unresolved !== undefined && out.parts.length < MAX_PARTS) {
-          out.parts.push({ ...part, wrappers: [], coreWords: unresolved, core: unresolved.join(' '), redirects: [], input: '' })
+          out.parts.push({ ...part, wrappers: [], coreWords: unresolved, core: unresolved.join(' '), redirects: [], input: '', isUnresolved: true })
         }
-        const script = inlineScriptOf(coreWords)
-        if (script !== undefined && script !== '') nested(script)
+        for (const script of scripts) nested(script)
         for (const nestedScript of nestedScripts) if (nestedScript !== '') nested(nestedScript)
       }
     }

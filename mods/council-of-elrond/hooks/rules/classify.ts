@@ -1,7 +1,7 @@
 import type { CompiledConfig, CompiledRule } from '../config/schema.js'
 import { strictness } from '../config/types.js'
 import type { MemberName, Profile, RuleSource, Tier } from '../config/types.js'
-import { forcesCurrentBranch, runCheck } from './checks.js'
+import { forcesCurrentBranch, mayMoveHead, runCheck } from './checks.js'
 import type { CheckContext } from './checks.js'
 import { touchesProtected } from './globs.js'
 import { relativeTo, resolve } from './paths.js'
@@ -222,15 +222,20 @@ export function cwdTracker(start: string, home?: string): (part: ShellPart | und
  * on `HEAD`) and the directory each runs in, after any `cd`. Empty for any
  * other call, which is how a call that needs no branch lookup pays for none.
  * A part with two possible folders (see `cwdTracker`) is listed once for each.
+ * `isHeadMoved` says an earlier part of the call can move HEAD, so whatever
+ * branch is read, a later force push of the current branch counts as unknown
+ * (`classify` applies it; a protected branch read still blocks).
  */
-export function forcePushPlaces(call: Call, context: ClassifyContext): { part: ShellPart; cwd: string }[] {
+export function forcePushPlaces(call: Call, context: ClassifyContext): { part: ShellPart; cwd: string; isHeadMoved: boolean }[] {
   if (!SHELL_TOOLS.has(call.tool)) return []
   const command = typeof call.input.command === 'string' ? call.input.command : ''
-  const places: { part: ShellPart; cwd: string }[] = []
+  const places: { part: ShellPart; cwd: string; isHeadMoved: boolean }[] = []
   const step = cwdTracker(context.cwd, context.home)
+  let isHeadMoved = false
   for (const part of splitShell(command).parts) {
     const { after } = step(part)
-    if (forcesCurrentBranch(part)) for (const cwd of after) places.push({ part, cwd })
+    if (forcesCurrentBranch(part)) for (const cwd of after) places.push({ part, cwd, isHeadMoved })
+    if (mayMoveHead(part)) isHeadMoved = true
   }
   return places
 }
@@ -302,12 +307,14 @@ export function classify(call: Call, config: CompiledConfig, context: ClassifyCo
   // the folder that ignores a nested `cd` are both tried, and a part whose
   // wrapper moved it somewhere unknown is also tried at `/`: the strictest wins.
   const track = cwdTracker(context.cwd, context.home)
+  // An earlier part that can move HEAD (or runs something unread) makes the branch read before the call unsure for the parts after it.
+  let isHeadMoved = false
   for (const subject of subjects) {
     const part = subject.part
     const { after, isUnknown } = track(part)
     let best: { deciding: Finding; cwd: string } | undefined
     for (const cwd of isUnknown ? [...after, '/'] : after) {
-      const partContext = { ...checkContext, cwd }
+      const partContext = { ...checkContext, cwd, isHeadMoved }
       const matches = config.rules.filter(rule => ruleMatches(rule, call, subject, inputJson, partContext))
       const project = matches.find(rule => rule.source === 'project')
       const shipped = matches.filter(rule => rule.source === 'shipped')
@@ -332,6 +339,7 @@ export function classify(call: Call, config: CompiledConfig, context: ClassifyCo
       const deciding = strictest([...(decision !== undefined ? [decision] : []), ...floor])
       if (deciding !== undefined && (best === undefined || strictness(deciding.tier) > strictness(best.deciding.tier))) best = { deciding, cwd }
     }
+    if (part !== undefined && mayMoveHead(part)) isHeadMoved = true
     if (best === undefined || best.deciding.tier === 'allow') continue
     findings.push(part !== undefined ? { ...best.deciding, part, cwd: best.cwd } : best.deciding)
     if (SCRIPT_RULES.test(best.deciding.ruleId) && subject.part !== undefined) {

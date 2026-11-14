@@ -33,6 +33,9 @@ export const CHECKS = [
   'dangerous-env-assignment',
   'raw-disk-write',
   'interpreter-stdin',
+  'claude-session',
+  'unreadable-command',
+  'extract-outside-repo',
 ] as const
 export type CheckName = (typeof CHECKS)[number]
 
