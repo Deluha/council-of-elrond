@@ -63,6 +63,8 @@ type Subject = {
   path?: string
   /** Candidate paths to test against the protected globs. */
   candidates: readonly string[]
+  /** Every word that could name a file, to test against the protected globs (a shell part). */
+  protectedWords?: readonly string[]
 }
 
 const toFinding = (rule: CompiledRule, subject: string): Finding => ({
@@ -108,6 +110,27 @@ function pathWordsOf(part: ShellPart): string[] {
   return out
 }
 
+/**
+ * Every word of a shell part that could name a file the protected paths cover:
+ * all the words as written (so a path given as a wrapper's or runner's option
+ * value is seen, not only the words left once those are stripped), the words
+ * of the command that remains, the redirect targets, the value side of a
+ * `name=value` or `--opt=value` word, and what is glued to a wrapper option.
+ */
+function protectedWordsOf(part: ShellPart): string[] {
+  const out = new Set<string>()
+  const add = (word: string) => {
+    if (word !== '' && !word.includes('$(')) out.add(word)
+  }
+  for (const word of [...part.words, ...part.coreWords, ...part.redirects.map(r => r.target), ...part.optionValues]) {
+    if (word === '' || word.includes('$(')) continue
+    if (!word.startsWith('-')) add(word)
+    const eq = word.indexOf('=')
+    if (eq >= 0) add(word.slice(eq + 1))
+  }
+  return [...out]
+}
+
 function isProtectedPath(candidate: string, config: CompiledConfig, context: ClassifyContext, cwd: string): boolean {
   const absolute = resolve(candidate.replace(/^['"]|['"]$/g, ''), cwd, context.home)
   const relative = relativeTo(absolute, context.root)
@@ -120,7 +143,7 @@ function subjectsOf(call: Call, context: ClassifyContext): { subjects: Subject[]
     const command = typeof call.input.command === 'string' ? call.input.command : ''
     const split = splitShell(command)
     return {
-      subjects: split.parts.map(part => ({ label: part.text, part, candidates: pathWordsOf(part) })),
+      subjects: split.parts.map(part => ({ label: part.text, part, candidates: pathWordsOf(part), protectedWords: protectedWordsOf(part) })),
       tooLong: split.isTooLong,
       cut: split.isCut,
     }
@@ -138,31 +161,76 @@ function subjectsOf(call: Call, context: ClassifyContext): { subjects: Subject[]
 
 const SCRIPT_RULES = /^script-/
 
+/** Where a `cd` or `pushd` part goes, or undefined for any other part. */
+function cdTargetOf(part: ShellPart | undefined, cwd: string, home?: string): string | undefined {
+  if (part === undefined || (part.coreWords[0] !== 'cd' && part.coreWords[0] !== 'pushd')) return undefined
+  const target = part.coreWords.find((word, index) => index > 0 && !word.startsWith('-')) ?? home ?? '/'
+  return /[$`]|^-$/.test(target) ? '/' : resolve(target, cwd, home)
+}
+
 /**
  * Where a shell part leaves the working directory: `cd` and `pushd` (not
  * nested) move where later parts' paths land. A target the parser cannot
  * know (a variable, `-`) lands anywhere: `/`. The one copy, shared by
- * `classify` and `targetsOf`.
+ * `classify` and `targetsOf`; `cwdTracker` is the same logic that also follows
+ * a `cd` inside a nested level.
  */
 export function cwdAfter(part: ShellPart | undefined, cwd: string, home?: string): string {
-  if (part === undefined || part.isNested || (part.coreWords[0] !== 'cd' && part.coreWords[0] !== 'pushd')) return cwd
-  const target = part.coreWords.find((word, index) => index > 0 && !word.startsWith('-')) ?? home ?? '/'
-  return /[$`]|^-$/.test(target) ? '/' : resolve(target, cwd, home)
+  if (part !== undefined && part.isNested) return cwd
+  return cdTargetOf(part, cwd, home) ?? cwd
+}
+
+/** Where a part runs: before and after its own `cd`, for the levels the shell keeps apart. */
+type Step = {
+  /** The folders it may run in: the one the nesting levels give, and the one that ignores a `cd` in a nested level. */
+  before: readonly string[]
+  /** The same, after the part's own `cd`. */
+  after: readonly string[]
+  /** A wrapper or runner option moved it somewhere unknown: `/` too. */
+  isUnknown: boolean
+}
+
+/**
+ * Follows the working directory through the parts of a command, in order. A
+ * `cd` moves the folder for the later parts of its own nesting level (a
+ * subshell, a `$(...)`, an `sh -c` script, at any depth) and for the levels
+ * opened after it; the level that holds it, and the top level after a
+ * subshell, are unaffected. The folder as it was kept before nested levels
+ * were followed (a nested `cd` ignored) is returned too, so following them
+ * only ever adds a place to look at.
+ */
+export function cwdTracker(start: string, home?: string): (part: ShellPart | undefined) => Step {
+  const levels = new Map<number, string>([[0, start]])
+  let top = start
+  return part => {
+    if (part === undefined) return { before: [top], after: [top], isUnknown: false }
+    const held = part.parentScope !== undefined ? levels.get(part.parentScope) : undefined
+    const here = levels.get(part.scope) ?? held ?? top
+    const legacyBefore = top
+    const moved = cdTargetOf(part, here, home)
+    const after = moved ?? here
+    levels.set(part.scope, after)
+    if (!part.isNested) top = cdTargetOf(part, top, home) ?? top
+    const legacyAfter = top
+    const distinct = (a: string, b: string): string[] => (a === b ? [a] : [a, b])
+    return { before: distinct(here, legacyBefore), after: distinct(after, legacyAfter), isUnknown: part.movesDir }
+  }
 }
 
 /**
  * The shell parts that force-push the checked-out branch (no refspec, or one
  * on `HEAD`) and the directory each runs in, after any `cd`. Empty for any
  * other call, which is how a call that needs no branch lookup pays for none.
+ * A part with two possible folders (see `cwdTracker`) is listed once for each.
  */
 export function forcePushPlaces(call: Call, context: ClassifyContext): { part: ShellPart; cwd: string }[] {
   if (!SHELL_TOOLS.has(call.tool)) return []
   const command = typeof call.input.command === 'string' ? call.input.command : ''
   const places: { part: ShellPart; cwd: string }[] = []
-  let cwd = context.cwd
+  const step = cwdTracker(context.cwd, context.home)
   for (const part of splitShell(command).parts) {
-    cwd = cwdAfter(part, cwd, context.home)
-    if (forcesCurrentBranch(part)) places.push({ part, cwd })
+    const { after } = step(part)
+    if (forcesCurrentBranch(part)) for (const cwd of after) places.push({ part, cwd })
   }
   return places
 }
@@ -182,6 +250,8 @@ export function targetsOf(call: Call, context: ClassifyContext): Target[] {
     let cwd = context.cwd
     for (const subject of subjectsOf(call, context).subjects) {
       targets.push({ path: cwd, isWorkingDir: true })
+      // A wrapper option moved the part somewhere unknown: `/` is a place it works in too.
+      if (subject.part?.movesDir === true) targets.push({ path: '/', isWorkingDir: true })
       for (const word of subject.candidates) {
         targets.push({ path: resolve(word.replace(/^['"]|['"]$/g, ''), cwd, context.home), isWorkingDir: false })
       }
@@ -228,36 +298,43 @@ export function classify(call: Call, config: CompiledConfig, context: ClassifyCo
     })
   }
 
-  let cwd = context.cwd
+  // Each part is looked at where it runs. A folder the nesting levels give and
+  // the folder that ignores a nested `cd` are both tried, and a part whose
+  // wrapper moved it somewhere unknown is also tried at `/`: the strictest wins.
+  const track = cwdTracker(context.cwd, context.home)
   for (const subject of subjects) {
     const part = subject.part
-    cwd = cwdAfter(part, cwd, context.home)
-    const partContext = { ...checkContext, cwd }
-    const matches = config.rules.filter(rule => ruleMatches(rule, call, subject, inputJson, partContext))
-    const project = matches.find(rule => rule.source === 'project')
-    const shipped = matches.filter(rule => rule.source === 'shipped')
-    const floor: Finding[] = shipped.filter(rule => rule.tier === 'block').map(rule => toFinding(rule, subject.label))
+    const { after, isUnknown } = track(part)
+    let best: { deciding: Finding; cwd: string } | undefined
+    for (const cwd of isUnknown ? [...after, '/'] : after) {
+      const partContext = { ...checkContext, cwd }
+      const matches = config.rules.filter(rule => ruleMatches(rule, call, subject, inputJson, partContext))
+      const project = matches.find(rule => rule.source === 'project')
+      const shipped = matches.filter(rule => rule.source === 'shipped')
+      const floor: Finding[] = shipped.filter(rule => rule.tier === 'block').map(rule => toFinding(rule, subject.label))
 
-    const protectedHit = subject.candidates.some(candidate => isProtectedPath(candidate, config, context, cwd))
-    if (protectedHit) {
-      isProtected = true
-      floor.push({
-        tier: 'ask',
-        ruleId: 'protected-path',
-        source: 'protected',
-        reason: 'Touches a protected path.',
-        subject: subject.label,
-      })
+      const protectedHit = (subject.protectedWords ?? subject.candidates).some(candidate => isProtectedPath(candidate, config, context, cwd))
+      if (protectedHit) {
+        isProtected = true
+        floor.push({
+          tier: 'ask',
+          ruleId: 'protected-path',
+          source: 'protected',
+          reason: 'Touches a protected path.',
+          subject: subject.label,
+        })
+      }
+
+      const decision =
+        project !== undefined
+          ? toFinding(project, subject.label)
+          : strictest(shipped.map(rule => toFinding(rule, subject.label)))
+      const deciding = strictest([...(decision !== undefined ? [decision] : []), ...floor])
+      if (deciding !== undefined && (best === undefined || strictness(deciding.tier) > strictness(best.deciding.tier))) best = { deciding, cwd }
     }
-
-    const decision =
-      project !== undefined
-        ? toFinding(project, subject.label)
-        : strictest(shipped.map(rule => toFinding(rule, subject.label)))
-    const deciding = strictest([...(decision !== undefined ? [decision] : []), ...floor])
-    if (deciding === undefined || deciding.tier === 'allow') continue
-    findings.push(part !== undefined ? { ...deciding, part, cwd } : deciding)
-    if (SCRIPT_RULES.test(deciding.ruleId) && subject.part !== undefined) {
+    if (best === undefined || best.deciding.tier === 'allow') continue
+    findings.push(part !== undefined ? { ...best.deciding, part, cwd: best.cwd } : best.deciding)
+    if (SCRIPT_RULES.test(best.deciding.ruleId) && subject.part !== undefined) {
       scriptPaths.push(...pathWordsOf(subject.part).filter(word => /[./]/.test(word)))
     }
   }

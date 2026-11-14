@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { SHIPPED } from '../hooks/config/defaults.js'
 import { loadConfig } from '../hooks/config/schema.js'
 import type { Tier } from '../hooks/config/types.js'
 import { classify, forcePushPlaces } from '../hooks/rules/classify.js'
 import type { ClassifyContext } from '../hooks/rules/classify.js'
 import { parsePush } from '../hooks/rules/push.js'
-import { splitShell } from '../hooks/rules/shell.js'
+import { splitShell, WRAPPER_PROGRAMS } from '../hooks/rules/shell.js'
 import { CONTEXT, ROOT, SHIPPED_COMPILED } from './fixtures.js'
 
 const bash = (command: string, context: ClassifyContext = CONTEXT) =>
@@ -1047,5 +1048,442 @@ describe('the mod protects itself', () => {
     }
     const result = classify({ tool: 'Write', input: { file_path: '/home/me/.claude/CLAUDE.md', content: 'x' } }, SHIPPED_COMPILED, CONTEXT)
     expect(result.isProtected).toBe(false)
+  })
+})
+
+describe('a protected path named as a wrapper or runner option value is still seen', () => {
+  // A regression floor: every one of these asked on the release before wrappers
+  // and runners stripped their own options, so none may fall below ask.
+  const NAMED_AS_OPTION_VALUE = [
+    'op run --env-file=.env -- npm start',
+    'op run --env-file .env -- npm start',
+    'doppler run --mount .env -- x',
+    'doppler run --mount=.git/config -- x',
+    'mise x -C .git -- ls',
+    'systemd-run --working-directory=.git ls',
+    'firejail --private=.git ls',
+    'firejail --profile=.env ls',
+    'firejail --output=.git/hooks/pre-commit echo x',
+    'fakeroot -s .env ls',
+    'fakeroot -i .git/config ls',
+    'fakeroot -l .env ls',
+  ]
+
+  test('the options that used to hide a path (the regression floor)', () => {
+    for (const command of NAMED_AS_OPTION_VALUE) {
+      expect(bash(command).tier, command).toBe('ask')
+      expect(ruleOf(command), command).toBe('protected-path')
+      expect(bash(command).isProtected, command).toBe(true)
+    }
+  })
+
+  test('forms that were allowed on both sides are seen too', () => {
+    expectCases([
+      ['uv run --env-file .env x', 'ask', 'protected-path'],
+      ['npm exec --userconfig .env x', 'ask', 'protected-path'],
+      ['pnpm exec --dir .git x', 'ask', 'protected-path'],
+      ['dd if=x of=.git/config', 'ask', 'protected-path'],
+      ['fakeroot -s.env ls', 'ask', 'protected-path'],
+      ['mise x -C.git -- ls', 'ask', 'protected-path'],
+      ['npm --prefix .github/workflows exec -- ls', 'ask', 'protected-path'],
+      ['env -C .git ls', 'ask', 'protected-path'],
+      ['timeout 5 cat .env', 'ask', 'protected-path'],
+    ])
+  })
+
+  test('an ordinary path as an option value is not protected', () => {
+    expectCases([
+      ['op run --env-file=prod.txt -- ls', 'allow'],
+      ['uv run --env-file config.txt pytest', 'allow'],
+      ['npm exec --userconfig npmrc.txt tsc', 'allow'],
+      ['dd if=a of=b', 'review', 'shell-overwrite-tools'],
+    ])
+  })
+})
+
+describe('a single-dash cluster is read letter by letter', () => {
+  test('the first letter that takes a value ends the cluster, for every wrapper', () => {
+    expectCases([
+      ['timeout -vs KILL 5 rm -rf /home/me', 'block', RM],
+      ['ionice -tc 3 rm -rf /home/me', 'block', RM],
+      ['env -iu FOO rm -rf /home/me', 'block', RM],
+      ['env -0u FOO rm -rf /home/me', 'block', RM],
+      ['timeout -vk1 5 rm -rf /home/me', 'block', RM],
+      ['watch -dn1 rm -rf /home/me', 'block', RM],
+      ['sudo -nu me rm -rf /home/me', 'block', RM],
+      ['exec -la name rm -rf /home/me', 'block', RM],
+      ['stdbuf -oL rm -rf /home/me', 'block', RM],
+      ['nice -n5 rm -rf /home/me', 'block', RM],
+      ['timeout -vs KILL 5 ls', 'allow'],
+      ['env -iu FOO ls', 'allow'],
+    ])
+  })
+})
+
+describe('an option a wrapper or runner does not list is reviewed', () => {
+  test('an unknown option marks the part unresolved; the inner command keeps its own tier', () => {
+    expectCases([
+      ['timeout --newoption 5 ls', 'review', 'shell-runner-unresolved'],
+      ['nice --newoption ls', 'review', 'shell-runner-unresolved'],
+      ['env --newoption ls', 'review', 'shell-runner-unresolved'],
+      ['strace --newoption ls', 'review', 'shell-runner-unresolved'],
+      ['flock --newoption /tmp/l ls', 'review', 'shell-runner-unresolved'],
+      ['firejail --newoption ls', 'review', 'shell-runner-unresolved'],
+      ['npx --newoption tsc', 'review', 'shell-runner-unresolved'],
+      ['uvx --newoption ruff', 'review', 'shell-runner-unresolved'],
+      ['timeout --newoption 5 rm -rf /home/me', 'block', RM],
+      ['sudo --newoption ls', 'ask', 'privileged'],
+      ['/usr/bin/env --newoption ls', 'review', 'shell-runner-unresolved'],
+    ])
+  })
+
+  test('the listed options do not trip it', () => {
+    expectCases([
+      ['nice -n5 ls', 'allow'],
+      ['nice -5 ls', 'allow'],
+      ['timeout 5 npm test', 'allow'],
+      ['timeout --signal=KILL --foreground 5 ls', 'allow'],
+      ['env FOO=1 npm test', 'allow'],
+      ['env -i FOO=1 ls', 'allow'],
+      ['watch -n 2 -d ls', 'allow'],
+      ['ionice -c3 -n7 ls', 'allow'],
+      ['strace -f -o out.txt ls', 'allow'],
+      ['stdbuf -oL ls', 'allow'],
+      ['flock -n /tmp/l ls', 'allow'],
+      ['time -p ls', 'allow'],
+      ['command -v node', 'allow'],
+    ])
+  })
+
+  test('the review rule names every wrapper the parser reads', () => {
+    const rule = SHIPPED.rules.find(candidate => candidate.id === 'shell-runner-unresolved')
+    const pattern = new RegExp(rule?.command ?? '(?!)')
+    for (const program of WRAPPER_PROGRAMS) expect(pattern.test(`${program} --x`), program).toBe(true)
+    for (const program of ['npx', 'bunx', 'pnpx', 'uvx']) expect(pattern.test(`${program} --x`), program).toBe(true)
+    expect(pattern.test('npm test'), 'an ordinary program').toBe(false)
+    expect(pattern.test('git status'), 'an ordinary program').toBe(false)
+  })
+})
+
+describe('the options of each wrapper are complete', () => {
+  test('sudo and the privilege wrappers skip every value option', () => {
+    expectCases([
+      ['sudo -R /x rm -rf /home/me', 'block', RM],
+      ['sudo --chroot=/x rm -rf /home/me', 'block', RM],
+      ['sudo -D x rm -rf /home/me', 'block', RM],
+      ['sudo -h host rm -rf /home/me', 'block', RM],
+      ['sudo --host=host rm -rf /home/me', 'block', RM],
+      ['sudo -p prompt rm -rf /home/me', 'block', RM],
+      ['sudo --prompt prompt rm -rf /home/me', 'block', RM],
+      ['sudo -r role rm -rf /home/me', 'block', RM],
+      ['sudo -t type rm -rf /home/me', 'block', RM],
+      ['sudo -U me rm -rf /home/me', 'block', RM],
+      ['sudo --other-user me rm -rf /home/me', 'block', RM],
+      ['sudo -C 3 rm -rf /home/me', 'block', RM],
+      ['sudo -T 5 rm -rf /home/me', 'block', RM],
+      ['sudo --command-timeout=5 rm -rf /home/me', 'block', RM],
+      ['doas -u me rm -rf /home/me', 'block', RM],
+      ['doas -C conf rm -rf /home/me', 'block', RM],
+      ['runuser -u me -- rm -rf /home/me', 'block', RM],
+      ['runuser -c "rm -rf /home/me" me', 'block', RM],
+      ['setpriv --reuid 1 --nnp rm -rf /home/me', 'block', RM],
+      ['run0 -u me rm -rf /home/me', 'block', RM],
+      ['sudo -u me ls', 'ask', 'privileged'],
+      ['sudo -h host ls', 'ask', 'privileged'],
+    ])
+  })
+
+  test('the process wrappers skip every value option', () => {
+    expectCases([
+      ['ionice -c 2 -n 4 rm -rf /home/me', 'block', RM],
+      ['ionice -t rm -rf /home/me', 'block', RM],
+      ['timeout -k 1 5 rm -rf /home/me', 'block', RM],
+      ['timeout --kill-after=1 --preserve-status 5 rm -rf /home/me', 'block', RM],
+      ['stdbuf -o L -e0 rm -rf /home/me', 'block', RM],
+      ['stdbuf --output=L rm -rf /home/me', 'block', RM],
+      ['nohup rm -rf /home/me', 'block', RM],
+      ['flock -w 5 /tmp/l rm -rf /home/me', 'block', RM],
+      ['flock /tmp/l -c "rm -rf /home/me"', 'block', RM],
+      ['watch -n 5 rm -rf /home/me', 'block', RM],
+      ['watch -d rm -rf /home/me', 'block', RM],
+      ['time -p rm -rf /home/me', 'block', RM],
+      ['time -f x rm -rf /home/me', 'block', RM],
+      ['command -p rm -rf /home/me', 'block', RM],
+      ['gosu me rm -rf /home/me', 'block', RM],
+    ])
+  })
+})
+
+describe('a wrapper or runner that changes the folder makes the folder unknown', () => {
+  test('a changed directory or root is read as /', () => {
+    expectCases([
+      ['env -C / rm -rf etc', 'block', RM],
+      ['env --chdir=/ rm -rf etc', 'block', RM],
+      ['env --chd=/ rm -rf etc', 'block', RM],
+      ['sudo -D / rm -rf etc', 'block', RM],
+      ['sudo --chdir=/ rm -rf etc', 'block', RM],
+      ['sudo -R / rm -rf etc', 'block', RM],
+      ['sudo --chroot=/ rm -rf etc', 'block', RM],
+      ['chroot / rm -rf etc', 'block', RM],
+      ['run0 --chdir=/ rm -rf etc', 'block', RM],
+      ['run0 -D / rm -rf etc', 'block', RM],
+      ['systemd-run --working-directory=/ rm -rf etc', 'block', RM],
+      ['systemd-run --root-directory=/x rm -rf etc', 'block', RM],
+      ['nsenter -t 1 -m rm -rf etc', 'block', RM],
+      ['unshare -R / rm -rf etc', 'block', RM],
+      ['unshare --root=/ rm -rf etc', 'block', RM],
+      ['mise -C / exec -- rm -rf etc', 'block', RM],
+      ['uv --directory / run rm -rf etc', 'block', RM],
+      ['npm --prefix / exec -- rm -rf etc', 'block', RM],
+      ['pnpm --dir / exec rm -rf etc', 'block', RM],
+      ['pnpm -C / exec rm -rf etc', 'block', RM],
+      ['yarn --cwd / exec rm -rf etc', 'block', RM],
+      ['poetry -C / run rm -rf etc', 'block', RM],
+      ['poetry --directory=/ run rm -rf etc', 'block', RM],
+    ])
+  })
+
+  test('a wrapper that moves nothing leaves the folder as it was', () => {
+    expectCases([
+      ['env -i rm -rf etc', 'review', 'shell-delete'],
+      ['nice -n5 rm -rf etc', 'review', 'shell-delete'],
+      ['sudo -u me ls', 'ask', 'privileged'],
+      ['env -C /tmp ls', 'allow'],
+      ['git -C sub status', 'allow'],
+    ])
+  })
+
+  test('the part says so', () => {
+    expect(splitShell('env -C / rm -rf etc').parts[0]?.movesDir).toBe(true)
+    expect(splitShell('env -i rm -rf etc').parts[0]?.movesDir).toBe(false)
+    expect(splitShell('chroot / ls').parts[0]?.movesDir).toBe(true)
+  })
+})
+
+describe('a runner skips its global options to find the subcommand', () => {
+  test('options and workspace words before the subcommand', () => {
+    expectCases([
+      ['pnpm --filter web exec rm -rf /home/me', 'block', RM],
+      ['pnpm -r exec rm -rf /home/me', 'block', RM],
+      ['pnpm -F web exec rm -rf /home/me', 'block', RM],
+      ['npm -s exec -- rm -rf /home/me', 'block', RM],
+      ['npm --prefix /x exec -- rm -rf /home/me', 'block', RM],
+      ['uv -q run rm -rf /home/me', 'block', RM],
+      ['uv --directory /x run rm -rf /home/me', 'block', RM],
+      ['poetry -C /x run rm -rf /home/me', 'block', RM],
+      ['yarn --cwd /x exec rm -rf /home/me', 'block', RM],
+      ['yarn workspace web exec rm -rf /home/me', 'block', RM],
+      ['conda -q run rm -rf /home/me', 'block', RM],
+      ['bundle -q exec rm -rf /home/me', 'block', RM],
+      ['composer -q exec rm -rf /home/me', 'block', RM],
+      ['mise -C /x exec -- rm -rf /home/me', 'block', RM],
+      ['op --account x run -- rm -rf /home/me', 'block', RM],
+      ['doppler -p x run -- rm -rf /home/me', 'block', RM],
+    ])
+  })
+
+  test('an unknown global option is reviewed, and the inner command is still found', () => {
+    expectCases([
+      ['npm --newoption exec -- ls', 'review', 'shell-runner-unresolved'],
+      ['uv --newoption run pytest', 'review', 'shell-runner-unresolved'],
+      ['npm --newoption exec -- rm -rf /home/me', 'block', RM],
+    ])
+  })
+
+  test('a global option on a command that is not a runner call changes nothing', () => {
+    expectCases([
+      ['npm --prefix web test', 'allow'],
+      ['pnpm --filter web test', 'allow'],
+      ['npm -s test', 'allow'],
+      ['yarn workspace web build', 'allow'],
+      ['uv -q sync', 'allow'],
+    ])
+    expect(splitShell('npm --prefix web test').parts[0]?.core).toBe('npm --prefix web test')
+  })
+})
+
+describe('real runner options are not unresolved', () => {
+  test('uv run -m and poetry run verbosity, as before', () => {
+    expectCases([
+      ['uv run -m pytest', 'allow'],
+      ['uv run --module pytest', 'allow'],
+      ['uv run --with rich --python 3.12 --extra dev --group test pytest', 'allow'],
+      ['uv run --no-project --isolated --locked --frozen pytest', 'allow'],
+      ['poetry run -v pytest', 'allow'],
+      ['poetry run -vv pytest', 'allow'],
+      ['poetry run -vvv pytest', 'allow'],
+      ['poetry run -q pytest', 'allow'],
+      ['poetry run --ansi pytest', 'allow'],
+      ['poetry run --no-ansi pytest', 'allow'],
+      ['uv run -m rm -rf /home/me', 'block', RM],
+      ['poetry run -vvv rm -rf /home/me', 'block', RM],
+    ])
+  })
+})
+
+describe('env -S, setarch, fakeroot and script in their other spellings', () => {
+  test('env -S: escapes, a leading option, a unique prefix, and -a', () => {
+    expectCases([
+      ["env -S 'rm\\_-rf\\_/home/me'", 'block', RM],
+      ['env -S "rm\\_-rf\\_/home/me"', 'block', RM],
+      ["env -S 'rm\\t-rf\\n/home/me'", 'block', RM],
+      ["env -S '-i rm -rf /home/me'", 'block', RM],
+      ["env -S '-u FOO rm -rf /home/me'", 'block', RM],
+      ["env -S 'FOO=1 rm -rf /home/me'", 'block', RM],
+      ["env --split='rm -rf /home/me'", 'block', RM],
+      ["env --split-s='rm -rf /home/me'", 'block', RM],
+      ["env --split-string 'rm -rf /home/me'", 'block', RM],
+      ['env -a NAME rm -rf /home/me', 'block', RM],
+      ['env --argv0 NAME rm -rf /home/me', 'block', RM],
+      ["env -S 'echo hi'", 'allow'],
+      ["env -S '-i ls'", 'allow'],
+      ['env -a NAME ls', 'allow'],
+    ])
+  })
+
+  test('setarch aliases and the fakeroot family', () => {
+    expectCases([
+      ['linux32 rm -rf /home/me', 'block', RM],
+      ['linux64 rm -rf /home/me', 'block', RM],
+      ['i386 rm -rf /home/me', 'block', RM],
+      ['x86_64 rm -rf /home/me', 'block', RM],
+      ['uname26 rm -rf /home/me', 'block', RM],
+      ['linux32 -R rm -rf /home/me', 'block', RM],
+      ['fakeroot-sysv rm -rf /home/me', 'block', RM],
+      ['fakeroot-tcp rm -rf /home/me', 'block', RM],
+      ['fakeroot-ng rm -rf /home/me', 'block', RM],
+      ['linux32 ls', 'allow'],
+      ['fakeroot-sysv ls', 'allow'],
+    ])
+  })
+
+  test('script -c attached, long, and by a prefix', () => {
+    expectCases([
+      ["script -c'rm -rf /home/me'", 'block', RM],
+      ["script -qc'rm -rf /home/me' /dev/null", 'block', RM],
+      ["script --command='rm -rf /home/me'", 'block', RM],
+      ["script --comm='rm -rf /home/me'", 'block', RM],
+      ["script --comm 'rm -rf /home/me' out.log", 'block', RM],
+      ["su -c'rm -rf /home/me' me", 'block', RM],
+      ["script -c'ls'", 'allow'],
+      ["script --comm=ls", 'allow'],
+    ])
+  })
+})
+
+describe('a cd inside a nested level moves the later parts of that level', () => {
+  test('a subshell, a group and a substitution, at any depth', () => {
+    expectCases([
+      ['(cd .github && (cd workflows && echo x > ci.yml))', 'ask', 'protected-path'],
+      ['(cd .github; echo x > workflows/ci.yml)', 'ask', 'protected-path'],
+      ['(cd .github && (echo x > workflows/ci.yml))', 'ask', 'protected-path'],
+      ['(cd a && (cd .. && (cd .github && echo x > workflows/ci.yml)))', 'ask', 'protected-path'],
+      ['echo $(cd .github && echo x > workflows/ci.yml)', 'ask', 'protected-path'],
+      ['{ cd .github; echo x > workflows/ci.yml; }', 'ask', 'protected-path'],
+      ["bash -c 'cd .github && echo x > workflows/ci.yml'", 'ask', 'protected-path'],
+      ['(cd /tmp && rm -rf build)', 'block', RM],
+      ["bash -c 'cd / && rm -rf etc'", 'block', RM],
+    ])
+  })
+
+  test('a top-level part after the subshell is not moved', () => {
+    expectCases([
+      ['(cd .github) && echo x > workflows/ci.yml', 'review', 'shell-redirect-write'],
+      ['(cd / ; ls) ; rm -rf build', 'review', 'shell-delete'],
+    ])
+  })
+
+  test('following a nested cd never lowers what the old reading gave', () => {
+    // Read from the folder it moved to, `../x` is inside the project; read as
+    // before (nested cd ignored) it is outside. Both are tried and the stricter wins.
+    expectCases([['(cd sub && rm -rf ../x)', 'block', RM]])
+    expectCases([['cd sub && rm -rf ../x', 'review', 'shell-delete']])
+  })
+
+  test('each part says which nesting level it is in', () => {
+    const parts = splitShell('(cd a && ls); echo $(pwd)').parts
+    expect(parts.map(part => [part.core, part.scope, part.parentScope])).toEqual([
+      ['cd a', 1, 0],
+      ['ls', 1, 0],
+      ['pwd', 2, 0],
+      ['echo $(...)', 0, undefined],
+    ])
+  })
+})
+
+describe('a program word known only at run time is reviewed', () => {
+  test('a variable, a backtick, a brace list, a glob or a bracket as the program', () => {
+    expectCases([
+      ['$X -rf /home/me', 'review', 'shell-dynamic-program'],
+      ['${X} -rf /home/me', 'review', 'shell-dynamic-program'],
+      ['r*m -rf /home/me', 'review', 'shell-dynamic-program'],
+      ['?m -rf /home/me', 'review', 'shell-dynamic-program'],
+      ['[r]m -rf /home/me', 'review', 'shell-dynamic-program'],
+      ['*.sh', 'review', 'shell-dynamic-program'],
+      ['FOO=1 r*m x', 'review', 'shell-dynamic-program'],
+      ['env FOO=1 r?m x', 'review', 'shell-dynamic-program'],
+      ['sudo {a,b}x', 'ask', 'privileged'],
+      ['time $X', 'review', 'shell-dynamic-program'],
+      ['{a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r}', 'review', 'shell-dynamic-program'],
+      ['{a,{b,c}}', 'review', 'shell-dynamic-program'],
+    ])
+    // Not expanded (nested, or longer than sixteen): the review rule is the floor.
+    expect(splitShell('{rm,{-rf,-f},/x}').parts[0]?.coreWords).toEqual(['{rm,{-rf,-f},/x}'])
+    expect(tierOf('{rm,{-rf,-f},/home/me}')).not.toBe('allow')
+  })
+
+  test('a brace list that is the whole command is expanded, so the rules see it', () => {
+    expectCases([
+      ['{rm,-rf,/home/me}', 'block', RM],
+      ['sudo {rm,-rf,/home/me}', 'block', RM],
+      ['{rm,-rf,build}', 'review', 'shell-delete'],
+      ['{ls,-l}', 'allow'],
+      ['r{m,m} -rf /home/me', 'block', RM],
+    ])
+    expect(splitShell('{rm,-rf,/home/me}').parts[0]?.coreWords).toEqual(['rm', '-rf', '/home/me'])
+  })
+
+  test('a command substitution inside unquoted arithmetic is a command of the call', () => {
+    expectCases([
+      ['echo $((1+$(rm -rf /home/me)))', 'block', RM],
+      ['echo $[1+$(rm -rf /home/me)]', 'block', RM],
+      ['echo "$((1+$(rm -rf /home/me)))"', 'block', RM],
+      ['echo $((1+2))', 'allow'],
+      ['echo $((1+$(date +%s)))', 'allow'],
+    ])
+  })
+
+  test('globs, braces and brackets among the arguments, and the test command, are untouched', () => {
+    expectCases([
+      ['./run.sh', 'review', 'script-path'],
+      ['./a.out', 'review', 'script-path'],
+      ['[ -f x ] && echo y', 'allow'],
+      ['[[ -n $X ]] && ls', 'allow'],
+      ['test -f x', 'allow'],
+      ['ls *.ts', 'allow'],
+      ['echo {a,b}', 'allow'],
+      ['cat file?.txt', 'allow'],
+      ['arr[0]=foo', 'allow'],
+      ["git commit -m 'a*b'", 'allow'],
+      ['for f in *.ts; do echo $f; done', 'allow'],
+    ])
+  })
+})
+
+describe('near misses stay as they were', () => {
+  test('ordinary wrapper and runner uses', () => {
+    expectCases([
+      ['nice -n5 ls', 'allow'],
+      ['timeout 5 npm test', 'allow'],
+      ['env FOO=1 npm test', 'allow'],
+      ['sudo -u me ls', 'ask', 'privileged'],
+      ['npm test', 'allow'],
+      ['npx tsc', 'allow'],
+      ['uv run pytest', 'allow'],
+      ['pnpm exec tsc', 'allow'],
+      ['poetry run pytest', 'allow'],
+      ["tmux new -d 'npm run dev'", 'allow'],
+      ['$EDITOR f', 'review', 'shell-dynamic-program'],
+    ])
   })
 })

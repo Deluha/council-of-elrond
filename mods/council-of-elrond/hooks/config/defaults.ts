@@ -284,18 +284,27 @@ const REVIEW: readonly Rule[] = [
     id: 'shell-dynamic-program',
     tier: 'review',
     tools: SHELL,
-    command: String.raw`^\S*\$`,
-    reason: 'The program to run is only known at run time (a variable or a command substitution).',
+    // The first word, once assignments and wrappers are stripped, holds a
+    // variable, a backtick, a brace list or a glob: the shell makes the program
+    // at run time. A bare `[` or `[[` (the test) and `name[1]=x` are not that.
+    command: String.raw`^(?![A-Za-z_]\w*\[[^\]]*\]\+?=)\S*(\$|\x60|\{[^\s{}]*,[^\s{}]*\}|[*?]|\[[^\s\[\]]+\])`,
+    reason: 'The program to run is only known at run time (a variable, a command substitution, a brace list or a glob).',
   },
   {
-    // A runner whose own options the parser does not know: it reads them as it
-    // can, and this sends the whole call to review. Keep in step with the
-    // runner tables in rules/shell.ts.
+    // A wrapper or runner whose own options the parser does not know: it reads
+    // them as it can, and this sends the whole call to review. Keep in step
+    // with the wrapper and runner tables in rules/shell.ts (a test checks the
+    // wrapper names).
     id: 'shell-runner-unresolved',
     tier: 'review',
     tools: SHELL,
-    command: String.raw`^(npm|pnpm|yarn)\s(exec|x|dlx)(\s|$)|^(poetry|pipenv|pdm|rye|hatch|uv|conda|mamba|micromamba|op|doppler)\srun(\s|$)|^(bundle|composer)\sexec(\s|$)|^mise\s(exec|x)(\s|$)|^(systemd-run|fakeroot)(\s|$)`,
-    reason: 'Runs a command through a runner whose options this tool cannot read with certainty, so the command is not known.',
+    command:
+      String.raw`^(npm|pnpm|yarn)\s(exec|x|dlx)(\s|$)|^(poetry|pipenv|pdm|rye|hatch|uv|conda|mamba|micromamba|op|doppler)\srun(\s|$)|^(bundle|composer)\sexec(\s|$)|^mise\s(exec|x)(\s|$)` +
+      String.raw`|^(npx|bunx|pnpx|uvx)(\s|$)` +
+      String.raw`|^(sudo|doas|env|nice|ionice|nohup|time|command|builtin|exec|timeout|stdbuf|unbuffer|caffeinate|chroot|setsid|flock|strace|ltrace|watch|unshare|nsenter|chrt|taskset|numactl)(\s|$)` +
+      String.raw`|^(setarch|linux32|linux64|i386|x86_64|uname26|busybox|toybox|fakeroot(-sysv|-tcp|-ng)?|firejail|systemd-run|eatmydata|proxychains4?|xvfb-run|retry)(\s|$)` +
+      String.raw`|^(gosu|runuser|setpriv|run0|chpst|pkexec)(\s|$)`,
+    reason: 'Runs a command through a wrapper or runner whose options this tool cannot read with certainty, so the command is not known.',
   },
   {
     id: 'remote-exec',
