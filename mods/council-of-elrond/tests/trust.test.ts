@@ -337,7 +337,7 @@ describe('what the listing shows: every held-back setting, every field, whole; o
   test('every rule, disabled rule, model, check and pattern, each field of it, with the counts and the code', () => {
     const { lines } = trustOutput([view(FULL)], [])
     const shown = lines.join('\n')
-    expect(lines[0]).toBe('/work: 1 allow or review rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s) are ignored until you confirm this content.')
+    expect(lines[0]).toBe('/work: 1 allow rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s) are ignored until you confirm this content.')
     for (const line of ['id: allow-clean', 'tier: allow', 'tools[0]: "Bash"', 'command: ^rm\\s+-rf\\s+build$', 'reason: The build folder is disposable.']) {
       expect(lines, line).toContain(`${GUTTER}${line}`)
     }
@@ -630,8 +630,10 @@ describe('confirm mode through the pipeline (the default)', () => {
     await $.tool.call(RM)
     const notices = w.logs.filter(line => line.includes('ignored until you confirm'))
     expect(notices).toHaveLength(1)
-    expect(notices[0]).toContain('1 allow or review rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s)')
+    expect(notices[0]).toContain('1 allow rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s)')
     expect(notices[0]).toContain('/council trust')
+    // Its block, ask and review rules apply at once, and only add to what the shipped rules decide.
+    expect(notices[0]).toContain('block, ask and review rules apply meanwhile and only add to what the shipped rules decide')
     expect(notices[0]).not.toMatch(/allow-clean|fable|acme|npm/)
     expect(w.toasts.filter(toast => toast.includes('not confirmed'))).toHaveLength(1)
     // Where something draws, nothing is put in the conversation.
@@ -645,7 +647,7 @@ describe('confirm mode through the pipeline (the default)', () => {
     await $.tool.call(RM)
     const rows = w.appended.map(row => row.content.map(part => part.text ?? '').join('')).filter(row => row.includes('settings that need the user to confirm'))
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toContain('1 allow or review rule(s)')
+    expect(rows[0]).toContain('1 allow rule(s)')
     expect(rows[0]).toContain('/council trust')
     expect(rows[0]).not.toMatch(/allow-clean|review-ls|fable|acme|npm|shell-delete/)
   })
@@ -663,7 +665,9 @@ describe('confirm mode through the pipeline (the default)', () => {
     w.files.set(RULES, fileOf())
     for (const sub of ['rules', 'status']) {
       const shown = await say($, w, sub)
-      expect(shown).toContain('Project rules file: not trusted. Ignored until you run /council trust: 1 allow or review rule(s)')
+      expect(shown).toContain('Project rules file: not trusted. Ignored until you run /council trust: 1 allow rule(s)')
+      expect(shown).toContain('Its block, ask and review rules apply and only add to what the shipped rules decide')
+      expect(shown).not.toContain('allow or review')
       expect(shown).toContain('No allow rule or allowlist entry is offered for it meanwhile')
     }
   })
@@ -701,7 +705,7 @@ describe('confirming', () => {
     expect(w.ran.filter(call => call.tool === 'Write')).toHaveLength(1)
 
     const shown = await say($, w, `trust ${code}`)
-    expect(shown).toContain(`${ROOT}: confirmed. Now in force: 1 allow or review rule(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s).`)
+    expect(shown).toContain(`${ROOT}: confirmed. Now in force: 1 allow rule(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s).`)
     expect(recordOf(w)).toEqual([{ path: RULES, hash: await hashOf(content) }])
 
     w.modelRequests.length = 0
@@ -1382,6 +1386,8 @@ describe('an unconfirmed rules file only adds to the shipped decision (DESIGN §
     expect(w.processes.some(argv => argv[1] === 'log')).toBe(true)
     expect(w.asked).toHaveLength(1)
     const question = w.asked[0]?.question ?? ''
+    expect(question).toContain("The project's rules file asks you about this call too, after its review.")
+    expect(question).not.toContain('A rule sends this call straight to you.')
     expect(question).toContain("Why it was gated (the project's own words):")
     expect(question).toContain('Everything comes to you.')
     expect(question).not.toContain('Why it was gated: ')

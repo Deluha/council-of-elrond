@@ -70,8 +70,8 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   or test in the cloud web client, the same lines also go to Claude, fenced as the council's output
   and redacted line by line, with an instruction to repeat them to you in its next reply. A scoped
   exception to "command output never reaches Claude": no other subcommand, no command from a plugin
-  or another session, and nothing at all where a surface draws. `/council rules` shows an exact-string allowlist entry to
-  Claude as `(an exact string, not shown)`, not its first three characters. See "Where nothing
+  or another session, and nothing at all where a surface draws. `/council rules` shows an exact-string allowlist entry as
+  `(an exact string, not shown)`, not its first three characters. See "Where nothing
   draws" in the README.
 - **A start notice where nothing draws.** The session starts with a row Claude reads, saying the
   council is active, that a call needing your approval is refused here with the reason, and how you
@@ -237,9 +237,12 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   through and changes nothing else. A file with nothing that waits is read the same way, since nobody
   can confirm it; a confirmed file, and the option `always`, decide first as before. The audit line
   keeps the shipped `ruleId` and lists the file's rules that only added in the new field
-  `alsoRuleIds`. `/council trust` no longer lists review rules among what waits. (The wording of the
-  status and notice lines still says "allow or review rule(s)" and "block and ask rules"; it is left to
-  a later change.)
+  `alsoRuleIds`. `/council trust` no longer lists review rules among what waits. The counts in the
+  status, notice and trust lines say "allow rule(s)", and those lines say that the file's block, ask
+  and review rules apply and only add to what the shipped rules decide. The question put after a review
+  approved because such a rule asks has its own words ("The project's rules file asks you about this
+  call too, after its review."), and `/council rules` lists the paths protected against writes
+  ("Protected against writes") apart from the protected paths.
 - **The plugin folders ask for a write, not a read.** The protection of `**/.claude/plugins/**` made
   every shell mention of it ask, so `cat ~/.claude/plugins/x/README.md`, `ls ~/.claude/plugins/` and
   running a plugin skill's own script asked on each call. The folders are now on a second, built-in
@@ -360,7 +363,30 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **A malformed verdict echoes less.** The names of unexpected fields in a reviewer's reply are
   capped (three, 40 characters each, control characters removed) before they reach a dialog, a
   refusal or the log.
-- **More secrets are redacted.** A value is treated as a placeholder only when all of it is one (`$NAME`, `${NAME}`, `<your-key>`, `{{ ... }}`, `****`); a literal that merely starts with such a character is redacted and reported. Quoted passwords containing spaces, shorter values, `curl -u user:password`, `--password` for the database clients already known, and `Authorization: Token`, `X-Api-Key` and `X-Auth-Token` headers are now covered. Text longer than the scan limit also has its end scanned.
+- **More secrets are redacted, without blanking ordinary code.** A value is treated as a placeholder only when all of it is one (`$NAME`, `${NAME}`, `${1:-default}`, `<your-key>`, `{{ ... }}`, `****`, a call expression such as `getToken()` or `z.string().min(8)`, an indexed lookup such as `tokens[0]`); a literal that merely starts with such a character (`$ecret123!`, `Sup3r(Secret)9`, `<realkey12345>`, `(hunter2xyz)`) is redacted and reported. Quoted passwords containing spaces, shorter values, `curl -u user:password`, `--password` for the database clients already known, and `Authorization: Token`, `X-Api-Key` and `X-Auth-Token` headers are now covered. A value of 4 or 5 characters counts only when it holds a digit or a character other than letters, `_` and `.`; a plain word needs 6, as before. Not secrets: a bare number under 6 digits, a path or a backtick substitution under 6 characters, and anything assigned to a variable named exactly `PWD` or `OLDPWD`. Text longer than the scan limit also has its end scanned, and is no longer passed silently (see below). Ordinary code that only names a secret (`{ token: token }`, `this.token = token`, `export PWD=/tmp`, `z.string().min(8)`) is left readable and is not asked about.
+- **A project's own secret patterns are applied wherever the mod redacts.** Once a rules file is
+  confirmed, its `gollum.patterns` were applied to what reviewers read and to the debate pane, but not
+  to the operation key, the audit line, the refusal Claude reads or the dialog's second pass. They are
+  now, and the audit line also redacts its operation key, which a file path or a push URL can hold a
+  token in.
+- **The scan reads more of a call.** A shell call's `description`, a file tool's path (as well as what
+  it writes), and the whole input of every other tool (a fetch's URL, an agent's prompt, a search
+  pattern), not only an MCP call's, are scanned for secrets.
+- **A text too long to scan in full is no longer passed silently.** The secrets scan reads the first
+  500,000 and the last 100,000 characters of a text. Over 600,000 characters, a gated call now comes
+  to you with the reason that it is too long for the scan to read in full (never remembered, no allow
+  rule offered), and is refused where nobody can be asked; an allowed call is refused and logged, as a
+  high-confidence finding is. Shadow mode does not change it, and bypass skips it for a gated call only.
+- **`/council rules` shows no character of an allowlisted secret.** An exact-string allowlist entry
+  was shown to you as its first three characters (Claude was already shown none); it is now
+  `(an exact string, not shown)` in both. A `sha256:` fingerprint is still shown.
+- **The question hides invisible characters, wraps long lines and keeps its closing lines.** Direction
+  marks and overrides, zero-width characters and the byte order mark are removed from the call, a
+  reviewer's reason, a rule's reason and a finding, as control characters were. A call line over 100
+  characters wraps, and every row of it starts with the gutter. When the question is over its size cap,
+  the end of the call goes first, then the end of the preview, then each reviewer's reason is cut to
+  its share; the question's own lines and every reviewer's verdict stay (the old cap cut the end of
+  the question, where the closing lines and the last reviewers were).
 - **A force push of the checked-out branch meets the protected-branch block.** A force push that
   names no branch, or only `HEAD` (`git push --force`, `-f`, `-f origin`, `-f origin HEAD`,
   `origin +HEAD`), overwrites the current branch, so the mod reads the branch checked out where the

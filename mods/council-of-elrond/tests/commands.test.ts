@@ -127,6 +127,12 @@ describe('/council', () => {
     expect(shown).not.toContain('later version')
   })
 
+  test('rules lists the paths protected against writes, apart from the protected paths', async ($, on) => {
+    const w = world(on, { surfaces: [] })
+    await council($, 'rules')
+    expect(w.logs.join('\n')).toContain('Protected against writes: **/.claude/plugins/**')
+  })
+
   test('rules shows each rule with its source', async ($, on) => {
     const w = world(on, { surfaces: [] })
     w.files.set(`${ROOT}/.claude/council-of-elrond/rules.json`, JSON.stringify({ schemaVersion: 1, rules: [{ id: 'mine', tier: 'ask', tools: ['Bash'], command: '^make deploy', reason: 'Deploys.' }] }))

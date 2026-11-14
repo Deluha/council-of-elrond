@@ -225,9 +225,9 @@ describe('redaction keeps code', () => {
     for (const value of ['hunter2xyz', 'correcthorse', 'a.b!c']) expect(isCodeReference(value), value).toBe(false)
   })
 
-  test('the scan keeps its own placeholder test: indexing is a finding, a plain word is not', async () => {
-    expect(isPlaceholder('tokens[0]')).toBe(false)
-    expect((await scanText('token = tokens[0]')).low).toHaveLength(1)
+  test('the scan keeps its own placeholder test: a plain word is not a finding although redaction blanks it; indexing is code (DESIGN §16 item 18)', async () => {
+    expect(isPlaceholder('tokens[0]')).toBe(true)
+    expect((await scanText('token = tokens[0]')).low).toEqual([])
     expect((await scanText('password=correcthorse')).low).toEqual([])
     for (const text of ['const token = process.env.API_TOKEN', 'password: string']) expect((await scanText(text)).low, text).toEqual([])
   })

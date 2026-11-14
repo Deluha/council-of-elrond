@@ -226,10 +226,10 @@ export function logOutput(logText: string, count: number): Output {
 }
 
 /**
- * `forModel`: the copy relayed through Claude (relay.ts). An exact-string allowlist
- * entry shows no character at all, where the person's own copy shows its first three.
+ * An exact-string allowlist entry shows no character of itself, in the person's copy as in the one relayed through
+ * Claude (relay.ts): it may be a secret. A fingerprint (`sha256:`) is shown.
  */
-export function rulesOutput(compiled: CompiledConfig, origin: string, errors: readonly string[], forModel = false, trust: readonly string[] = []): Output {
+export function rulesOutput(compiled: CompiledConfig, origin: string, errors: readonly string[], trust: readonly string[] = []): Output {
   const rules = [...compiled.rules].sort((a, b) => TIERS.indexOf(b.tier) - TIERS.indexOf(a.tier))
   const list = (key: StringKey, items: readonly string[]): string[] =>
     items.length === 0 ? [] : [text('cmd.listLine', { name: text(key), items: items.join(', ') })]
@@ -240,12 +240,13 @@ export function rulesOutput(compiled: CompiledConfig, origin: string, errors: re
       ...trust,
       ...rules.map(rule => text('cmd.ruleLine', { tier: rule.tier.padEnd(6), id: rule.id, source: rule.source, reason: rule.reason })),
       ...list('cmd.list.protectedPaths', compiled.config.protectedPaths),
+      ...list('cmd.list.writeProtected', compiled.writeProtectedPaths.map(matcher => matcher.glob)),
       ...list('cmd.list.protectedBranches', compiled.config.protectedBranches),
       ...list('cmd.list.production', compiled.config.productionPatterns),
       ...list('cmd.list.secretPatterns', compiled.config.gollum.patterns.map(pattern => `${pattern.id} (${pattern.level})`)),
       ...list(
         'cmd.list.allowlist',
-        compiled.config.gollum.allowlist.map(entry => (entry.startsWith('sha256:') ? entry : forModel ? text('cmd.allowlistHidden') : `${entry.slice(0, 3)}…`)),
+        compiled.config.gollum.allowlist.map(entry => (entry.startsWith('sha256:') ? entry : text('cmd.allowlistHidden'))),
       ),
     ],
   }
@@ -340,7 +341,7 @@ export function modelsOutput(choices: Readonly<Record<ModelSlot, ModelChoice>>):
 
 // Trusting a project's rules file (DESIGN §15): what confirming would enable, and where a file stands.
 
-/** The counts as one phrase: `2 allow or review rule(s), 1 project check(s)`. */
+/** The counts as one phrase: `2 allow rule(s), 1 project check(s)`. */
 export function countsText(counts: TrustCounts, mode?: Mode): string {
   const kinds = [
     ['rules', 'trust.count.rules'],

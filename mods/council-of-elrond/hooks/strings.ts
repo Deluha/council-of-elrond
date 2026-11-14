@@ -84,6 +84,9 @@ const TABLE = {
   'reason.secretHigh': { plain: 'The call contains a {label} (high confidence): {snippet}' },
   'reason.lockoutKey': { plain: 'The same operation was refused or failed {count} times since the user last wrote.' },
   'reason.lockoutVerb': { plain: 'Operations of this kind ({verb}) were refused or failed {count} times since the user last wrote.' },
+  'alternative.shorterCall': {
+    plain: 'Make the call shorter: split it into smaller writes or commands, or have a script read long text from a file instead of passing it in the call.',
+  },
   'alternative.removeSecret': {
     plain: 'Remove the secret from the call: read it from an environment variable or a secrets manager instead of writing it out.',
   },
@@ -103,6 +106,8 @@ const TABLE = {
   'ask.call': { plain: 'Call:\n{call}' },
   // The dialog's own marker where an excerpt was cut: it starts with two spaces and no gutter, which a line of the call never does.
   'ask.omitted': { plain: '  [... {lines} line(s) and {chars} character(s) not shown ...]' },
+  // Where a reviewer's reason or a secret's snippet was cut to fit the dialog: said at the cut, on the same line.
+  'ask.reasonCut': { plain: ' [... {chars} character(s) not shown ...]' },
   'ask.rule': { plain: 'Why it was gated: {reason}' },
   // A rule from the project's rules file: its words come from the repository, so they sit after the gutter like the call's.
   'ask.ruleProject': { plain: "Why it was gated (the project's own words):\n{reason}" },
@@ -141,6 +146,12 @@ const TABLE = {
   },
   'escalate.rounds': { plain: 'The reviewer refused this operation twice since you last wrote; it comes to you before any further review.' },
   'escalate.secretLow': { plain: 'The secrets scan found something that may be a secret.' },
+  'escalate.secretPartial': { plain: 'The call is too long for the secrets scan to read in full, so a secret could be in the part it did not read.' },
+  'escalate.secretLowPartial': {
+    plain: 'The secrets scan found something that may be a secret, and the call is too long for it to read in full, so another could be in the part it did not read.',
+  },
+  // The review approved, and a project rule from a rules file nobody has confirmed also asks about this call.
+  'escalate.askProject': { plain: "The project's rules file asks you about this call too, after its review." },
 
   // Notices for the user (not Claude). The engine labels toasts with the
   // plugin's name itself; that label is outside the mod's reach.
@@ -166,7 +177,7 @@ const TABLE = {
   },
   'notice.appendFailed': { plain: 'Council: the start notice could not be added to the conversation ({problem})' },
   'notice.rulesUntrusted': {
-    plain: 'Council: the project rules file has settings that are ignored until you confirm them: {summary}. Run /council trust to see them and confirm, or set trustProjectRules to always in the plugin configuration if you control which repositories this host opens. Its block and ask rules, protected paths and the like apply meanwhile.',
+    plain: 'Council: the project rules file has settings that are ignored until you confirm them: {summary}. Run /council trust to see them and confirm, or set trustProjectRules to always in the plugin configuration if you control which repositories this host opens. Its block, ask and review rules apply meanwhile and only add to what the shipped rules decide; so do its protected paths and the like.',
   },
   'notice.rulesUntrustedShort': { plain: 'Council: project rules file not confirmed; some settings ignored (run /council trust)' },
   'notice.trustNotSaved': {
@@ -263,11 +274,12 @@ const TABLE = {
   'cmd.ruleLine': { plain: '  {tier}  {id}  [{source}]  {reason}' },
   'cmd.listLine': { plain: '{name}: {items}' },
   'cmd.list.protectedPaths': { plain: 'Protected paths' },
+  'cmd.list.writeProtected': { plain: 'Protected against writes' },
   'cmd.list.protectedBranches': { plain: 'Protected branches' },
   'cmd.list.production': { plain: 'Production-looking patterns' },
   'cmd.list.secretPatterns': { plain: 'Extra secret patterns' },
   'cmd.list.allowlist': { plain: 'Secret allowlist entries' },
-  // In place of an exact-string allowlist entry in the copy Claude relays: not even its first characters.
+  // In place of an exact-string allowlist entry, in every copy: not even its first characters.
   'cmd.allowlistHidden': { plain: '(an exact string, not shown)' },
   'cmd.configErrors': { plain: 'The project rules file was ignored: {errors}' },
   'cmd.testTitle': { plain: 'Test of {command} (nothing runs)' },
@@ -309,7 +321,7 @@ const TABLE = {
   'cmd.reloaded': { plain: 'Rules reloaded: {count} rules ({origin}).' },
 
   // Trusting a project's rules file (/council trust, untrust, and the status lines). Values taken from the file are shown after the gutter.
-  'trust.count.rules': { plain: '{n} allow or review rule(s)' },
+  'trust.count.rules': { plain: '{n} allow rule(s)' },
   'trust.count.disabled': { plain: '{n} disabled shipped rule(s)' },
   'trust.count.allowlist': { plain: '{n} allowlisted secret(s)' },
   'trust.count.models': { plain: '{n} model choice(s)' },
@@ -318,7 +330,7 @@ const TABLE = {
   'trust.state.confirmed': { plain: 'Project rules file: trusted (you confirmed this content); its settings are in force.' },
   'trust.state.option': { plain: 'Project rules file: trusted by the trustProjectRules option (always).' },
   'trust.state.untrusted': {
-    plain: 'Project rules file: not trusted. Ignored until you run /council trust: {summary}. Its block and ask rules, protected paths and the like apply. No allow rule or allowlist entry is offered for it meanwhile, and a big operation whose project checks are among the ignored settings is refused.',
+    plain: 'Project rules file: not trusted. Ignored until you run /council trust: {summary}. Its block, ask and review rules apply and only add to what the shipped rules decide, as do its protected paths and the like. No allow rule or allowlist entry is offered for it meanwhile, and a big operation whose project checks are among the ignored settings is refused.',
   },
   'trust.usage': { plain: 'Usage: /council trust [<code>] | untrust. The code is 8 hex characters, shown by /council trust after it lists the file.' },
   'trust.none': { plain: 'No rules file in this scope holds settings that wait for your confirmation.' },

@@ -40,13 +40,13 @@ nothing draws. The kit records what the mod hands the engine's question dialog, 
 
 1. Quit and start the session again as in setup step 3. Ask Claude to run `echo hello`. Expect: a
    council line and a toast saying the project rules file is not confirmed, with counts only
-   ("1 allow or review rule(s), 1 project check(s)"), and nothing from the file's text.
+   ("1 allow rule(s), 1 project check(s)"), and nothing from the file's text.
 2. Before listing anything, type `/council trust 00000000`. Expect: "Nothing was confirmed" and the file still untrusted (`/council rules`).
 3. Type `/council trust`. Expect: the pane lists every setting, each field on a line of its own behind the gutter: for the rule
    `id: allow-echo-ok`, `tier: allow`, `tools[0]: "Bash"`, `command: ^echo ok$`, `reason: A harmless echo.`; for the check
    `name: tests`, `argv[0]: "echo"`, `argv[1]: "checks-ran"`, `timeoutMs: 120000`; and it ends with
    "Its code is <8 hex>. To confirm exactly this content, type: /council trust <8 hex>."
-4. Type `/council trust` followed by the real code. Expect: "confirmed. Now in force: 1 allow or review rule(s), 1 project check(s)."
+4. Type `/council trust` followed by the real code. Expect: "confirmed. Now in force: 1 allow rule(s), 1 project check(s)."
 5. Type `/council rules`. Expect: "Project rules file: trusted (you confirmed this content)".
 6. Ask Claude to run `echo ok`. Expect: it runs with no review.
 7. Edit `rules.json` (add a space) and type `/council reload`; ask for `echo ok` again. Expect: it is

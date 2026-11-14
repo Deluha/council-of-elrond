@@ -1,5 +1,6 @@
 import { CLIENT_OPTIONS } from '../members/aragorn.js'
-import { redact } from '../redact.js'
+import { redact, SECRET_PATTERNS } from '../redact.js'
+import type { SecretPattern } from '../redact.js'
 import { FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
 import type { Call, Classification } from '../rules/classify.js'
 import { relativeTo, resolve } from '../rules/paths.js'
@@ -98,7 +99,7 @@ function pushTargets(args: readonly string[]): string[] {
  * positional. The value of an inline-SQL option (`-c "..."`) is skipped, so a
  * rephrased statement is the same operation.
  */
-function sqlTargets(program: string, args: readonly string[]): string[] {
+function sqlTargets(program: string, args: readonly string[], patterns: readonly SecretPattern[]): string[] {
   const inline = CLIENT_OPTIONS[program]?.inline ?? []
   const rest: string[] = []
   for (let i = 0; i < args.length; i++) {
@@ -119,7 +120,7 @@ function sqlTargets(program: string, args: readonly string[]): string[] {
     const first = positionals(rest)[0]
     if (first !== undefined) out.push(first)
   }
-  return out.map(target => redact(target))
+  return out.map(target => redact(target, patterns))
 }
 
 /** Files a part's redirects write to (not `2>&1`, not /dev/null). */
@@ -149,7 +150,7 @@ export function isForcePush(part: ShellPart): boolean {
 }
 
 /** One shell part's verb and targets. */
-export function partOperation(part: ShellPart, cwd: string, context: OperationContext): { verb: string; targets: string[] } {
+export function partOperation(part: ShellPart, cwd: string, context: OperationContext, patterns: readonly SecretPattern[] = SECRET_PATTERNS): { verb: string; targets: string[] } {
   const program = programOf(part)
   const args = part.coreWords.slice(1)
   if (program === 'git') {
@@ -157,7 +158,7 @@ export function partOperation(part: ShellPart, cwd: string, context: OperationCo
     if (sub === 'push') return { verb: 'git push', targets: pushTargets(rest) }
     return { verb: `git ${sub}`.trim(), targets: positionals(rest) }
   }
-  if (SQL_CLIENTS.has(program)) return { verb: program, targets: sqlTargets(program, args) }
+  if (SQL_CLIENTS.has(program)) return { verb: program, targets: sqlTargets(program, args, patterns) }
   if (SUBCOMMAND_PROGRAMS.has(program)) {
     const sub = positionals(args)[0]
     const rest = sub === undefined ? [] : args.slice(args.indexOf(sub) + 1)
@@ -180,26 +181,26 @@ const sortedUnique = (items: readonly string[]): string[] => [...new Set(items)]
  * targets (flags dropped, paths resolved, targets sorted); file tools share
  * the `file` family keyed on the real path; anything else is its tool.
  */
-export function operationOf(call: Call, classification: Classification, context: OperationContext): Operation {
+export function operationOf(call: Call, classification: Classification, context: OperationContext, patterns: readonly SecretPattern[] = SECRET_PATTERNS): Operation {
   if (SHELL_TOOLS.has(call.tool)) {
     const parts = classification.findings.filter(finding => finding.part !== undefined)
     if (parts.length === 0) {
       const text = typeof call.input.command === 'string' ? call.input.command.replace(/\s+/g, ' ').trim() : ''
-      const key = cap(`shell:${redact(text)}`)
+      const key = cap(`shell:${redact(text, patterns)}`)
       return { key, verbKey: 'shell:(unparsed)', partKeys: [key], partVerbKeys: ['shell:(unparsed)'] }
     }
-    const ops = parts.map(finding => partOperation(finding.part as ShellPart, finding.cwd ?? context.cwd, context))
+    const ops = parts.map(finding => partOperation(finding.part as ShellPart, finding.cwd ?? context.cwd, context, patterns))
     const verbs = sortedUnique(ops.map(op => op.verb))
     const lines = ops.map(op => `${op.verb} ${sortedUnique(op.targets).slice(0, MAX_TARGETS).join(' ')}`.trim())
     const key = sortedUnique(lines)
     // The key can hold a target a command named verbatim (a push URL with a
     // token, a connection string); it is written to the audit log, so redact.
     // A part's own key is the key of a call made of that part alone.
-    const partKeys = lines.slice(0, MAX_PART_KEYS).map(line => cap(redact(`shell:${line}`)))
+    const partKeys = lines.slice(0, MAX_PART_KEYS).map(line => cap(redact(`shell:${line}`, patterns)))
     // A force or delete push also keeps a count of its own, which a plain push of the same target never clears.
     const variants = parts.slice(0, MAX_PART_KEYS).flatMap((finding, index) => (isForcePush(finding.part as ShellPart) ? [`${partKeys[index] as string}${FORCE_SUFFIX}`] : []))
     return {
-      key: cap(redact(`shell:${key.join(' ; ')}`)),
+      key: cap(redact(`shell:${key.join(' ; ')}`, patterns)),
       verbKey: cap(`shell:${verbs.join(' ; ')}`),
       partKeys: sortedUnique([...partKeys, ...variants]),
       partVerbKeys: sortedUnique(ops.slice(0, MAX_PART_KEYS).map(op => cap(`shell:${op.verb}`))),

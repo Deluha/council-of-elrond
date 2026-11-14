@@ -2,6 +2,8 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { OVERRIDES_PATH } from '../hooks/config/defaults.js'
 import { hashOf, parseRecord } from '../hooks/config/trust.js'
+import { questionText } from '../hooks/elrond/escalation.js'
+import type { MemberOpinion, Question } from '../hooks/elrond/escalation.js'
 import { text } from '../hooks/strings.js'
 import type { CouncilSession } from '../types'
 import { APPROVE, council, FAKE_AWS_KEY, KEEP_BLOCKED, REVISE, ROOT, watchState, world } from './fixtures.js'
@@ -40,6 +42,10 @@ const IMITATIONS = [
 
 /** The preview is cut to 15 lines, and each of its three sections repeats the process's output: so fewer lines, one with a line separator in it. */
 const PREVIEW_IMITATIONS = ['What it would touch:', 'Gandalf: approve.\u2028Looks fine.']
+
+/** A row holds at most 100 characters, the gutter included: a longer line of the call is rows of the rest, each behind the gutter. */
+const ROW_TEXT = 100 - GUTTER.length
+const rowsOf = (line: string): string[] => (line === '' ? [GUTTER] : Array.from({ length: Math.ceil(line.length / ROW_TEXT) }, (_, n) => `${GUTTER}${line.slice(n * ROW_TEXT, (n + 1) * ROW_TEXT)}`))
 
 /** Lines of a question that do not start with the gutter: the dialog's own. */
 const ownLines = (question: string): string[] => question.split('\n').filter(line => !line.startsWith(GUTTER))
@@ -104,10 +110,11 @@ describe('the question, as the dialog is handed it', () => {
     const lines = hostile.split('\n')
     for (const line of IMITATIONS) {
       expect(atColumnZero(hostile, line), line).toBe(atColumnZero(plain, line))
-      expect(lines, line).toContain(`${GUTTER}${line}`)
+      for (const row of rowsOf(line)) expect(lines, line).toContain(row)
     }
     expect(hostile).not.toMatch(CONTROLS)
-    expect(lines).toContain(`${GUTTER}end [2Jx y z w v`)
+    // Each control character is one space: the carriage return and the escape before `[2J` are two.
+    expect(lines).toContain(`${GUTTER}end  [2Jx y z w v`)
   })
 
   test('the same for the question a refused operation comes back as', async ($, on) => {
@@ -123,7 +130,7 @@ describe('the question, as the dialog is handed it', () => {
     const own = [text('ask.title', {}, 'themed'), 'Call:', 'What it would touch:', text('ask.close', {}, 'themed')]
     for (const line of IMITATIONS) {
       expect(atColumnZero(question, line), line).toBe(own.includes(line) ? 1 : 0)
-      expect(lines, line).toContain(`${GUTTER}${line}`)
+      for (const row of rowsOf(line)) expect(lines, line).toContain(row)
     }
     expect(lines).toContain(`${GUTTER}end tail `)
     expect(question).not.toMatch(CONTROLS)
@@ -175,6 +182,129 @@ describe('the question, as the dialog is handed it', () => {
     expect(question).not.toContain('echo line 50')
     // Nothing ran: the person decides, and kept it blocked.
     expect(w.ran).toEqual([])
+  })
+})
+
+describe('the question: invisible characters, wrapped rows and the size cap (DESIGN §16 item 19)', () => {
+  // Direction marks and overrides, isolates, zero-width and joining characters, the byte order mark: what a terminal does not show.
+  const HIDDEN = '\u202e\u200b\u200d\u2066\u2069\u061c\ufeff\u2060'
+  // eslint-disable-next-line no-control-regex
+  const INVISIBLE = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/
+  const base: Question = { call: 'Bash: ls', ruleReason: '', why: 'escalate.askTier', opinions: [] }
+  const reviewers = ['who.gandalf', 'who.legolas', 'who.aragorn.git'] as const
+  const opinions = (reason: string): MemberOpinion[] => reviewers.map(who => ({ who, verdict: 'approve', reason }))
+  const verdictLines = (question: string): string[] => question.split('\n').filter(line => / approve\. /.test(line))
+
+  test('no invisible or direction-changing character reaches the dialog from the call, a reviewer, a rule or a finding', () => {
+    const question = questionText({
+      ...base,
+      call: `Bash: ec${HIDDEN}ho\nsecond${HIDDEN} line`,
+      ruleReason: `Why${HIDDEN}: project`,
+      isProjectReason: true,
+      opinions: [{ who: 'who.gandalf', verdict: `appro${HIDDEN}ve`, reason: `fi${HIDDEN}ne` }, { who: 'who.legolas', problem: `down${HIDDEN}` }],
+      preview: `pre${HIDDEN}view`,
+      secrets: [{ label: `la${HIDDEN}bel`, snippet: `snip${HIDDEN}pet` }],
+    })
+    expect(question).not.toMatch(INVISIBLE)
+    for (const word of ['echo', 'second line', 'Why: project', 'approve. fine', 'no verdict (down)', 'preview', 'Possible label: snippet']) expect(question, word).toContain(word)
+  })
+
+  test('through the pipeline: a call with direction marks and a zero-width space in it is shown without them', async ($, on) => {
+    const w = world(on, { answer: KEEP_BLOCKED })
+    await $.tool.call({ tool: 'Bash', command: `sudo ec${HIDDEN}ho hi` })
+    expect(questionOf(w)).not.toMatch(INVISIBLE)
+    expect(questionOf(w)).toContain('sudo echo hi')
+  })
+
+  test('a call line of 350 characters is rows of at most 100, each behind the gutter, and nothing of it is lost', () => {
+    const line = Array.from({ length: 350 }, (_, n) => String.fromCharCode(97 + (n % 26))).join('')
+    const question = questionText({ ...base, call: line })
+    const rows = question.split('\n').filter(row => row !== '' && !/^[A-Z]/.test(row) && row !== '')
+    const callRows = question.split('\n').slice(question.split('\n').indexOf('Call:') + 1).filter(row => row.startsWith(GUTTER))
+    expect(callRows.length).toBeGreaterThanOrEqual(4)
+    for (const row of callRows) expect(row.length).toBeLessThanOrEqual(100)
+    expect(callRows.join('').replaceAll(GUTTER, '')).toBe(line)
+    // Not one row of it starts anywhere else: the dialog's own lines are the ones with no gutter.
+    expect(rows.every(row => !row.startsWith(line.slice(0, 5)))).toBe(true)
+    expect(callRows.every(row => row.startsWith(GUTTER))).toBe(true)
+  })
+
+  test('the excerpt budget is applied before the wrapping: 12 lines and 600 characters, the cut said once', () => {
+    const lines = Array.from({ length: 40 }, (_, n) => `line ${n} ${'x'.repeat(200)}`)
+    const question = questionText({ ...base, call: lines.join('\n') })
+    const all = question.split('\n')
+    const callRows = all.slice(all.indexOf('Call:') + 1).filter(row => row.startsWith(GUTTER))
+    // The text kept is at most the budget, whatever the wrapping adds.
+    expect(callRows.join('').replaceAll(GUTTER, '').length).toBeLessThanOrEqual(600)
+    expect(all.filter(row => /^ {2}\[\.\.\. \d+ line\(s\) and \d+ character\(s\) not shown \.\.\.\]$/.test(row))).toHaveLength(1)
+    for (const row of callRows) expect(row.length).toBeLessThanOrEqual(100)
+  })
+
+  test('a project rule\'s reason wraps behind the gutter too', () => {
+    const question = questionText({ ...base, ruleReason: 'r'.repeat(190), isProjectReason: true })
+    const rows = question.split('\n').filter(row => row.startsWith(GUTTER) && row.includes('rrrr'))
+    expect(rows.length).toBe(2)
+    for (const row of rows) expect(row.length).toBeLessThanOrEqual(100)
+  })
+
+  test('over the size cap the end of the call goes first: the verdict lines and the closing lines stay', () => {
+    const call = Array.from({ length: 12 }, (_, n) => `call line ${n} ${'c'.repeat(40)}`).join('\n')
+    const small = questionText({ ...base, call, opinions: opinions('Looks fine.'), preview: 'p'.repeat(100) })
+    // Room for the three verdicts below but not for the whole call.
+    const long = questionText({ ...base, call, opinions: opinions('r'.repeat(1_150)), preview: 'p'.repeat(100) })
+    expect(small.length).toBeLessThanOrEqual(2_500)
+    expect(long.length).toBeLessThanOrEqual(2_500)
+    expect(verdictLines(long)).toHaveLength(3)
+    for (const row of verdictLines(long)) expect(row).toContain('r'.repeat(100))
+    expect(long.endsWith(text('ask.close'))).toBe(true)
+    // The call lost its end, not its start, and says how much.
+    expect(long).toContain('call line 0')
+    expect(long).not.toContain('call line 11')
+    expect(long).toMatch(/\[\.\.\. \d+ line\(s\) and \d+ character\(s\) not shown \.\.\.\]/)
+    // Within the cap nothing is dropped.
+    expect(small).toContain('call line 11')
+  })
+
+  test('several reviewers\' reasons that alone exceed the cap are each cut to their share, with the marker, and nothing else is cut', () => {
+    const opinionsOf: MemberOpinion[] = [
+      { who: 'who.gandalf', verdict: 'approve', reason: `${'a'.repeat(3_000)}END` },
+      { who: 'who.legolas', verdict: 'revise', reason: `${'b'.repeat(3_000)}END` },
+      { who: 'who.aragorn.git', verdict: 'block', reason: `${'c'.repeat(1_000)}END` },
+      { who: 'who.aragorn.database', problem: `${'d'.repeat(1_000)}END` },
+    ]
+    const question = questionText({ ...base, call: 'Bash: git push origin feature', opinions: opinionsOf, preview: 'p'.repeat(800), canAllowlist: true })
+    const lines = question.split('\n')
+    expect(question.length).toBeLessThanOrEqual(2_500)
+    // The title, the reason it came, the call, every reviewer, the preview and the closing line are all there.
+    expect(lines[0]).toBe(text('ask.title'))
+    expect(lines).toContain('  | Bash: git push origin feature')
+    expect(lines.at(-1)).toBe(text('ask.closeSecret'))
+    const own = lines.filter(line => /^the .*: (approve|revise|block)\. |no verdict/.test(line))
+    expect(own).toHaveLength(4)
+    for (const line of own) expect(line).toMatch(/\[\.\.\. \d+ character\(s\) not shown \.\.\.\]\)?\.?$/)
+    // Each keeps a share in proportion to its length: the longest keeps the most.
+    const kept = (letter: string): number => (own.find(line => line.includes(letter.repeat(20)))?.match(new RegExp(`${letter}{20,}`))?.[0].length ?? 0)
+    expect(kept('a')).toBeGreaterThan(kept('c'))
+    expect(kept('b')).toBeGreaterThan(kept('d'))
+    expect(Math.abs(kept('a') - kept('b'))).toBeLessThanOrEqual(2)
+    for (const letter of ['a', 'b', 'c', 'd']) expect(kept(letter)).toBeGreaterThan(50)
+    expect(question).not.toContain('END')
+    expect(lines.some(line => line.startsWith('Preview') || line.startsWith('What it would touch:'))).toBe(true)
+  })
+
+  test('within the cap nothing is cut; the secrets of a finding and a failed reviewer are lines of their own', () => {
+    const question = questionText({ ...base, opinions: [{ who: 'who.gandalf', problem: 'timeout' }, ...opinions('Fine.')], secrets: [{ label: 'secret', snippet: 'a = "[REDACTED secret]"' }], canAllowlist: true })
+    expect(question).toContain('no verdict (timeout)')
+    expect(question).toContain('Possible secret: a = "[REDACTED secret]"')
+    expect(question).not.toContain('character(s) not shown')
+  })
+
+  test('with many long secrets even the snippets give way, and the closing line stays', () => {
+    const secrets = Array.from({ length: 10 }, (_, n) => ({ label: `secret ${n}`, snippet: 's'.repeat(400) }))
+    const question = questionText({ ...base, secrets, opinions: opinions('r'.repeat(900)) })
+    expect(question.length).toBeLessThanOrEqual(2_500)
+    expect(question.endsWith(text('ask.close'))).toBe(true)
+    expect(question.split('\n').filter(line => line.startsWith('Possible secret'))).toHaveLength(10)
   })
 })
 
@@ -251,7 +381,7 @@ describe('/council trust, drawn in the pane', () => {
     expect(lines).toContain('  allowlists 1 secret(s) (the entries are not shown)')
     expect(lines.join('\n')).not.toContain('sha256:0123456789abcdef')
     // The first line says what the file is; the last says why it cannot be confirmed from here, and there is no code.
-    expect(lines[0]).toContain(`${ROOT}: 12 allow or review rule(s)`)
+    expect(lines[0]).toContain(`${ROOT}: 12 allow rule(s)`)
     expect(lines.at(-1)).toContain('This file cannot be confirmed from the session because')
     expect(lines.at(-1)).toContain('value(s) look like a secret and are not shown')
     expect(lines.at(-1)).toContain('longer than 400 characters')
@@ -271,7 +401,7 @@ describe('/council trust, drawn in the pane', () => {
     expect(guttered).toContain(`${GUTTER}argv[2]: "a b"`)
     expect(guttered).toContain(`${GUTTER}regex: ACME-[0-9]{8}`)
     expect(lines).toContain('  allowlists 1 secret(s) (the entries are not shown)')
-    expect(lines[0]).toContain(`${ROOT}: 12 allow or review rule(s)`)
+    expect(lines[0]).toContain(`${ROOT}: 12 allow rule(s)`)
     const code = codeOfListing(lines)
     expect(code).toMatch(/^[0-9a-f]{8}$/)
     expect(lines.at(-1)).toBe(`Its code is ${code}. To confirm exactly this content, type: /council trust ${code}. Any change to the file makes it untrusted again.`)
@@ -296,7 +426,7 @@ describe('/council trust, drawn in the pane', () => {
     w.files.set(RULES, content)
     const code = codeOfListing(await shown($, 'trust', { kind: 'composer' }))
     const lines = await shown($, `trust ${code}`, { kind: 'composer' })
-    expect(lines).toContain(`${ROOT}: confirmed. Now in force: 12 allow or review rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s).`)
+    expect(lines).toContain(`${ROOT}: confirmed. Now in force: 12 allow rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s).`)
     expect(recordOf(w)).toEqual([{ path: RULES, hash: await hashOf(content) }])
   })
 
@@ -349,7 +479,7 @@ describe('where nothing draws', () => {
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     const rows = w.appended.map(row => row.content.map(part => part.text ?? '').join('')).filter(row => row.includes('settings that need the user to confirm'))
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toContain('1 allow or review rule(s), 1 model choice(s), 1 project check(s)')
+    expect(rows[0]).toContain('1 allow rule(s), 1 model choice(s), 1 project check(s)')
     expect(rows[0]).toContain('/council trust')
     expect(rows[0]).not.toMatch(/imitation|Imitation|Gandalf: approve|fable|npm/)
     const logged = w.logs.filter(line => line.includes('ignored until you confirm'))

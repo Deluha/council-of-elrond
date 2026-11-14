@@ -1143,7 +1143,7 @@ async function offerRule(
   return rule.id
 }
 
-async function appendAudit($: EngineInterface, record: AuditRecord, root: string): Promise<void> {
+async function appendAudit($: EngineInterface, record: AuditRecord, root: string, patterns: readonly SecretPattern[]): Promise<void> {
   const path = resolve(settings.auditLogPath, root)
   const folder = path.slice(0, path.lastIndexOf('/'))
   if (!gitignoreChecked.has(folder)) {
@@ -1151,7 +1151,7 @@ async function appendAudit($: EngineInterface, record: AuditRecord, root: string
     const ignore = `${folder}/.gitignore`
     if (isInside(path, root) && !(await $.fs.exists(ignore))) await $.fs.write(ignore, AUDIT_GITIGNORE)
   }
-  const line = auditLine(record)
+  const line = auditLine(record, patterns)
   const current = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
   const maxBytes = settings.auditMaxKb * 1024
   const older: (string | undefined)[] = []
@@ -1170,10 +1170,10 @@ async function appendAudit($: EngineInterface, record: AuditRecord, root: string
  * failed write is logged and a hanging one holds back only the lines queued
  * after it, never a decision or the call that follows.
  */
-function audit($: EngineInterface, record: AuditRecord, dirs: readonly string[]): void {
+function audit($: EngineInterface, record: AuditRecord, dirs: readonly string[], patterns: readonly SecretPattern[]): void {
   for (const dir of dirs) {
     auditQueue = auditQueue
-      .then(() => appendAudit($, record, dir))
+      .then(() => appendAudit($, record, dir, patterns))
       .catch((error: unknown) => {
         $.ui.log(text('notice.auditFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
       })
@@ -1530,7 +1530,7 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
     }
     case 'rules': {
       const ctx = await cwdContextOf($)
-      return inMode(() => rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors, mode !== undefined, trustLines(ctx.loaded)))
+      return inMode(() => rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors, trustLines(ctx.loaded)))
     }
     case 'test': {
       // Classification only: nothing the command names is run or read. The directories below the root
@@ -1540,7 +1540,7 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
       const call: Call = { tool: 'Bash', input: { command: command.command } }
       const where = { root: root.root, cwd, ...(root.home !== undefined && { home: root.home }) }
       const { classification, ctx } = await classifyIn($, root, call, where)
-      const operation = classification.tier === 'allow' ? undefined : operationOf(call, classification, where)
+      const operation = classification.tier === 'allow' ? undefined : operationOf(call, classification, where, ctx.patterns)
       const state = sessionOf(await read($, session))
       const seated = classification.tier === 'review' ? route(call, classification, enabledMembers()) : undefined
       const reviewer =
@@ -1767,14 +1767,17 @@ export const register: Register = (on, options) => {
     const writeWhere = { ...where, root: ctx.scopes[0]?.dir ?? ctx.root }
 
     if (classification.tier === 'allow') {
-      // High-confidence secrets refuse an allowed call too (DESIGN §13.2). It has
-      // no operation, so no rounds, no failed attempt and no state write; low
+      // High-confidence secrets refuse an allowed call too (DESIGN §13.2), and so does a text too long to scan in
+      // full (§16 item 16). It has no operation, so no rounds, no failed attempt and no state write; low
       // findings are ignored here, as the mod never asks on an allowed call.
       if (settings.gollumEnabled) {
         const scan = await scanCall(call, ctx.patterns, ctx.allowlist)
         const first = scan.high[0]
-        if (first !== undefined) {
-          const deny = refusalText({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') })
+        if (first !== undefined || scan.partial) {
+          const deny =
+            first !== undefined
+              ? refusalText({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') }, 'plain', ctx.patterns)
+              : refusalText({ who: 'who.gollum', verdict: 'block', reason: text('escalate.secretPartial'), alternative: text('alternative.shorterCall') }, 'plain', ctx.patterns)
           const fingerprint = await fingerprintOf(call.tool, call.input)
           const now = await $.clock.now()
           audit(
@@ -1790,7 +1793,7 @@ export const register: Register = (on, options) => {
               profile: null,
               model: null,
               verdict: 'block',
-              reason: scan.high.map(finding => finding.label).join(', '),
+              reason: first !== undefined ? scan.high.map(finding => finding.label).join(', ') : text('escalate.secretPartial', {}, 'plain'),
               shadow: false,
               bypass: false,
               decision: null,
@@ -1800,6 +1803,7 @@ export const register: Register = (on, options) => {
               ...(e.agentId !== undefined && { agentId: e.agentId }),
             },
             logDirs,
+            ctx.patterns,
           )
           return { deny }
         }
@@ -1826,7 +1830,7 @@ export const register: Register = (on, options) => {
     const placeScope = placeScopeOf(scopeTag, cwd)
     // The verdict cache key: the fingerprint, apart per scope and per folder (the audit line keeps the plain one).
     const cacheKey = await fingerprintOf(call.tool, call.input, placeScope)
-    const operation = operationOf(call, classification, where)
+    const operation = operationOf(call, classification, where, ctx.patterns)
     // The branch, the index and the history are not in the key: a call with a git part is never served from the cache, nor cached. Nor is one no reviewer decides (too many parts).
     // Nor one an unconfirmed ask rule puts to the person after its review: that answer is the person's, call by call.
     const isCacheable = !hasGitPart(call) && operation.hasTooManyParts !== true && classification.alsoAsk === undefined
@@ -1863,7 +1867,7 @@ export const register: Register = (on, options) => {
     let tokens = 0
     let verdictText: string | null = null
     // A project rule's reason is the repository's text: in the audit line, as in the refusal, it is cleaned, capped and introduced as such.
-    let reasonText: string | null = decided === undefined ? null : decided.source === 'project' ? projectReasonText(decided.reason) : decided.reason
+    let reasonText: string | null = decided === undefined ? null : decided.source === 'project' ? projectReasonText(decided.reason, 'plain', ctx.patterns) : decided.reason
     let decision: Decision | null = null
     let isCached = false
     let isShadowed = false
@@ -1906,7 +1910,7 @@ export const register: Register = (on, options) => {
         ...(councilRecord !== undefined && { council: councilRecord }),
         ...(e.agentId !== undefined && { agentId: e.agentId }),
       }
-      audit($, record, logDirs)
+      audit($, record, logDirs, ctx.patterns)
       const counts = result.deny !== undefined ? isWipe : isWipeOutcome(outcome, wipePolicy())
       if (counts || outcome === 'ran') {
         await update($, session, value => {
@@ -1926,7 +1930,7 @@ export const register: Register = (on, options) => {
     /** Refuses with the rounds left on the operation; `isWipe` counts it as a failed attempt. */
     const refuse = async (refusal: Refusal, isWipe: boolean): Promise<ToolCallResult> => {
       const left = roundsLeft(sessionOf(await read($, session)), operation)
-      return finish({ deny: refusalText({ ...refusal, roundsLeft: left }) }, isWipe)
+      return finish({ deny: refusalText({ ...refusal, roundsLeft: left }, 'plain', ctx.patterns) }, isWipe)
     }
 
     /**
@@ -1971,6 +1975,7 @@ export const register: Register = (on, options) => {
           canAllowlist: secrets.length === 1 && writableDir(ctx) !== undefined,
         },
         currentMode(),
+        ctx.patterns,
       )
       // One entry per confirm: the allowlist is offered for a single finding only.
       const answer = await escalate($, question, secrets.length === 1 && writableDir(ctx) !== undefined)
@@ -2086,8 +2091,8 @@ export const register: Register = (on, options) => {
     let projectAsk: Finding | undefined
     const askProject = (opinions: readonly MemberOpinion[]): Promise<ToolCallResult> => {
       if (projectAsk === undefined) return finish({ deny: refusalText({ who: 'who.council', verdict: 'error', reason: text('reason.internal'), alternative: text('alternative.ask') }) })
-      reasonText = projectReasonText(projectAsk.reason)
-      return askUser('escalate.askTier', opinions, projectAsk)
+      reasonText = projectReasonText(projectAsk.reason, 'plain', ctx.patterns)
+      return askUser('escalate.askProject', opinions, projectAsk)
     }
     /** Shadow mode in the review phase: verdicts are only logged, but an ask rule still enforces. */
     const passShadowed = (): Promise<ToolCallResult> => (projectAsk !== undefined ? askProject([]) : passInShadow())
@@ -2132,12 +2137,14 @@ export const register: Register = (on, options) => {
         const first = scan.high[0] as GollumFinding
         return refuse({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') }, true)
       }
-      if (scan.low.length > 0) {
+      // A finding that may be a secret, or a text too long to read in full: the person decides, every time. No allow rule is offered for it.
+      if (scan.low.length > 0 || scan.partial) {
         hadSecret = true
         member = 'gollum'
         verdictText = 'ask'
-        reasonText = scan.low.map(finding => finding.label).join(', ')
-        const answer = await putToUser('escalate.secretLow', [], scan.low)
+        const why = scan.low.length === 0 ? 'escalate.secretPartial' : scan.partial ? 'escalate.secretLowPartial' : 'escalate.secretLow'
+        reasonText = scan.low.length === 0 ? text('escalate.secretPartial', {}, 'plain') : scan.low.map(finding => finding.label).join(', ')
+        const answer = await putToUser(why, [], scan.low)
         if (answer !== 'allowed') return answer
         isAllowedByUser = true
         member = routedMember

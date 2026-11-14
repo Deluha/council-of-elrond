@@ -497,7 +497,7 @@ overrides the deadline.
 | :- | :- | :- |
 | Enforcing (the default) | Every tier applies. A reviewer's revise or block refuses the call; a reviewer that fails, or none being on, brings it to you. | Nothing to set. |
 | Shadow | Reviewers and the full council (its project checks included) log their verdicts and never refuse; a failed review passes, logged. The block tier, the ask tier, protected paths, the secrets scan and lockouts still enforce. | `/council shadow on` for the session, or "Shadow mode" in `/config`. Label: `council: shadow`. |
-| Bypass (themed: Leeroy mode) | Every gated call passes unreviewed, block-tier calls and the secrets scan included, and each is logged. | `/council off`, for this session only and never saved; `/council on` ends it. Label: `council: bypass` (`council: Leeroy mode` themed). |
+| Bypass (themed: Leeroy mode) | Every gated call passes unreviewed, block-tier calls and the secrets scan included, and each is logged. The scan alone still refuses an allowed call that holds a high-confidence secret, or whose text is too long to scan in full: bypass does not reach it. | `/council off`, for this session only and never saved; `/council on` ends it. Label: `council: bypass` (`council: Leeroy mode` themed). |
 | Plain | Every string in its plain variant, with no theme text anywhere; behaviour is identical. It combines with any mode above. | "Plain mode" in `/config`. |
 
 ## Theme and plain mode
@@ -542,7 +542,7 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | `/council off`, `/council on` | Bypass for this session: gated calls pass unreviewed and are logged. Never persisted. The label `council: bypass` (`council: Leeroy mode` when themed) shows by the prompt. |
 | `/council shadow on`, `/council shadow off` | Shadow mode for this session, over the `/config` setting. |
 | `/council log [n]` | The last *n* gated calls (default 10) from the audit log. |
-| `/council rules` | Every effective rule with its source (`shipped` or `project`), and the lists. |
+| `/council rules` | Every effective rule with its source (`shipped` or `project`), and the lists: protected paths, the paths protected against writes, protected branches, production patterns, extra secret patterns, and the secret allowlist (a fingerprint, or `(an exact string, not shown)`: never a character of an exact entry). |
 | `/council test "<command>"` | Which tier, rule, reviewer (and profile, and why it fell back to Gandalf if it did) and operation key a shell command would get. For a big operation it shows the full council's seats, model and checks. Runs nothing, so a merge is assumed to land on a protected branch and a force push of the current branch is asked about (its branch is not read). |
 | `/council model [<member> <model> [--save]]` | Lists each slot's model and where it came from, or switches one for this session (`default` clears the switch). `--save` also writes the `/config` row when the model is one of its picker values. |
 | `/council trust`, `/council trust <code>`, `/council untrust` | Lists everything a rules file with settings that wait would enable, with its code (or why it cannot be confirmed from the session); confirms the file whose code you type, if it was listed in this session and is unchanged; removes the confirmation. See [Trusting a project's rules file](#trusting-a-projects-rules-file). |
@@ -596,8 +596,8 @@ attached, nothing changes and Claude reads none of it.
   show are handed to Claude with an instruction to repeat them to you verbatim, in a code block, when
   it next replies. They sit inside a fenced block that Claude is told to treat as the council's output,
   not as instructions. Every line is redacted first, a typed command included, and `/council rules`
-  shows an exact-string allowlist entry as `(an exact string, not shown)` instead of its first three
-  characters. (A command does not start a reply by itself: Claude repeats the lines when you next
+  shows an exact-string allowlist entry as `(an exact string, not shown)`, in the pane as here, with no
+  character of it. (A command does not start a reply by itself: Claude repeats the lines when you next
   write to it, for example "go on".)
 - **A notice when a project rules file has settings waiting for your confirmation**, once per file, with counts only (nothing from the file), telling Claude to tell you and how: run `/council trust` in a terminal, or set the option "Trust project rules files" to `always` for a host you control. `/council trust` itself prints to the transcript lines, which are not shown here, so this is not a place to confirm.
 - **A notice at the start of the session**, saying the council is active, that a call needing your
@@ -667,15 +667,25 @@ The audit log records these as the decisions `chat-allow`, `chat-session` and `c
 
 ## Secrets scan
 
-Every call is scanned for secrets in what it would write or run: the shell command (heredocs
-included), Write content, an Edit's new text, a notebook cell, an MCP call's input. A high-confidence
-finding refuses the call whatever its tier, allowed calls included. A low-confidence finding comes to
-you only on a gated call: an allowed call never gets a question.
+Every call is scanned for secrets in what it would write or run: a shell command (heredocs and its
+description included); for a file tool, its path and what it writes (Write content, an Edit's new
+text, a notebook cell); for any other tool, whatever its name, its whole input (a URL, an agent's
+prompt, a search pattern, an MCP call's arguments). A high-confidence finding refuses the call
+whatever its tier, allowed calls included. A low-confidence finding comes to you only on a gated
+call: an allowed call never gets a question.
+
+A text over 600,000 characters is read from its start (500,000 characters) and its end (100,000), not
+its middle, and the scan says so instead of passing it silently. A gated call of that length comes
+to you, with the reason that it is too long for the secrets scan to read in full (allow once, keep
+blocked, talk first or type an instruction; your answer is not remembered and no allow rule is
+offered for it); where nobody can be asked it is refused. An allowed call of that length is refused,
+logged, as a high-confidence finding is. Shadow mode does not change this, as it does not change a
+finding; bypass skips a gated call's scan, not an allowed call's.
 
 - **High confidence** (private keys, PGP private key blocks, AWS, GitHub, GitLab, npm, Anthropic, OpenAI, Slack, Google and Stripe keys, Google OAuth client secrets, Slack webhook URLs, passwords in connection strings): refused without asking you, on an allowed call too (it is logged, with tier `allow`). Claude is told to remove the secret.
 - **Low confidence** (`password=…`-style assignments, including compound names such as `DB_PASSWORD`, `PGPASSWORD` and `dbPassword`; JWTs; `Authorization: Bearer …` and `Basic …` headers; a `mysql -p<password>` argument; a password in a connection string with no user, `redis://:<password>@host`; long random-looking tokens): comes to you with a redacted snippet. Allow once, keep blocked, type an instruction, or **add to allowlist**. The allowlist asks a second time, showing the exact entry: a `sha256:` fingerprint of the secret, never the secret. Only then is it written to `rules.json` under `gollum.allowlist`. The fingerprint of a short password can be guessed offline, so the allowlist is for keys and tokens: for a password finding the second question says so, and a real password is better changed.
 
-Code that only names a secret is not a finding: `process.env.API_TOKEN`, `getToken()`, a type annotation such as `password: string` and a variable reference such as `$TOKEN` (an indexed lookup such as `tokens[0]` is still a finding). Redaction is stricter than the scan: a value is left readable only when it is plainly code (a variable, a call, a dotted path, an indexed lookup, a type word); any other value after a secret keyword is redacted, even one the scan does not flag. Redaction also covers shapes the scan does not flag: the password of `curl -u user:password` (and `--user`), `--password` for the `mysql`-family clients, `Authorization: Token …` and `Authorization: ApiKey …` headers, and the `X-Api-Key` and `X-Auth-Token` headers.
+Code that only names a secret is neither a finding nor redacted. That is a value which is wholly a reference: a variable or a template (`$TOKEN`, `${DB_PASSWORD:-}`, `${1:-default}`, `{{ secrets.TOKEN }}`), a call expression whose arguments hold no quoted string and no literal of 8 or more letters and digits (`getToken()`, `z.string().min(8)`, `crypto.randomBytes(32)`, `uuid4()`, `await getToken(user)`, `response.json()["token"]`), an indexed lookup such as `tokens[0]`, a type annotation such as `password: string`, a bare number under 6 digits (`"token": 1234`), a path or a backtick substitution under 6 characters (`/tmp`, `~/x`, `` `pwd` ``), and the shell's own `PWD` and `OLDPWD`. A plain word of letters, `_` and `.` is a secret only from 6 characters (`token: token`, a commit message "fix password: reset flow"); with a digit or any other character, from 4 (`PASSWORD=abc12`). A value that only starts like a reference is still a secret: `$ecret123!`, `Sup3r(Secret)9`, `<realkey12345>`, `(hunter2xyz)`. Redaction is stricter than the scan: a value is left readable only when it is plainly code (a variable, a call, a dotted path, an indexed lookup, a type word); any other value after a secret keyword is redacted, even one the scan does not flag (a word of 6 letters or more, such as `correcthorse`). A longer path (`pwd=/work/x`) is redacted, as it was before this release's shorter minimum. Redaction also covers shapes the scan does not flag: the password of `curl -u user:password` (and `--user`), `--password` for the `mysql`-family clients, `Authorization: Token …` and `Authorization: ApiKey …` headers, and the `X-Api-Key` and `X-Auth-Token` headers.
 
 Add your own patterns in `rules.json`:
 
@@ -691,8 +701,10 @@ Add your own patterns in `rules.json`:
 
 `kind` is optional: `"password"` adds the allowlist warning that a short password's fingerprint can be guessed offline; `"token"`, the default, does not.
 
-Allowlist entries are exact strings or fingerprints, never regexes. Your patterns are also used to
-redact the dialog, reviewer prompts and the audit log.
+Allowlist entries are exact strings or fingerprints, never regexes. Your patterns, once the file is
+confirmed ([Trusting a project's rules file](#trusting-a-projects-rules-file)), are also used to
+redact everything that is shown or kept: the dialog, reviewer prompts, the refusal Claude reads, the
+operation keys and the audit log.
 
 ## Read-only preview
 
@@ -734,8 +746,13 @@ operation. A push keys on its remote and branch, and SQL on its database.
 When a call comes to you, the question shows the call (with secrets redacted), why it was gated,
 the read-only preview when there is one, and each reviewer's verdict. A long call or preview is
 shown by its start and its end, with a line saying how much is not shown. Every line of the call
-and the preview starts with a gutter (`  | `) and has its control characters removed, so text in a
-command cannot pass for a line of the question, such as a reviewer's verdict or a heading. You can:
+and the preview starts with a gutter (`  | `) and has its control characters removed, and so are the
+characters that change how text reads without showing (direction marks and overrides, zero-width
+characters), so text in a command cannot pass for a line of the question, such as a reviewer's verdict
+or a heading. A line over 100 characters wraps, and every row of it starts with the gutter. When the
+question would be over about 2,500 characters, the end of the call goes first, then the end of the
+preview, then each reviewer's reason is cut to its share, each with a line saying so: the question's
+own lines and every reviewer's verdict stay. You can:
 
 - **Allow once** (themed: "Need: allow once"): the call runs, and still meets Claude Code's normal permission prompt, which then carries the line "Council: you allowed this once".
 - **Keep blocked** (themed: "Pass: keep blocked"): it is refused.
@@ -848,7 +865,7 @@ substitutions in an unquoted heredoc body. The gaps that remain:
 - **Alternating verbs on one target are separate operations.** `rm build`, `trash build`, `find build -delete` and a script that deletes it each get their own rounds and their own failed attempts, since the key starts with the verb. Three refusals of `rm` do not lock out the fourth try with `trash`; the per-kind counter catches only retries of the same verb.
 - **A `.sql` file's content isn't read by the block rules.** The database reviewer reads a `.sql` file a command names inside the project (`psql -h prod-db -f drop.sql`), but the rules classify the command without opening any file, so a destructive file run against production is reviewed, not blocked. Put a project rule on the command if a file must never run against a database.
 - **POSIX only:** no Windows paths or PowerShell parsing. Windows is unsupported ([docs/INSTALL.md](../../docs/INSTALL.md)).
-- **A text over 600,000 characters has an unscanned middle.** The secrets scan reads the first 500,000 characters and the last 100,000 of a call's text; a secret only in the middle of a longer text is not found.
+- **A text over 600,000 characters has an unscanned middle.** The secrets scan reads the first 500,000 characters and the last 100,000 of a call's text, so a secret only in the middle of a longer text is not found. The call is not passed on that account: a gated one comes to you, and an allowed one is refused (see [Secrets scan](#secrets-scan)).
 - **A regex in a project rule runs before the file is confirmed.** The regexes of a project's `ask` and `block` rules and of `bigOperations` apply at once ([Trusting a project's rules file](#trusting-a-projects-rules-file)). A runaway one (catastrophic backtracking) stalls the hook, which then refuses the call (a hook that overruns its time fails closed: it cannot let one through). Read a repository's rules file before you open it in a session.
 - **`git push.default` and other git configuration aren't read.** A push with no refspec is treated as a push of the checked-out branch (its preview is `@{upstream}..HEAD`), whatever `push.default` would send.
 - **Long commands aren't parsed.** Commands longer than 20,000 characters, or nested more than four levels deep, go to review; and a command longer than its reviewer reads is never approved by a model alone (see [Long input](#long-input)).
@@ -857,7 +874,7 @@ substitutions in an unquoted heredoc body. The gaps that remain:
 
 - Anything outside tool calls: what Claude says, files it reads, network requests other tools make.
 - A mod that fails to load, a disabled mod, `disableAllHooks`, `--safe-mode` or `--bare`: then nothing is gated.
-- **Bypass.** While `/council off` is on, every gated call passes, block-tier calls and the secrets scan included, until `/council on` or the session ends.
+- **Bypass.** While `/council off` is on, every gated call passes, block-tier calls and the secrets scan included, until `/council on` or the session ends. An allowed call is not gated: the scan still refuses one that holds a high-confidence secret, or whose text is too long to scan in full, whatever the mode.
 - **Diffs are built from the call, not from git.** The diff reviewer sees the change the call describes against the file as it stands when the hook runs; a file over 4 MiB, or one it can't read, is shown as the call's own text only, and the prompt says so.
 - **The project checks run your project's code.** Claude can edit the tests and scripts they run (file edits go to the diff reviewer, not to you), so a passing check is only as good as the code it runs. They run as you, with your environment.
 - **A push with no range to read.** For a branch the remote doesn't have yet, the range is read against the remote's default branch, which needs `<remote>/HEAD`: `git clone` sets it, `git remote add` does not (`git remote set-head origin -a` sets it). Without it, or for a push that names no remote, the diff reviewer sits out of that council and the preview shows no commits. The same goes for a refspec the mod cannot name safely (a source or destination with spaces, `..` or a wildcard): its commits are not shown, and the reviewers are told so. A push of `--all`, `--mirror` or `--tags` still shows the current branch's commits, not every ref it sends, and says so: "This push sends more branches or tags than the commits shown: only the current branch is listed, so what the others would send is unknown." The shipped rules block `--all` and `--mirror`, so in practice the note shows for `--tags`.
@@ -865,8 +882,8 @@ substitutions in an unquoted heredoc body. The gaps that remain:
 - **The database reviewer sees only the SQL it can find**: inline `-c`/`-e` (and `sqlite3`'s `-cmd` and its statement after the database file), heredocs, and `.sql` files named in the command and inside the project. A migration tool's own migration files (`prisma migrate deploy`) are not looked up.
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.
 - Rules you loosen, and calls you allow. An allow rule you add skips review, the ask tier and the secrets scan for that exact command; it does not follow a `cd` earlier in another command, so `rm -r build` is allowed in whichever folder Claude runs it.
-- **Low-confidence secrets in allowed calls.** An allowed call is scanned for high-confidence secrets only: a `password=…`-style assignment or a random-looking token in an allowed `curl` or `echo` passes without a question.
-- **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`), an identifier without a digit and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through the scan (redaction still hides it).
+- **Low-confidence secrets in allowed calls.** An allowed call is refused for a high-confidence secret, or for a text too long to scan in full, and for nothing else: a `password=…`-style assignment or a random-looking token in an allowed `curl` or `echo` passes without a question.
+- **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`, `tokens[0]`), an identifier without a digit and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through the scan (redaction still hides it). A plain word of fewer than 6 letters (`token: token`, `password: reset`), a bare number under 6 digits, a call expression whose arguments hold no literal, and anything assigned to a variable named exactly `PWD` or `OLDPWD` are read as code, not redacted and not flagged.
 - **Two sessions in one project share one audit log without a lock.** Claude Code's file access has none, so lines can interleave or be lost; the report skips lines it cannot parse.
 - **Several repositories: a command too long or too complex to parse** names no `cd` or path, so it is classified against the repository of the session's working directory only (it is reviewed at least). Two repositories' checks with the same name show under one name in the debate pane.
 - **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb. A command with more than eight gated parts is counted by the whole command and its first eight parts. A key names the verb and its targets, not the wording: a SQL client's inline statement, the text an `echo` writes to a file and the value of a push option are not part of it.

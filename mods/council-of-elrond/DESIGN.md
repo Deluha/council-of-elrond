@@ -194,6 +194,8 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | Token budget spent / no enabled member can take the call (the named one and Gandalf off) | Escalate without a model call. |
 | The file a diff needs can't be read (over 4 MiB, permissions) | The diff shows the call's own text and the prompt says so; the review goes on. |
 | A `.sql` file the call names is missing, unreadable, or lands outside the project (by name or real path) | Left out of the database reviewer's context, with a one-line note in its prompt saying so (§15.13); the review goes on. |
+| A gated call whose text is too long for the secrets scan to read in full (over 600,000 characters; the middle is not read) | Put to the person with `escalate.secretPartial` after the high-confidence check; the answer is not remembered and no allow rule is offered; refused where nobody can be asked, a failed attempt. Shadow mode does not change it; bypass passes it with the rest of the gated path (§16 item 16). |
+| An allowed call whose text is too long for the secrets scan to read in full | Refused, audited with tier `allow` and member `gollum`; no rounds, no failed attempt, no state write; bypass does not change it (§16 item 16). |
 | A shell call with more than eight gated parts | No reviewer: the keys cover only the first eight, so a locked or spent part could be among the rest. It goes to the person (`escalate.tooManyParts`), or is refused where nobody can be asked, a failed attempt; never cached (§16 item 7). |
 | A script, `.sql` file or inline SQL the call runs was cut for its reviewer, and the verdict is an approve | The approve does not stand: the call goes to the person (`escalate.commandCut`), or is refused where nobody can be asked; never cached; the audit line keeps the approve and says why (§16 item 6). |
 | More than 200 distinct verb keys have failed | A new verb counts on one shared key (`shell:(other verbs)`), read for any verb with no entry of its own; it locks at the verb cap. Nothing stored is evicted (§16 item 7). |
@@ -727,7 +729,7 @@ The `/upgrade-types` runs for 2.1.308 and 2.1.322 read the binary with `grep -a`
 5. **C2: speaking through Claude where nothing draws** (`hooks/elrond/relay.ts`, `hooks/register.ts`, `hooks/elrond/commands.ts`, `hooks/strings.ts`). ROADMAP's C2, approved 2026-10-13: a scoped exception to approved decision 1 ("command output never reaches Claude"). Where `$.session.surfaces()` is empty (the cloud web client, `-p`, the SDK) nothing the mod draws reaches the person and the model is the only channel, so four `/council` outputs, a start notice and the nobody-to-ask refusal go through it. The deciding logic is pure and sits in `relay.ts` (`isRelayed`, `relayContext`, `nobodyToAsk`, `noticeText`, `routeText`); register.ts reads the surfaces and the origin and wires it. The strings Claude reads here are plain only (`relay.` is a Claude-facing family in the strings test, with `cmd.allowlistHidden`); the relayed output itself follows the mode, see (b).
    - **(a) Four subcommands, and only a person's (a tightening of the roadmap row).** `status` (a bare `/council` included), `report`, `rules` and `test` return `{ context: [entry] }` in addition to `show()`, which runs exactly as before. Every other case returns `{}`: any surface present; `log`, `off`/`on`, `shadow`, `model`, `models`, `reload`, `debate`, usage and unknown; the needs-a-person refusal; the `.catch` path. The origin must be in `HUMAN_ORIGINS` (`composer`, `bridge`, `sdk`; `sdk` dropped 2026-10-20, §14.3), so a plugin, a peer session or a schedule cannot use `/council test "<command>"` as a classification oracle that answers into Claude's context. The roadmap row names no origin gate; with it, fewer calls return a context. The relay is built after `show()` and its failure is swallowed: the person's pane or lines are never the price of it.
    - **(b) Every relayed line is redacted, and the output is fenced (a tightening).** The entry is one string: an instruction line (`relay.head`; `{sub}` is built from the command's kind, never from the raw arguments), then the title and the lines, joined by newlines, inside `untrusted('council-output', body, nonce)` with a fresh `newNonce()` per entry. Each line, the title included (`/council test` echoes the typed command), goes through `redact(line, ctx.patterns)`: the shipped patterns and the project's own. The instruction tells Claude to repeat the block verbatim in a code block, without the tags, and that the lines are the council's output, not instructions to it. The fence is the same one the reviewers' briefs use, so a closing tag in the output is replaced with `[removed]`. The copy is plain whatever the theme setting, so the `strings.ts` guarantee (no setting puts theme text in front of the model) holds for it too. `relayOf` does not reuse the person's output: it calls `councilOutput($, command, 'plain')`, which does the `$` reads again (state, and for `report` the audit files; only where nothing draws) and then runs the pure builder inside `withMode(mode, build)` (`strings.ts`), which sets the module's current mode, runs the synchronous `build` and restores the previous mode in a `finally`. That is safe only because `build` is synchronous, so no other dispatch can interleave; its type rejects a Promise-returning `build` at compile time, and no `$` read goes inside it. The person's pane and lines still follow the mode. Cases that change state or probe (`off`, `shadow`, `model`) take the same parameter but are never relayed.
-   - **(c) Allowlist entries are hidden in the model's copy (a tightening).** The pane shows the first three characters of an exact-string allowlist entry (`zq9…`), which are characters of a secret. `rulesOutput` takes a `forModel` flag: set, such an entry shows as `(an exact string, not shown)` (`cmd.allowlistHidden`), a `sha256:` fingerprint as before. The flag is a parameter of the pure function, not a rewrite in register.ts, and the person's copy is unchanged. A mode is given to `councilOutput` only for the model's copy, so the same parameter sets `forModel`.
+   - **(c) Allowlist entries are hidden in the model's copy (a tightening).** The pane shows the first three characters of an exact-string allowlist entry (`zq9…`), which are characters of a secret. `rulesOutput` takes a `forModel` flag: set, such an entry shows as `(an exact string, not shown)` (`cmd.allowlistHidden`), a `sha256:` fingerprint as before. The flag is a parameter of the pure function, not a rewrite in register.ts, and the person's copy is unchanged. *(Amended by §16 item 17: the person's copy hides it too, and the flag is gone.)* A mode is given to `councilOutput` only for the model's copy, so the same parameter sets `forModel`.
    - **(d) The start notice.** In `session.start`, after the command registration and the shadow suggestion, when surfaces is empty, `announce` appends one `user` row with one text block (`notice.noSurface`): the plugin is active, it reviews risky calls, a call that needs the user is refused here with the reason, Claude should tell the user which call and why, the route (`relay.route`: the person adds an allow rule to `.claude/council-of-elrond/rules.json` themselves, Claude must not edit that file because it is a protected path, or continues in a terminal), and that `/council` status, report, rules and test answer through Claude. Choices: it promises no chat approval (`council allow …`, C4, does not exist yet), and names neither `/council off` nor shadow mode as a route (both loosen the gate and neither is Claude's to suggest). One shared route string serves the notice and the refusal. A rejection or a `{ deny }` is logged to debug (`notice.appendFailed`) and never stops `session.start`; with any surface present nothing is appended. The append runs before `next(e)`, like the command registration before it.
    - **(e) The nobody-to-ask refusal.** In `putToUser`, the `unavailable` branch is split from `dismissed` (which is unchanged). `nobodyToAsk` builds the reason: the generic why-it-came-to-the-user sentence, then `Operation: <operation.key>` (already capped and redacted in `operations.ts`; register.ts redacts it once more with the project's patterns), then `Behind it:` the rule id (`decided.ruleId`, left out if `decided` is undefined) and, when there are opinions, the reviewers by name only (`text(opinion.who)` in plain, each once), joined from `strings.ts` pieces; with neither, `the council`. The alternative (`alternative.noSurface`) tells Claude to tell the user the call was refused and why, with the route. Never in it: the call text (`shownCall()`), the preview, a secrets finding's label or snippet, a diff, a reviewer's reason or problem. It is still built by `refusalText`, still `refuse(…, true)` (a failed attempt), `decision` is still `unavailable`, and the audit line is unchanged. `unavailable` arises only in `escalate`, and only when surfaces is empty, so the branch needs no surface check of its own. The `why` sentence for a low secrets finding says "may be a secret": generic, no label.
    - **(f) The status line follows the roster** (the H2 row "§2.9 `$.ui.status` never cleared", folded into C2). `syncIndicator` now calls `$.ui.status(label)` only while a surface other than `terminal` or `desktop` is present, and `$.ui.status(undefined)` otherwise, so a line set for a phone or VS Code does not outlive it (a terminal alone now clears, which sets nothing visible). New `session.detach` and `session.attach` hooks call `next(e)`, then `syncIndicator`, caught, and return the result; a detach with reason `end` skips the sync because it runs inside `session.end`'s short bound. `session.attach` was added for symmetry: a client that joins gets the label back. There is still exactly one `tool.call` hook.
@@ -1241,7 +1243,8 @@ decided; the live list of what still passes is the README's "Known gaps in shell
     out as lines of the question, so a command could contain a line that looked like the dialog's own
     (a reviewer's verdict, a heading). Every line of the call and the preview now starts with the
     gutter (`ask.gutter`) and has its control characters, C1 controls and Unicode line separators
-    replaced by a space; the dialog's own omission marker starts with two spaces and no bar, which a
+    replaced by a space *(§16 item 19: invisible and direction-changing characters go too, and a long line
+    wraps with the gutter on every row)*; the dialog's own omission marker starts with two spaces and no bar, which a
     line of the call never does. A reviewer's reason, a failure's problem and a secret's label and
     snippet are put on one line the same way. `questionText` is still the one builder, and the
     excerpt keeps its 12 lines and 600 characters (15 and 900 for the preview), now from both ends.
@@ -1252,7 +1255,8 @@ decided; the live list of what still passes is the README's "Known gaps in shell
     is one; a literal that merely starts with such a character is redacted and reported. Quoted
     passwords with spaces, shorter values, `curl -u user:password`, `--password` for the known
     database clients, and the `Authorization: Token`, `X-Api-Key` and `X-Auth-Token` headers are
-    covered, and text past the scan limit has its end scanned.
+    covered, and text past the scan limit has its end scanned. *Amended by §16 item 18: what is
+    redacted and flagged is narrower again where the first version raised noise.*
 17. **A force push of the current branch meets the protected-branch block** (a tightening).
     `forcePushProtected` (`rules/checks.ts`) only read refspecs that name a branch, so a force push
     that names none (`git push --force`, `-f`, `-f origin`) or only `HEAD` (`-f origin HEAD`,
@@ -1531,8 +1535,10 @@ decided; the live list of what still passes is the README's "Known gaps in shell
 An adversarial review of the confirmation in §15 item 22 found that a person could be led to confirm
 settings they had not been shown. Every decision below is a **tightening**: nothing can be confirmed that
 could not be before, `trust` still needs a person, and `trustProjectRules=always` behaves as it did. They
-are recorded as decided. The one exception is item 11, which loosens one thing against the commit before
-it (reads of the plugin folders), as the maintainer approved, and goes nowhere below `origin/main`.
+are recorded as decided. The exceptions are item 11, which loosens one thing against the commit before
+it (reads of the plugin folders), and item 18, which undoes redaction noise the commits before it
+added (§15 item 16), both as the maintainer approved; each goes nowhere below `origin/main`, except
+the lines item 18 names.
 
 1. **Confirming a rules file confirms only what was listed in full in this session** (a tightening;
    brief of the second review round). What was wrong:
@@ -1975,3 +1981,109 @@ it (reads of the plugin folders), as the maintainer approved, and goes nowhere b
       the offer's limits (`canSession` is whether a rule would be offered).
     - The question and the rule's `reason` come from the kind of call (`suggest.question.*`,
       `suggest.reason.*`). Tests are in `suggest.test.ts`.
+14. **A project's own patterns are applied wherever the mod redacts** (a tightening). A rules file's
+    `gollum.patterns` (once the file is confirmed; they wait for trust until then) were applied to
+    what reviewers read and to the debate pane, but five other places redacted with the shipped
+    patterns only. Each now takes the call's patterns, defaulting to the shipped ones, and
+    `register.ts` passes them at every call: the operation key (`operationOf`, `partOperation`,
+    every `redact(` in `operations.ts`), the audit line (`auditLine` redacts the reason and now the
+    `opKey` too, which a file tool's path could hold a token in), the refusal Claude reads
+    (`refusalText`, `projectReasonText`: a reviewer's reason, alternative and instruction, a project
+    rule's reason), and the dialog's second pass (`questionText`: the call, the preview, a reviewer's
+    line, a project rule's reason, a secret's snippet). With no project pattern every pinned key and
+    line is byte-identical. The redaction of a file-tool operation key (`file:<path>`) is left to the
+    audit line and the refusal; the key in session state is never shown.
+15. **The scan reads what a call carries, whatever the tool** (a tightening). `scannedText` read a
+    shell command, a Write's content, an Edit's new text, a notebook cell and an MCP call's input.
+    Now: a shell call's `description` and its command; a file tool's path and what it writes; every
+    other tool, whatever its name (a fetch's URL, an agent's prompt, a search pattern, a read's
+    path), its whole input as canonical JSON (`canonical`, `audit.ts`, keys sorted). An Edit's old
+    text is still not read. The cost is the scan's own: `scanText` caps what it reads at 500,000
+    characters from the start and 100,000 from the end whatever the tool, and every allowed call is
+    now scanned, but the input of most is a few hundred characters.
+16. **A text too long to scan in full is not passed silently** (a tightening). `GollumScan.partial`
+    was set when the middle of a text over 600,000 characters went unread, and nothing used it. Now,
+    on a gated call, it puts the call to the person after the high-confidence check, like a low
+    finding (`escalate.secretPartial`, or `escalate.secretLowPartial` when a low finding is also
+    there): the person's answer is not remembered, no allow rule is offered for the call
+    (`hadSecret`), and where nobody can be asked it is refused (`nobodyToAsk`, a failed attempt). On
+    an allowed call it refuses, as a high-confidence finding does, with one audit line (tier
+    `allow`, member `gollum`, verdict `block`, the reason `escalate.secretPartial`; no rounds, no
+    failed attempt, no state write), and Claude is told to make the call shorter
+    (`alternative.shorterCall`). **Decided: shadow mode and bypass do what they do for a
+    finding.** The scan enforces in shadow mode (§6.10), so a partial scan is asked about or refused
+    there too; under bypass a gated call passes (the scan is part of the gated path) and an allowed
+    call is still refused (§13.2). A reading of "shadow passes it" would make the scan weaker in
+    shadow than it is for a finding, so the safer option was taken. The README says exactly this
+    for bypass in both places it used to say the scan passes.
+17. **`/council rules` shows no character of an allowlisted secret** (a tightening; amends §13.5 c).
+    The person's copy showed the first three characters of an exact-string allowlist entry
+    (`zq9…`), which are characters of a secret and reach the terminal's scrollback and anything that
+    records it. Both copies now show `(an exact string, not shown)` (`cmd.allowlistHidden`); a
+    `sha256:` fingerprint is still shown. `rulesOutput` lost its `forModel` flag, since the two
+    copies no longer differ. **Decided: no length class** (short, medium, long) is shown with it: the
+    length of a password narrows a guess, and a count of entries is what the listing needs.
+18. **Redaction noise this release added is undone, and no further** (a loosening against §15
+    item 16 as first made, approved by the maintainer; goes nowhere below `origin/main`, except the
+    lines listed below). The 4-character minimum and the narrowed placeholder test blanked ordinary
+    code (`{ token: token }`, `this.token = token`, `passwd: files systemd`, `// TODO token: move
+    to env`, a commit message "fix password: reset flow", `PWD=/tmp`, `z.string().min(8)`) and raised
+    questions about it. Decided (`redact.ts`, one `isNoise` test on the assignment pattern, read by
+    `redact` and `scanText`, and a wider `isWholeReference`):
+    - **(a) The minimum depends on the value.** 4 characters only when the value holds a digit or
+      any character outside letters, `_` and `.`; a plain word of those needs 6, as on `origin/main`.
+    - **(b) Paths, substitutions and the shell's own variables.** A name that is exactly `PWD` or
+      `OLDPWD` (capitals; `pwd` stays a keyword in any other name) is not a secret keyword. An
+      absolute or home-relative path, a backtick substitution or the cut start of a subscript
+      (`ENV[` of `ENV["TOKEN"]`) is no secret **only when it is under 6 characters** (`/tmp`,
+      `~/x`, `` `pwd` ``): the shortest value `origin/main` read, so a longer path (`pwd=/work/x`)
+      is redacted exactly as it was there. Exempting every path would have gone below
+      `origin/main` for a password that happens to start with `/`; one constant (`SHORT_VALUE`) is
+      the whole difference. A whole `$(...)` was already a reference.
+    - **(c) Code expressions are whole references.** A call expression `name(.name)*(...)`, with
+      `await` or `new` in front and any chain of `.name`, `.name(...)` and `[...]` after it, is one
+      when its arguments hold no quoted string and no run of 8 or more letters, digits, `_` and `-`
+      holding both a letter and a digit (`z.string().min(8)`, `crypto.randomBytes(32)`, `uuid4()`,
+      `response.json()["token"]`, `await getToken(user)`). A value the bare pattern cut at a space, a
+      comma or a quote is an open call (`getToken(user`, `Column(String(128)`, `response.json()[`):
+      one only when its names hold no digit and its rest holds only names (digits and commas only
+      inside a nested parenthesis). A subscript chain (`tokens[0]`) is exempt from the scan as
+      redaction already left it readable. `${1:-default}` is a variable. A bare number under 6
+      digits (`"token": 1234`) is no secret; a quoted one is a string and stays one. A call with a
+      trailing character (`Sup3r(Secret)9`), a literal argument (`Secret(abcd1234)`) or a digit in
+      the name of an open call (`Sup3r(Secret9`) is not one.
+    - **(d) Kept.** `$ecret123!`, `Sup3r(Secret)9`, `<realkey12345>`, `(hunter2xyz)`,
+      `PASSWORD=abc12`, quoted passphrases with spaces, `curl -u user:pass1234`, `--password=VALUE`
+      and the header forms are still redacted and flagged.
+    - **Below `origin/main`, by this item's own rules (four lines of the 231 compared):** `PWD=` or
+      `OLDPWD=` followed by a path of 6 characters or more (b: the name), and the scan's flag, not
+      the redaction, of `token = tokens[0]` and `const token = data.items[0]` (c: `origin/main`
+      flagged any subscript, and redaction already left it readable). Everything else that
+      `origin/main` redacted or flagged still is.
+    - **Noise left, not decided here:** a Terraform-style `${var.token}` (a dotted name inside
+      braces; `origin/main` left it readable), and a value cut at its first space such as
+      `PASSWORD=$(vault read ...)`. Both are as noisy as in the first version of §15 item 16.
+19. **The dialog: invisible characters, wrapped rows and the size cap** (a tightening; amends §15
+    item 14). (a) `oneLine` and the excerpt's per-line cleaning stripped control characters only;
+    both now use `cleanText` (`config/trust.ts`, already imported by `refusal.ts` and `commands.ts`,
+    so the layering is unchanged), which also removes direction marks and overrides, isolates,
+    zero-width and joining characters and the byte order mark. A run of control characters is one
+    space each, not one for the run. (b) A call line of a few hundred characters was one long line
+    whose wrapped rows had no gutter. The excerpt budget (12 lines, 600 characters; 15 and 900
+    for the preview) is applied first, then every gutter-prefixed line is hard-wrapped so that a row,
+    gutter included, is at most 100 characters, each continuation row with the gutter too. A project
+    rule's reason wraps the same way. (c) The total cap was a slice of the whole question, which
+    cut the closing lines and the last reviewers. Now, over 2,500 characters: lines go from the
+    end of the call excerpt first (its first line always stays), then from the end of the
+    preview's, each said by one marker line (joined to the one already there); then each reviewer's
+    reason and failure, then each secret's snippet, is cut to its share of what is left in
+    proportion to its length, ending in `ask.reasonCut`. The title, why it came, the rule line, every
+    reviewer's verdict line and the closing line are never cut.
+20. **Wording** (no change in what is decided). `trust.count.rules` counts allow rules only, since a
+    review rule of an unconfirmed file applies at once (item 10); `notice.rulesUntrusted` and
+    `trust.state.untrusted` say that the file's block, ask and review rules apply and only add to
+    the shipped decision; the question after a review approved because an unconfirmed project rule
+    asks has its own text (`escalate.askProject`, "The project's rules file asks you about this call
+    too, after its review.") instead of `escalate.askTier`; `/council rules` lists the paths protected
+    against writes (`cmd.list.writeProtected`, "Protected against writes") apart from the protected
+    paths.

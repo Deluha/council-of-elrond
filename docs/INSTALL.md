@@ -18,8 +18,9 @@ options) is in the [user manual](../mods/council-of-elrond/README.md).
 
 ## Upgrading from a build before the trust rule
 
-A project's rules file used to apply in full. Now its allow and review rules, disabled rules,
-models, patterns, allowlist and project checks wait until a person confirms the file. After
+A project's rules file used to apply in full. Now its allow rules, disabled rules,
+models, patterns, allowlist and project checks wait until a person confirms the file; its block,
+ask and review rules apply at once and only add to what the shipped rules decide. After
 upgrading, run `/council trust` once per repository that has a rules file (it shows what would be
 switched on, with a code; type `/council trust <code>`), or set `trustProjectRules` to `always` on a
 host whose owner controls which repositories it opens. Until then a big operation whose project
@@ -86,7 +87,7 @@ A repository's `.claude/settings.json` does not load plugins in a cloud session.
   claude plugin install council-of-elrond@council-of-elrond --config shadowMode=true --config trustProjectRules=always
   ```
 
-  The part after `#` is a branch or a tag, not a commit. `#main` follows every merge; once releases are tagged, pin one so the gate does not change under you. The `#council-of-elrond--v0.6.0` pin is available once 0.6.0 is tagged; no version has been tagged yet. Both commands write to the user settings (`~/.claude/settings.json`): the marketplace with its ref, the plugin enabled, and each `--config` option under `pluginConfigs`. Add one `--config KEY=VALUE` per option; the keys are the ones under [Options](../mods/council-of-elrond/README.md#options-config), for example `gandalfModel=opus`, `councilModel=sonnet` or `tokenBudget=500000`. Shadow mode suits a team's first days, as on a local install. `trustProjectRules=always` makes the council honour every repository's `rules.json` in full, which is what a cloud environment needs because nobody there can type `/council trust`; use it only where the environment's owner decides which repositories it opens. Without it (the default is `confirm`), a rules file's allow and review rules, disabled rules, models, secret patterns, allowlist and project checks are ignored until a person confirms that exact file, and a big operation with project checks is refused with "not run: the rules file is not trusted". See [Trusting a project's rules file](../mods/council-of-elrond/README.md#trusting-a-projects-rules-file). The clone needs network access to github.com; don't attach this repository to the session (see "Several repositories" below).
+  The part after `#` is a branch or a tag, not a commit. `#main` follows every merge; once releases are tagged, pin one so the gate does not change under you. The `#council-of-elrond--v0.6.0` pin is available once 0.6.0 is tagged; no version has been tagged yet. Both commands write to the user settings (`~/.claude/settings.json`): the marketplace with its ref, the plugin enabled, and each `--config` option under `pluginConfigs`. Add one `--config KEY=VALUE` per option; the keys are the ones under [Options](../mods/council-of-elrond/README.md#options-config), for example `gandalfModel=opus`, `councilModel=sonnet` or `tokenBudget=500000`. Shadow mode suits a team's first days, as on a local install. `trustProjectRules=always` makes the council honour every repository's `rules.json` in full, which is what a cloud environment needs because nobody there can type `/council trust`; use it only where the environment's owner decides which repositories it opens. Without it (the default is `confirm`), a rules file's allow rules, disabled rules, models, secret patterns, allowlist and project checks are ignored until a person confirms that exact file (its block, ask and review rules apply at once and only add to the shipped decision), and a big operation with project checks is refused with "not run: the rules file is not trusted". See [Trusting a project's rules file](../mods/council-of-elrond/README.md#trusting-a-projects-rules-file). The clone needs network access to github.com; don't attach this repository to the session (see "Several repositories" below).
 
 - **Organization server-managed settings** (Owner role: Organization settings, Claude Code, Managed settings). Put the same entries there; they apply to every user in the organization. This route has not been tried.
 
@@ -132,8 +133,9 @@ Everything has a shipped default. The two places to change things:
    [Editing rules](../mods/council-of-elrond/README.md#editing-rules). Reload with
    `/council reload` after editing by hand. A file you edited by hand must then be confirmed
    with `/council trust` (typed by a person: it shows what would be switched on, with a code, and
-   you type `/council trust <code>`). Until then its allow and review rules, disabled rules, models,
-   patterns, allowlist and project checks do not take effect, and a big operation whose project
+   you type `/council trust <code>`). Until then its allow rules, disabled rules, models,
+   patterns, allowlist and project checks do not take effect (its block, ask and review rules do, and
+   only add to the shipped decision), and a big operation whose project
    checks are held back is blocked. See [Trusting a project's rules file](../mods/council-of-elrond/README.md#trusting-a-projects-rules-file).
 
 Recommended first week:

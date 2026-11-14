@@ -1,4 +1,5 @@
-import { redact } from './redact.js'
+import { redact, SECRET_PATTERNS } from './redact.js'
+import type { SecretPattern } from './redact.js'
 
 /**
  * The audit log: one JSONL line per gated call. It holds no file contents,
@@ -72,16 +73,20 @@ export type AuditRecord = {
 
 const MAX_REASON_CHARS = 300
 
-/** The one line written for a record, newline included. */
-export function auditLine(record: AuditRecord): string {
+/**
+ * The one line written for a record, newline included. The operation key and the reason are redacted with the call's
+ * patterns (the shipped ones and a confirmed project file's), so a secret a key names verbatim never reaches the log.
+ */
+export function auditLine(record: AuditRecord, patterns: readonly SecretPattern[] = SECRET_PATTERNS): string {
   const reason =
     record.reason === null
       ? null
       : (() => {
-          const clean = redact(record.reason).replace(/\s+/g, ' ').trim()
+          const clean = redact(record.reason, patterns).replace(/\s+/g, ' ').trim()
           return clean.length > MAX_REASON_CHARS ? `${clean.slice(0, MAX_REASON_CHARS - 1)}…` : clean
         })()
-  return `${JSON.stringify({ ...record, reason })}\n`
+  const opKey = record.opKey === null ? null : redact(record.opKey, patterns)
+  return `${JSON.stringify({ ...record, opKey, reason })}\n`
 }
 
 // No field's whitespace is collapsed: every string is hashed exactly. In a
@@ -91,7 +96,7 @@ export function auditLine(record: AuditRecord): string {
 // is reviewed again rather than reusing an earlier approve.
 
 /** Sorts keys; every value is kept exactly as given. */
-function canonical(value: unknown): unknown {
+export function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical)
   if (typeof value === 'object' && value !== null) {
     return Object.fromEntries(
