@@ -24,6 +24,7 @@ export type ModelSlot = (typeof MODEL_SLOTS)[number]
 export const CHECKS = [
   'rm-outside-repo',
   'force-push-protected',
+  'force-push-unknown-branch',
   'destructive-sql-production',
   'privileged',
   'redirect-write',
@@ -31,6 +32,7 @@ export const CHECKS = [
   'git-config-injection',
   'dangerous-env-assignment',
   'raw-disk-write',
+  'interpreter-stdin',
 ] as const
 export type CheckName = (typeof CHECKS)[number]
 

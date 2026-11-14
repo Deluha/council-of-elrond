@@ -49,30 +49,52 @@ lists its hooks.
 | ask | Comes straight to you. |
 | block | Refused, with the rule's reason. No model call, no question. |
 
-Compound commands (`&&`, `;`, `|`, `$(...)`, backticks, subshells, `sh -c '...'`, `eval`, and
-heredocs fed to a shell) are split, and the strictest part decides.
+Compound commands (`&&`, `;`, `|`, `$(...)`, backticks, subshells, `sh -c '...'`, `eval`, heredocs
+fed to a shell, and the `$(...)` and backticks in the body of a heredoc with an unquoted delimiter,
+which the shell expands) are split, and the strictest part decides. A heredoc with a quoted delimiter
+(`<<'EOF'`, `<<"EOF"`, `<<\EOF`) is plain data.
 
 Shipped defaults:
 
 - **Block:**
   - a recursive delete of `/`, your home directory, the project root, or anything outside the project;
-  - a force push or delete of a protected branch;
+  - a force push or delete of a protected branch, including a force push of the branch that is checked
+    out when it is a protected one: `git push --force`, `-f`, `-f origin`, `-f origin HEAD` and
+    `origin +HEAD` name no branch or only `HEAD`, so the mod reads the checked-out branch (in the
+    folder the push runs in, only for such a push) and blocks it when it matches your protected
+    branches. On any other branch they stay in review;
   - DROP or TRUNCATE against a production-looking target;
   - raw disk writes.
 - **Ask:**
   - `sudo`, `doas`, `su`;
+  - a force push of the current branch when the branch it would overwrite cannot be determined
+    (rule `force-push-unknown-branch`): a detached HEAD, git failing or timing out, or git pointed
+    elsewhere (`git -C`, `GIT_DIR=`, a `cd` out of the project). It is asked about, not blocked, as
+    the branch may well be a feature branch;
+  - installing, updating, enabling, disabling or removing a Claude Code plugin or marketplace
+    (`claude plugin disable|uninstall|remove|rm|update|install|enable`, `claude plugin marketplace
+    add|remove|rm|update`; rule `plugin-manage`). `claude plugin test`, `validate`, `list` and `eval`
+    are not asked about;
   - anything touching a protected path: `.env*`, `Jenkinsfile`, migrations folders, and the entries below. The entries written with a leading `**/` hold in every repository below the session root, at any depth, the rules file included (`app/.claude/council-of-elrond/rules.json`), and so does the directory itself (`rm -rf app/.git` asks). A path outside the session root is matched by its absolute form, so another repository's `.git/` or your user `~/.claude/settings.json` (which holds hooks and permissions) asks too:
     - `**/.github/workflows/**`, `**/.gitlab-ci.yml`, `**/.circleci/**`, `**/.buildkite/**`;
     - `**/db/migrate/**`;
     - `**/.git/**`;
-    - `**/.claude/council-of-elrond/**`, `**/.claude/settings.json`, `**/.claude/settings.local.json`.
+    - `**/.claude/council-of-elrond/**`, `**/.claude/settings.json`, `**/.claude/settings.local.json`;
+    - `**/.claude/plugins/**`, which covers your user plugin folders (`~/.claude/plugins/`) and, because it is written with `**/`, a `.claude/plugins/` folder in any repository.
 - **Review:**
   - file writes and edits;
   - deletes, moves, in-place edits, writes through a redirect;
   - git operations that change a remote or history, or discard work;
   - database clients and migrations;
   - infrastructure changes, network writes, publishing;
-  - running scripts or inline code;
+  - running scripts or inline code, including code fed to an interpreter on its standard input (a
+    pipe, a heredoc, a here-string or a `<` redirect into `python3`, `node`, `perl`, `ruby`, `php`,
+    `deno`, `bun`, `Rscript` or `lua` with no script named; rule `script-stdin`), and a code flag
+    written attached or in a cluster (`python3 -Bc`, `perl -ne`, `node -pe`, `php -r'...'`);
+  - a program that is only known at run time, such as a variable or a substitution in the program
+    position (`shell-dynamic-program`; an unquoted `$IFS` or `${IFS}` is read as a space first);
+  - a command run through a runner whose options the mod cannot read with certainty
+    (`shell-runner-unresolved`);
   - Bash with the sandbox disabled;
   - MCP tools whose names say they change something.
 
@@ -92,7 +114,7 @@ Each reviewer has a short checklist of its own and sees only what that checklist
 | Reviewer | Takes | Sees | Checks |
 | :- | :- | :- | :- |
 | Destructive operations (Gandalf, `gandalf`) | deletes, moves, overwrites, scripts, infrastructure, anything no rule names | the call, the preview, scripts Claude wrote this session | reversibility, width, reach, backups, intent |
-| Diffs (Legolas, `legolas`) | Write, Edit, NotebookEdit | a diff built from the call against the file as it stands (cut to the diff line limit), the file's git status | matches the request, scope creep, weakened tests, disabled checks, dependency/CI/config changes, obvious breakage. No style review. |
+| Diffs (Legolas, `legolas`) | Write, Edit, NotebookEdit | a diff built from the call against the file as it stands (cut to the diff line limit, keeping both ends), the file's git status | matches the request, scope creep, weakened tests, disabled checks, dependency/CI/config changes, obvious breakage. No style review. |
 | Git (Aragorn, `aragorn`, profile `git`) | push, merge, rebase, reset, tag, amend and other history changes | the command, the branch, remote and commits it would send or bring in, recent history with remote branches marked, your protected branches | protected target, force, rewriting pushed history, unrelated commits |
 | Database (Aragorn, `aragorn`, profile `database`) | SQL clients, migrations, `.sql` files | the command, SQL from `-c`/`-e`/heredocs, `.sql` files it names inside the project, or a SQL file's diff; which production patterns match | rollback path, destructive DDL, UPDATE/DELETE without WHERE, production-looking target, transactions, long locks |
 
@@ -101,6 +123,31 @@ reviewer is switched off, when a compound command's parts name different reviewe
 would judge only its own part), or when a rule names the diff reviewer for something with no file.
 If Gandalf is off too, the call comes to you. `/council test "<command>"` shows who would review and
 why.
+
+### Long input
+
+A reviewer reads a limited amount of each part of a call (the command, the preview, a script, SQL, a
+diff, your latest message). Text over the limit is cut in the middle: a reviewer sees the start and
+the end, with one line between them saying how many lines and characters were left out, and a note
+from the council, outside the quoted material, repeats how much. Its instructions say that what was
+left out has not been seen and is not to be assumed safe: it approves only when what it can see and
+the nature of the call make the rest low-risk, and otherwise asks for the change in smaller pieces
+(a revise). A line that looks like that marker, in a command or a file, is only text: the note is
+what counts.
+
+- **A command too long to read is never approved by a model alone.** When the command of a shell
+  call is longer than its reviewer reads (200 lines or 12,000 characters, and 40 lines or 4,000
+  characters for the push or merge a diff reviewer quotes), a reviewer's approve does not let it
+  run: the call comes to you ("The command was too long to review in full"), as a call with no
+  verdict does, or is refused where nobody can be asked. A revise or a block stands as it is, and
+  the approve is not remembered. This is about the command text; a long file or diff is not held
+  back, and its reviewer is told.
+- **Secrets are redacted before anything is cut**, so a cut cannot leave half a secret that no
+  longer looks like one.
+- **Context that could not be shown is said so.** A `.sql` file the call names that is outside the
+  project, missing or unreadable, and a script the call runs that Claude did not write through a
+  file tool this session (or that could not be read), are named in one line of the prompt, so a
+  reviewer does not take their absence for harmlessness.
 
 ## The full council
 
@@ -111,13 +158,14 @@ why.
 - **Who sits:** every enabled reviewer with something of the call to review.
   - The destructive-operations reviewer always sits.
   - The git and database reviewer sits once for each profile the call touches, so `git push && psql …` gets both.
-  - The diff reviewer sits for a file change, and for a push or merge. There it reviews the changes the push would send or the merge would bring in, read by one fixed, read-only `git diff`. When the remote does not have the branch yet, the diff is against the remote's default branch (`<remote>/HEAD`), the changes since the branch point.
+  - The diff reviewer sits for a file change, and for a push or merge. There it reviews the changes the push would send or the merge would bring in, read by fixed, read-only `git diff`s: one for a merge, and for a push one per refspec (the first three), each from the refspec's own source. A refspec whose changes cannot be read is said so in the reviewer's prompt. When the remote does not have the branch yet, the diff is against the remote's default branch (`<remote>/HEAD`), the changes since the branch point.
 - **One model:** every member sits on the council's model (`opus` by default), not its own.
 - **One deadline:** every member runs under one shared deadline from that model (Opus 45 s, or "Review deadline" in `/config`). By default they run in parallel. "Full council one at a time" asks them in turn instead, each getting what is left of the deadline, and stops at the first block.
 - **Strictest wins:** block, then revise, then approve. Every objection is labelled with the reviewer who raised it. A reviewer that errors, times out or answers malformed counts as a block from that reviewer.
   - Blocked only for want of verdicts (nobody actually objected, every check passed): the call comes to you, as a single reviewer's failure does.
   - Any real objection or failed check: Claude gets the refusal.
 - **Independent:** reviewers never see each other's verdicts.
+- **A command too long for a seat:** when every reviewer approves but one of them saw only part of the command, the call comes to you (see [Long input](#long-input)). An objection from any reviewer stands as before.
 
 **Project checks** (Gimli, `gimli`) run alongside: your tests, lint and typecheck, from
 `gimli.commands` in `rules.json`:
@@ -135,6 +183,7 @@ why.
 }
 ```
 
+- **They run only after you confirm the file.** `gimli.commands` waits for `/council trust` (see [Trusting a project's rules file](#trusting-a-projects-rules-file)); until then a big operation is refused with "not run: the rules file is not trusted".
 - **Only these commands run.** They run by argument vector with no shell, in the project root (with several repositories under one root, in each repository's own directory), and nothing comes from Claude or the call. `rules.json` is a protected path, so Claude can't add a command without asking you.
 - **Pass or fail by exit code.** A failure, a timeout or a command that can't start is a block. Claude gets the check's last 20 lines (redacted) so it can fix the cause, and for a command that can't start, the error (a missing program, say; redacted); the audit log keeps none of them.
 - **Each command has its own timeout:** 120 s unless `timeoutMs` says otherwise, at most 600 s. It runs outside the reviewers' deadline, so a council can take as long as the longer of the two.
@@ -196,6 +245,8 @@ Put project overrides in `.claude/council-of-elrond/rules.json`:
 - **Overrides win.** A matching project rule decides before the shipped rules.
 - **Two things can't be lowered.** No project rule goes below a shipped block rule or a protected path, and block rules can't be disabled.
 - **Lists only grow.** Lists add to the shipped ones.
+- **Some settings wait for you.** Until you confirm the file with `/council trust`, its allow and review rules, disabled rules, models, patterns, allowlist and checks are ignored ([Trusting a project's rules file](#trusting-a-projects-rules-file)).
+- **A project rule's reason is the project's text.** Reviewers see it inside a data block under a lead-in that says so, not after "Flagged because", and the dialog shows it after the `|` bar; either way on one line of at most 200 characters.
 
 **A broken file is ignored whole.** The shipped rules stay in force, and the errors are listed by
 field in the transcript.
@@ -207,6 +258,63 @@ the session root. When the session root is the parent of several repositories, e
 directly below it has its own, at its own top (see the next section). No other depth counts: a
 file in an arbitrary subfolder is never read, so a planted file cannot set rules for the calls
 beneath it.
+
+### Trusting a project's rules file
+
+A rules file arrives with a cloned repository, so what it holds is not yours until you have read
+it. The settings that can only make the gate stricter apply at once; the ones that loosen it or run
+code wait until you confirm that exact file.
+
+| Applies at once | Waits until you confirm the file |
+| :- | :- |
+| `block` and `ask` rules, `protectedPaths`, `protectedBranches`, `productionPatterns`, `bigOperations` | `allow` and `review` rules, `disableRules`, `models`, `gollum.patterns`, `gollum.allowlist`, `gimli.commands` |
+
+Until then the waiting settings are as if absent: an allow rule lets nothing through, a shipped
+rule you disabled still fires, the built-in models are used, your patterns are not applied, and the
+project checks are not run. A big operation whose checks are among them is refused with "not run:
+the rules file is not trusted", the same as a check that could not be started, so a check the
+project asked for is never dropped silently. A `review` rule waits because a project rule decides
+before a shipped one and can lower a shipped `ask` to a review.
+
+**Telling you.** Once per session per file the council says, in a transcript line and a toast, that
+the file has settings that are ignored, with counts and no text from the file. Where nothing draws
+the same notice reaches you through Claude, with counts only (see [Where nothing draws](#where-nothing-draws)).
+`/council rules` and `/council` show, for the file in scope, whether it is trusted (you confirmed this
+content), trusted by the option, or not trusted, with how many settings are ignored.
+
+**Confirming.**
+- `/council trust` lists, for each file in scope that has settings waiting (a session root that
+  holds several repositories has one per repository), the counts and each allow or review rule (id,
+  tools and patterns), each disabled rule, each model, each check's command line and each pattern's id,
+  one value per line after a `|` bar, redacted, cut to 300 characters, ten per kind and then "and N
+  more". Secrets allowlist entries are counted and never shown. Then the file's code, the first 8
+  characters of its hash, and the line to type.
+- `/council trust <code>` reads the files again and confirms the one whose hash starts with that
+  code. A code that fits nothing, or files with different content, confirms nothing and says so.
+  It then reloads and says what is now in force.
+- `/council untrust` takes the confirmation back for the files in scope.
+- Any change to the file, one byte or a copy at another path, makes it untrusted again; it is read
+  again at the next `/council reload` or session. `/council reload` itself never trusts anything.
+- Only a person's own command runs `trust`, as `off` does: not a plugin, another session, a
+  scheduled prompt, `claude -p` or the SDK.
+
+The confirmation is kept in the plugin's own store (a file under your Claude Code configuration
+folder), never in the repository, as a path and the SHA-256 of the exact text; at most 200 files. A
+store that cannot be read trusts nothing.
+
+**The mod's own writes.** When you answer "Add the rule" after "allow once", or add an allowlist
+entry, the file is written and its new content recorded as trusted, because you just confirmed that
+entry. If the file has settings waiting, the offer is not made (it would not take effect); run
+`/council trust` first.
+
+**For a host with nobody to confirm.** Set the option "Trust project rules files" to `always`
+(`trustProjectRules=always` in the plugin's configuration) and every rules file is trusted, as it was
+before this rule existed. Use it where the owner of the environment decides which repositories it
+opens (a cloud or CI setup), never for repositories you did not choose. It is the plugin's own
+configuration; no rules file can set it.
+
+**If you used a rules file before this rule.** Its waiting settings stop applying on upgrade, so a push
+with project checks is refused until you run `/council trust` and type the code, or set the option.
 
 ### Several repositories under one root
 
@@ -255,8 +363,10 @@ own write to a repository's file reloads that one. A repository created after th
 is seen after `/council reload`. A session root that has a `rules.json`, or is itself a repository,
 keeps the single set of rules it always had. The lookup is on for any root with neither, even one
 that holds no repository: a plain folder is then offered no allow rule or allowlist entry for calls
-outside a repository, so give it a `rules.json` (even `{"schemaVersion": 1}`) to get them back. The
-cloud guide has the setup:
+outside a repository, so give it a `rules.json` (even `{"schemaVersion": 1}`) to get them back. Each
+repository's file is trusted on its own ([Trusting a project's rules file](#trusting-a-projects-rules-file)):
+confirming one does not confirm another. The cloud guide has the setup, and the one option a cloud
+environment usually sets, `trustProjectRules=always`, since nobody there can confirm a file:
 [Cloud sessions](../../docs/INSTALL.md#cloud-sessions).
 
 ## Models
@@ -304,6 +414,7 @@ overrides the deadline.
 | Preview line limit | 80 |
 | Diff line limit | 200 |
 | Tool errors count as failed attempts | on |
+| Trust project rules files | `confirm`: the settings of a rules file that loosen the gate or run code wait for `/council trust`. `always`: every file is trusted, for a host whose owner controls the repositories it opens (see [Trusting a project's rules file](#trusting-a-projects-rules-file)) |
 
 ## Modes
 
@@ -357,19 +468,20 @@ use `--output-format stream-json`, where the lines arrive as `ui_log` messages.
 | `/council shadow on`, `/council shadow off` | Shadow mode for this session, over the `/config` setting. |
 | `/council log [n]` | The last *n* gated calls (default 10) from the audit log. |
 | `/council rules` | Every effective rule with its source (`shipped` or `project`), and the lists. |
-| `/council test "<command>"` | Which tier, rule, reviewer (and profile, and why it fell back to Gandalf if it did) and operation key a shell command would get. For a big operation it shows the full council's seats, model and checks. Runs nothing, so a merge is assumed to land on a protected branch. |
+| `/council test "<command>"` | Which tier, rule, reviewer (and profile, and why it fell back to Gandalf if it did) and operation key a shell command would get. For a big operation it shows the full council's seats, model and checks. Runs nothing, so a merge is assumed to land on a protected branch and a force push of the current branch is asked about (its branch is not read). |
 | `/council model [<member> <model> [--save]]` | Lists each slot's model and where it came from, or switches one for this session (`default` clears the switch). `--save` also writes the `/config` row when the model is one of its picker values. |
-| `/council reload` | Reads `rules.json` again (every repository's, when the session root holds several). |
+| `/council trust`, `/council trust <code>`, `/council untrust` | Lists what a rules file with settings that wait would enable, with its code; confirms the file whose code you type, as it stands now; removes the confirmation. See [Trusting a project's rules file](#trusting-a-projects-rules-file). |
+| `/council reload` | Reads `rules.json` again (every repository's, when the session root holds several). It never trusts a file. |
 | `/council report` | A summary of the audit log, rotated files included (see below). |
 | `/council debate` | Opens the [debate pane](#debate-pane-and-council-check) at any width (where nothing draws, prints its rows as transcript lines). |
 
-**`off`, `shadow on` and `model` only run when a person types them.** They loosen the gate (bypass,
-reviewers that never refuse, a different reviewing model), so a command that arrives from a plugin,
+**`off`, `shadow on`, `model` and `trust` only run when a person types them.** They loosen the gate (bypass,
+reviewers that never refuse, a different reviewing model, a project file's settings), so a command that arrives from a plugin,
 another Claude session or a scheduled prompt is refused with one line and changes nothing. Typing
 them at the prompt (the cloud web client included) or through the Remote Control bridge works.
-`claude -p` and the SDK are not a person, so those three are refused there; set them in `/config` or
+`claude -p` and the SDK are not a person, so those four are refused there; set them in `/config` or
 the plugin's options instead. `on`, `shadow off`, the `model` listing, `reload` and the rest answer
-from any origin.
+from any origin (`untrust` too: it only tightens).
 
 ### `/council report`
 
@@ -412,6 +524,7 @@ attached, nothing changes and Claude reads none of it.
   shows an exact-string allowlist entry as `(an exact string, not shown)` instead of its first three
   characters. (A command does not start a reply by itself: Claude repeats the lines when you next
   write to it, for example "go on".)
+- **A notice when a project rules file has settings waiting for your confirmation**, once per file, with counts only (nothing from the file), telling Claude to tell you and how: run `/council trust` in a terminal, or set the option "Trust project rules files" to `always` for a host you control. `/council trust` itself prints to the transcript lines, which are not shown here, so this is not a place to confirm.
 - **A notice at the start of the session**, saying the council is active, that a call needing your
   approval is refused here with the reason, and that Claude should tell you which call was refused
   and why.
@@ -423,7 +536,7 @@ attached, nothing changes and Claude reads none of it.
 **What never goes through Claude:** the read-only preview and any secrets finding (its label, its
 snippet and the secret), a diff, the call's own text or what a write would put in a file, a
 reviewer's reason or failure, and every other subcommand (`log`, `off`, `on`, `shadow`, `model`,
-`models`, `reload`, `debate`). Only a person's own command is answered this way: one that arrives
+`models`, `trust`, `untrust`, `reload`, `debate`). Only a person's own command is answered this way: one that arrives
 from a plugin, another Claude session, a scheduled prompt, `claude -p` or the SDK gets nothing
 back, so Claude cannot probe how a command would be classified.
 
@@ -509,7 +622,7 @@ reviewer and to you. The commands come from a table in the mod; the call's targe
 data, and the proposed command never runs.
 
 - **Deletes** (`rm`, `find -delete`): what each target is, and a folder's entries (no process).
-- **`git push`:** the current branch, the remote's URL (redacted) and the commits it would send. When the remote does not have the branch yet, the commits are shown against the remote's default branch (`<remote>/HEAD`).
+- **`git push`:** the current branch, the remote's URL (redacted) and, for each refspec the push names (the first three), the commits it would send: `<remote>/<destination>..<source>` from the refspec's own source, so `git push origin other:main` shows `origin/main..other` and `git push origin a b` shows both, never the checked-out branch's commits unless a refspec names `HEAD`. A push that names no refspec sends the current branch (`@{upstream}..HEAD`). A delete (`:old`, `--delete`) sends no commits and shows none. When the remote does not have the branch yet, the commits are shown against the remote's default branch (`<remote>/HEAD`). What cannot be shown is said, in the preview and in a line the reviewers are given outside the preview: a source or destination that is not a plain ref name, no remote named as a plain name for a refspec to compare against, a range git could not read, or more than three refspecs.
 - **`git merge`:** the current branch and the commits it would bring in.
 - **`git reset`, `git rebase`, `git commit --amend`:** recent commits, marked with the remote branches that point at them, and uncommitted changes.
 - **Write, Edit:** the file's diff stat against `HEAD`, and whether git tracks it.
@@ -530,14 +643,18 @@ operation. A push keys on its remote and branch, and SQL on its database.
 - **Rounds:** after a reviewer refuses the same operation twice, further attempts come to you without another model call. Typing an instruction starts the rounds over.
 - **Failed attempts:** a refusal by a rule, a reviewer or the secrets scan, your "keep blocked" (or a dismissed question, or nobody to ask), your refusal at Claude Code's own permission prompt, and a gated call that ran and errored all count. Claude Code's own "Chat about this" counts like a dismissal. "Talk first" does not, nor does Claude Code denying a call on its own with nobody asked (in `claude -p`, or by a deny rule), nor an allowlist entry the mod could not write (the call stays blocked, but the failure is not Claude's).
 - **Lockout:** three failed attempts on one operation, or five on one kind of operation (say `git push` to any target), lock it out. Claude is told to stop retrying, tell you what failed and propose another approach.
-- A call that runs successfully clears its own operation. Everything resets when you send a new prompt (a `/council` command is not one).
+- **A command of several parts:** each gated part of a shell command (`rm -rf build; git push origin main`) is also counted as the operation it would be alone. A failed attempt counts on the whole command, on each part and on each part's kind; a review round on the whole command and on each part. A command is locked out when its whole operation or any part of it is, or when any kind in it is, and it comes to you without another model call when its whole operation or any part has used its rounds. Only the first eight gated parts of one command are counted this way, besides the command as a whole.
+- A call that runs successfully clears its own operation (for a command of several parts: the command as a whole; its parts' own counts and the per-kind counters stay). Likewise, typing an instruction gives the command as a whole its rounds back, not its parts. Everything resets when you send a new prompt (a `/council` command is not one).
   Only a person's prompt starts them over: in `claude -p` and SDK sessions they last until `/clear`.
 - **Cache:** a reviewer's approve is reused for the identical call until your next prompt. A block or revise never is. Any prompt that is not a person's (`claude -p`, the SDK, a task notification, a schedule) also clears the cache.
 
 ## Escalation
 
 When a call comes to you, the question shows the call (with secrets redacted), why it was gated,
-the read-only preview when there is one, and each reviewer's verdict. You can:
+the read-only preview when there is one, and each reviewer's verdict. A long call or preview is
+shown by its start and its end, with a line saying how much is not shown. Every line of the call
+and the preview starts with a gutter (`  | `) and has its control characters removed, so text in a
+command cannot pass for a line of the question, such as a reviewer's verdict or a heading. You can:
 
 - **Allow once** (themed: "Need: allow once"): the call runs, and still meets Claude Code's normal permission prompt, which then carries the line "Council: you allowed this once".
 - **Keep blocked** (themed: "Pass: keep blocked"): it is refused.
@@ -604,7 +721,7 @@ file with no lock between them, so their lines can interleave or one can overwri
 
 ## Expected token cost
 
-A review sends roughly 1,000–4,000 input tokens (checklist, the call or diff cut to its line limit,
+A review sends roughly 1,000–4,000 input tokens (checklist, the call or diff cut to its limit, both ends kept,
 the preview, your latest prompt) and receives roughly 100–300 output tokens, plus thinking on
 Sonnet, Opus and Fable at low effort. In a live check, small reviews took about 1,000 tokens each:
 a one-line file write (diffs, Sonnet) in 1.6 s, a `git tag` (git, Opus) in 2.8 s and a `psql -c`
@@ -621,19 +738,23 @@ current prices for the models you choose.
 
 Parsing is best effort, by pattern, and not a shell. The parser does unwrap function and `case`
 bodies, package and process wrappers, `$'…'` escapes and empty substitutions, so the command they
-hold is classified (0.5.0); the gaps that remain:
+hold is classified (0.5.0). Since then it also reads the wrappers that take a positional before the
+command (`chrt`, `taskset`, `setarch`), multi-call binaries (`busybox`, `toybox`), the runners
+`fakeroot`, `firejail`, `systemd-run`, `op run`, `doppler run` and `mise exec`, the command strings of
+`script -c`, `nix-shell --run`, `env -S` and the `tmux` subcommands that start a command, and the
+substitutions in an unquoted heredoc body. The gaps that remain:
 
-- **Variables and runtime expansions aren't resolved.** `rm -rf $DIR` has an unknown target, so review decides. `cd $X` followed by a relative recursive delete is treated as if `$X` were `/`. A protected file named only through a variable (`X=.env; cat $X`) is not recognised as protected.
+- **Variables and runtime expansions aren't resolved.** `rm -rf $DIR` has an unknown target, so review decides. A variable or substitution as the program itself is reviewed, but what it expands to is not known, so the command it would run is not classified. `cd $X` followed by a relative recursive delete is treated as if `$X` were `/`. A protected file named only through a variable (`X=.env; cat $X`) is not recognised as protected.
 - **A `cd` inside a subshell or an inline script isn't tracked.** `(cd / && rm -rf *)` and `bash -c 'cd / && rm -rf *'` resolve the target against the project root, so they are review rather than block. A `cd` in the top-level command is tracked.
-- **Code inside interpreters isn't parsed.** `python -c "shutil.rmtree('/')"` is review (script execution); the reviewer sees the code, but no rule reads it.
+- **Code inside interpreters isn't parsed.** `python -c "shutil.rmtree('/')"` is review (script execution); the reviewer sees the code, but no rule reads it. The same holds for code fed on standard input and for a script file's contents.
 - **Encoded or downloaded payloads** (`base64 -d | sh`, `curl | sh`) are caught only as "piped into a shell" (review).
 - **Shell symbolic links aren't resolved.** File-tool paths are resolved to their real path; paths in shell commands are not.
 - **Two-sided glob intersection isn't computed.** A glob that names a protected file directly (`cat .en*`) is caught, but a glob with a wildcard in a middle segment against a protected `**` glob (`cat .github/*/ci.yml`) may not be.
-- **Not every program that changes things is named.** The shipped rules cover the common ones; a cloud or database CLI, an HTTP write or an interpreter route they don't list may pass. Add a project rule, or propose a default.
+- **Not every program that changes things is named.** The shipped rules cover the common ones; a cloud or database CLI, an HTTP write, an interpreter route or a command runner they don't list may pass. A listed runner is read through a table of its options: an option the table does not know is read as taking a value, and the call is reviewed (`shell-runner-unresolved`). Add a project rule, or propose a default.
 - **Alternating verbs on one target are separate operations.** `rm build`, `trash build`, `find build -delete` and a script that deletes it each get their own rounds and their own failed attempts, since the key starts with the verb. Three refusals of `rm` do not lock out the fourth try with `trash`; the per-kind counter catches only retries of the same verb.
 - **A `.sql` file's content isn't read by the block rules.** The database reviewer reads a `.sql` file a command names inside the project (`psql -h prod-db -f drop.sql`), but the rules classify the command without opening any file, so a destructive file run against production is reviewed, not blocked. Put a project rule on the command if a file must never run against a database.
 - **POSIX only:** no Windows paths or PowerShell parsing. Windows is unsupported ([docs/INSTALL.md](../../docs/INSTALL.md)).
-- **Long commands aren't parsed.** Commands longer than 20,000 characters, or nested more than four levels deep, go to review.
+- **Long commands aren't parsed.** Commands longer than 20,000 characters, or nested more than four levels deep, go to review; and a command longer than its reviewer reads is never approved by a model alone (see [Long input](#long-input)).
 
 ## What it does not protect against
 
@@ -642,7 +763,7 @@ hold is classified (0.5.0); the gaps that remain:
 - **Bypass.** While `/council off` is on, every gated call passes, block-tier calls and the secrets scan included, until `/council on` or the session ends.
 - **Diffs are built from the call, not from git.** The diff reviewer sees the change the call describes against the file as it stands when the hook runs; a file over 4 MiB, or one it can't read, is shown as the call's own text only, and the prompt says so.
 - **The project checks run your project's code.** Claude can edit the tests and scripts they run (file edits go to the diff reviewer, not to you), so a passing check is only as good as the code it runs. They run as you, with your environment.
-- **A push with no range to read.** For a branch the remote doesn't have yet, the range is read against the remote's default branch, which needs `<remote>/HEAD`: `git clone` sets it, `git remote add` does not (`git remote set-head origin -a` sets it). Without it, or for a push that names no remote, the diff reviewer sits out of that council and the preview shows no commits.
+- **A push with no range to read.** For a branch the remote doesn't have yet, the range is read against the remote's default branch, which needs `<remote>/HEAD`: `git clone` sets it, `git remote add` does not (`git remote set-head origin -a` sets it). Without it, or for a push that names no remote, the diff reviewer sits out of that council and the preview shows no commits. The same goes for a refspec the mod cannot name safely (a source or destination with spaces, `..` or a wildcard): its commits are not shown, and the reviewers are told so. A push of `--all`, `--mirror` or `--tags` still shows the current branch's commits, not every ref it sends.
 - **Git pointed elsewhere.** For a push or merge that runs git in another repository (`git -C`, `GIT_DIR=`, a `cd` out of the project), the mod does not read that repository: the preview shows no commits, the diff reviewer sits out of the council, and a merge counts as one into a protected branch.
 - **The database reviewer sees only the SQL it can find**: inline `-c`/`-e` (and `sqlite3`'s `-cmd` and its statement after the database file), heredocs, and `.sql` files named in the command and inside the project. A migration tool's own migration files (`prisma migrate deploy`) are not looked up.
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.
@@ -651,7 +772,7 @@ hold is classified (0.5.0); the gaps that remain:
 - **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`), an identifier without a digit and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through the scan (redaction still hides it).
 - **Two sessions in one project share one audit log without a lock.** Claude Code's file access has none, so lines can interleave or be lost; the report skips lines it cannot parse.
 - **Several repositories: a command too long or too complex to parse** names no `cd` or path, so it is classified against the repository of the session's working directory only (it is reviewed at least). Two repositories' checks with the same name show under one name in the debate pane.
-- **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb. A key names the verb and its targets, not the wording: a SQL client's inline statement, the text an `echo` writes to a file and the value of a push option are not part of it.
+- **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb. A command with more than eight gated parts is counted by the whole command and its first eight parts. A key names the verb and its targets, not the wording: a SQL client's inline statement, the text an `echo` writes to a file and the value of a push option are not part of it.
 - A hook that overruns its time limit. The engine may run the call; Elrond refuses rather than pass with its budget nearly spent, but it can't act once it has run out.
 
 ## Adding a member

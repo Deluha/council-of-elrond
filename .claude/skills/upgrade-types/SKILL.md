@@ -1,6 +1,6 @@
 ---
 name: upgrade-types
-description: Regenerate the vendored Claude Code API types (mods/types/claude-code.d.ts) after a Claude Code update, measure the drift against what the mod calls, re-verify the wording read from the binary, and record it. Use when `claude --version` differs from the version at the top of DESIGN.md.
+description: Regenerate the vendored Claude Code API types (mods/types/claude-code.d.ts) after a Claude Code update, measure the drift against what the mod calls, re-verify the wording read from the binary, and record it. Use monthly and before a release (ROADMAP decision D10), not whenever `claude --version` differs from the version at the top of DESIGN.md; CI stays on its pin until this skill moves it.
 ---
 
 # Upgrade the vendored types
@@ -15,7 +15,9 @@ claude --version
 head -12 mods/council-of-elrond/DESIGN.md | grep -i "targets claude code"
 ```
 
-If they match, stop: nothing to do.
+If they match, stop: nothing to do. If the installed build is newer and no upgrade is due (not
+monthly, not before a release), stop too: a newer build is expected and is not a reason to upgrade
+mid-brief.
 
 ## 2. Regenerate
 
@@ -71,7 +73,8 @@ probe (see the `live-check` skill) that refuses in `-p` to confirm the automatic
 ## 6. Re-probe behaviours the tests can't see
 
 One headless probe each, in a throwaway repo, for the facts in DESIGN.md §1 and §4 that came from
-live probes: a hook overrunning its budget still runs `next(e)`; `$.ui.ask` rejects in `-p`;
+live probes: a hook overrunning its budget is cut off (from 2.1.299: its `.catch` is asked with
+`kind` `timeout`, a later `next(e)` is refused and the call is refused); `$.ui.ask` rejects in `-p`;
 `stream.return()` kills a spawned check; `/council` output arrives as `ui_log` in stream-json.
 Skip any whose cost outweighs the risk, and say which you skipped.
 
@@ -80,4 +83,5 @@ Skip any whose cost outweighs the risk, and say which you skipped.
 - DESIGN.md header: the new version and the drift in one sentence.
 - ROADMAP.md "Resuming": the version line.
 - CHANGELOG.md "Unreleased": "Types regenerated for Claude Code X.Y.Z; drift: …".
-- CI (`.github/workflows/ci.yml`): if it was pinned to the old version, unpin or move the pin.
+- CI (`.github/workflows/ci.yml` and `.github/workflows/release.yml`): move the pin in both
+  workflows to the new version (decision D10).

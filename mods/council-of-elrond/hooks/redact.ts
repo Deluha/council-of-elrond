@@ -55,8 +55,10 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     label: 'secret',
     // A compound name (`DB_PASSWORD`, `PGPASSWORD`, `dbPassword`) is a name with
     // a word-character prefix, capped at 64 so a long run stays linear. Quotes may be JSON-escaped (`\"`); an already
-    // redacted value is left alone.
-    re: /\b([A-Za-z0-9_]{0,64}(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret)\\?["']?\s*[=:]\s*\\?["']?)(?!\[REDACTED)([^\s"'&;,\\]{6,})/gi,
+    // redacted value is left alone. The value is a quoted run (spaces allowed, up to 1000 characters, closed by the
+    // same quote) or a bare word of 4 or more characters. The quoted run is tried first, so a passphrase is not
+    // cut at its first space. Each branch scans forward from one start and stops at a quote, so it stays linear.
+    re: /\b([A-Za-z0-9_]{0,64}(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret)\\?["']?\s*[=:]\s*\\?["']?)(?!\[REDACTED)((?<=")[^"\\\n]{4,1000}(?=\\?")|(?<=')[^'\\\n]{4,1000}(?=\\?')|[^\s"'&;,\\]{4,})/gi,
     keep: 1,
   },
   { id: 'jwt', level: 'low', label: 'JWT', re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g },
@@ -64,7 +66,9 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     id: 'authorization-header',
     level: 'low',
     label: 'authorization header',
-    re: /\b(authorization\\?["']?\s*:\s*\\?["']?(?:basic|bearer)\s+)(?!\[REDACTED)([A-Za-z0-9+/._~-]{8,}=*)/gi,
+    // `Authorization: Basic|Bearer|Token|ApiKey <value>` and the `X-Api-Key` and `X-Auth-Token` headers. The two
+    // newer schemes allow only a space or tab before the value, so a line break never reaches the next line.
+    re: /\b((?:authorization\\?["']?\s*:\s*\\?["']?(?:(?:basic|bearer)\s+|(?:token|apikey)[ \t]+)|x-(?:api-key|auth-token)\\?["']?\s*:\s*\\?["']?))(?!\[REDACTED)([A-Za-z0-9+/._~-]{8,}=*)/gi,
     keep: 1,
   },
   {
@@ -73,7 +77,20 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     level: 'low',
     label: 'password',
     // Case-sensitive on purpose: `-P3306` is the port, never the password.
-    re: /\b((?:mysql|mysqldump|mysqladmin|mariadb)\b[^\n|;&]{0,200}?\s-p)(?!\[REDACTED)([^\s'"]{3,})/g,
+    // `-pVALUE` (attached), `--password=VALUE` and `--password VALUE`. A spaced `-p` is not here: in mysql it
+    // prompts, and the next word is the database name. A spaced `--password` value never starts with a dash, a
+    // redirect or a pipe, and only a space or tab separates it.
+    re: /\b((?:mysql|mysqldump|mysqladmin|mariadb)\b[^\n|;&]{0,200}?\s(?:-p|--password=|--password[ \t]+(?=[^\s'"<>|&;-])))(?!\[REDACTED)([^\s'"]{3,})/g,
+    keep: 1,
+  },
+  {
+    id: 'curl-user-password',
+    kind: 'password',
+    level: 'low',
+    label: 'password',
+    // `curl -u user:PASSWORD`, `--user user:PASSWORD` and `--user=user:PASSWORD`. The user is capped at 64
+    // characters and the look back to `curl` at 200, so each start costs a bounded amount.
+    re: /\b(curl\b[^\n|;&]{0,200}?\s(?:-u[ \t]*|--user(?:[ \t]+|=))["']?[^\s:'"]{0,64}:)(?!\[REDACTED)([^\s'"]{3,})/g,
     keep: 1,
   },
   {
@@ -100,16 +117,43 @@ function entropyOf(text: string): number {
 
 export const LONG_TOKEN = /[A-Za-z0-9+/_-]{40,}={0,2}/g
 
+const NAME = '[A-Za-z_][A-Za-z0-9_]*'
+
+/** At least 8 letters and digits, once spaces, dashes and underscores are dropped, with both a letter and a digit. */
+const looksLiteral = (text: string): boolean => {
+  const bare = text.replace(/[ _-]/g, '')
+  return bare.length >= 8 && /[A-Za-z]/.test(bare) && /[0-9]/.test(bare)
+}
+
+const VARIABLE = new RegExp(`^\\$(?:${NAME}|\\{${NAME}(?::?[-=+?](?:[A-Za-z_./-]*|\\$${NAME}))?\\})$`)
+const COMMAND_SUBSTITUTION = /^\$\([^()]*\)$/
+const PERCENT_VARIABLE = new RegExp(`^%(?:${NAME}%|\\(${NAME}\\)[sdr])$`)
+const ANGLE_WORDS = /^<([A-Za-z0-9 _-]+)>$/
+const BRACE_NAME = /^\{([A-Za-z_][A-Za-z0-9_.-]*)\}$/
+const TEMPLATE = /^\{\{[^{}]*\}\}$/
+const CALL = /^[A-Za-z_$][A-Za-z_$.]*\((?:[A-Za-z_$.]*\)?|[A-Za-z_$][A-Za-z0-9_$.]*\))$/
+
+/**
+ * A value that is wholly a reference or a template and nothing else: `$NAME`,
+ * `${NAME}` (with a `:-default`), `$(...)`, `%NAME%`, `<your-api-key>`,
+ * `{name}`, `{{ secrets.TOKEN }}`, a call such as `getToken()` and a mask of
+ * `*`. A value that only starts like one (`$ecret123!`, `Sup3r(Secret)9`,
+ * `<realkey12345>`) is not one.
+ */
+const isWholeReference = (value: string): boolean => {
+  if (VARIABLE.test(value) || COMMAND_SUBSTITUTION.test(value) || PERCENT_VARIABLE.test(value) || TEMPLATE.test(value) || /^\*+$/.test(value)) return true
+  const words = ANGLE_WORDS.exec(value) ?? BRACE_NAME.exec(value)
+  if (words !== null) return !looksLiteral(words[1] ?? '')
+  return CALL.test(value) && !looksLiteral(value.slice(value.indexOf('(') + 1))
+}
+
 /**
  * The scan's test for a low-confidence value that is plainly not a secret: a
- * variable or expression (`$TOKEN`, `process.env.X`, `getToken()`), a type
+ * whole variable, template or call (`$TOKEN`, `getToken()`), a type
  * (`string`), a keyword, or an identifier without a digit.
  */
 export const isPlaceholder = (value: string): boolean =>
-  /^[$%<{(*[]/.test(value) ||
-  value.includes('(') ||
-  (/^[A-Za-z_][A-Za-z0-9_.]*$/.test(value) && !/[0-9]/.test(value)) ||
-  /^(.)\1+$/.test(value)
+  isWholeReference(value) || (/^[A-Za-z_][A-Za-z0-9_.]*$/.test(value) && !/[0-9]/.test(value)) || /^(.)\1+$/.test(value)
 
 const TYPE_WORDS =
   /^(?:string|number|boolean|bigint|symbol|object|any|unknown|never|void|null|undefined|none|str|int|float|bool|bytes|true|false)(?:\[\]|\?)?$/i
@@ -121,8 +165,7 @@ const TYPE_WORDS =
  * though the scan does not flag it.
  */
 export const isCodeReference = (value: string): boolean =>
-  /^[$%<{(*[]/.test(value) ||
-  value.includes('(') ||
+  isWholeReference(value) ||
   /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+$/.test(value) ||
   /^[A-Za-z_][A-Za-z0-9_.]*(?:\[(?:\d{1,4}|[A-Za-z_][A-Za-z0-9_.]*)\])+$/.test(value) ||
   TYPE_WORDS.test(value) ||

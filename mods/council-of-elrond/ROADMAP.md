@@ -3,50 +3,69 @@
 The plan from here to 1.0, written so a new dev session can pick up the next brief cold.
 
 - **Where this came from:** the November review, [docs/REVIEW-2026-11.md](../../docs/REVIEW-2026-11.md)
-  (findings R1 to P2, ideas 7.1 to 7.7). The maintainer accepted its roadmap, decisions and ideas on
-  2026-11-13; they are recorded under "Decisions" below and are binding.
-- **What was built before this:** Stages 0 to 6, the final deliverables, the hardening briefs H1 to
-  H3 and the cloud items C1 to C6 are done. Their task lists and reasoning are kept in
-  [docs/history/ROADMAP-v1.md](../../docs/history/ROADMAP-v1.md); nothing in that file is open work.
+  (findings R1 to P2, ideas 7.1 to 7.7), and an independent review of it,
+  [docs/REVIEW-2026-11-INDEPENDENT.md](../../docs/REVIEW-2026-11-INDEPENDENT.md). The maintainer
+  accepted both on 2026-11-13; they are recorded under "Decisions" and "Amendments after the
+  independent review" below and are binding.
+- **What was built before this:** Stages 0 to 6, the final deliverables, the v1 hardening briefs H1
+  to H3 and the v1 cloud items C1 to C5 are done, and so is C6's code. C6's cloud check and C4's
+  cloud run are pending (M5). The task lists and reasoning are kept in
+  [docs/history/ROADMAP-v1.md](../../docs/history/ROADMAP-v1.md); the decisions in that file that
+  stay binding are listed under "Carried over from v1" below, and its open items are placed in the
+  milestones and in "Later".
 - **The spec and the design:** [SPEC.md](./SPEC.md) (§ numbers refer to it) and
   [DESIGN.md](./DESIGN.md). Where they differ, this file and DESIGN.md win over the spec.
+- **Ids:** a finding of the November review is always written with the word: "finding A2",
+  "finding D3", "finding H1". "Decision D3" is a decision in the table below. "Approved decision 4"
+  is one in "Approved decisions (after the spec)". "MA1" to "MA7" are maintainer actions and "AM1" to
+  "AM9" the amendments. "v1 brief H1" is a brief in the v1 roadmap. "(was M3.6)" on a brief says
+  where it stood in the first v2 numbering.
 
 ## Status
 
 | Milestone | Goal | Status |
 | :- | :- | :- |
-| M0 | Green on the pinned build, CI that cannot break by itself, the development process | Not started |
-| M1 | First real release, 0.6.0, installable with one line | Not started |
-| M2 | Measure the reviewers, the cost and the friction | Not started |
-| M3 | Right-size the gate | Not started |
-| M4 | Modular core: `register.ts` becomes wiring | Not started |
-| M5 | Every host: headless, cloud, desktop, mobile, VS Code | Not started |
-| M6 | Documents and theme | Not started |
+| M0 | Green and current: the pinned build, the types, a scripted probe suite, the canary | In progress |
+| M1 | Tightenings and the first release, 0.6.0, installable with one line | Not started |
+| M2 | Measure the reviewers and write down the policy | Not started |
+| M3 | Mechanical refactor: `register.ts` loses its effects | Not started |
+| M4 | Right-size the gate | Not started |
+| M5 | Hosts: headless, cloud, an honest support matrix | Not started |
+| M6 | Documents | Not started |
 | M7 | 1.0 | Not started |
 | Later | After 1.0 | Backlog |
 
 Each brief below has a checkbox. The pull request that finishes a brief ticks it and, when it is
 the milestone's last, updates this table.
 
+**Done outside the original briefs:** the hardening pull request that followed the independent
+review: the call fingerprint, the classifier's shell forms, self-protection of the mod's own
+plugin, the input the reviewers and the dialog see, and redaction. Every change in it tightens;
+the decisions are in DESIGN.md §15. Findings and classes:
+[docs/REVIEW-2026-11-INDEPENDENT.md](../../docs/REVIEW-2026-11-INDEPENDENT.md).
+
 ## How a dev session works
 
 1. **Read** `CLAUDE.md`, then this file down to the first unticked brief. Read the review finding
    or idea the brief names; it holds the evidence and the reasoning.
-2. **Check the ground.** `claude --version` against the version DESIGN.md's header names. If the
-   session says the council-of-elrond plugin is active, stop: the mod must never be loaded into a
-   session that develops it, and in such a session it also refuses edits to the workflow files.
-   Tell the maintainer (maintainer action A1).
+2. **Check the ground.** `claude --version` against the version DESIGN.md's header names: a newer
+   installed build is expected and is not a reason to upgrade mid-brief ("Resuming" below). Then
+   check the mod is not loaded into this session: `/council` must not respond, and
+   `claude plugin list` must not list `council-of-elrond`. If either does, stop: the mod must never
+   be loaded into a session that develops it, and in such a session it also refuses edits to the
+   workflow files. Tell the maintainer (maintainer action MA1).
 3. **One brief, one branch, one pull request.** Briefs inside a milestone run in the order given
    unless they are marked independent. Do not start the next milestone unasked.
 4. **The loop** (CLAUDE.md, "Orchestration"): the orchestrator writes the brief; `implementer`
-   runs it; the checks run; the orchestrator reads the diff and runs the gates itself.
+   runs it; `reader` pre-checks the diff for what no CI check catches; the checks run; the
+   orchestrator reads the diff and runs the gates itself.
 5. **Tightening and loosening.** A brief marked **loosens** is already approved for exactly what
    it says. Anything beyond it that loosens goes to the maintainer before it is committed.
    Anything that tightens is decided, recorded in DESIGN.md and reported.
 6. **At the end of a milestone:** the checkpoint summary (`/checkpoint`), then wait.
 
 Commands, the hard-won API facts and the codebase conventions are in "Resuming: what to know
-first" below. They were carried over unchanged; M0.4 re-probes the facts on the current build.
+first" below. They were carried over from v1; M0.4 turns the re-probe of the facts into a script.
 
 ## Maintainer actions
 
@@ -54,50 +73,69 @@ Things only the maintainer can do. A session that needs one stops and asks.
 
 | Id | Action | Needed by |
 | :- | :- | :- |
-| A1 | A cloud environment for this repository whose setup script does **not** install the mod (the review session ran with it loaded: finding I4) | M0, every later session |
-| A2 | Create the `automation-failure` label; make the new CI jobs required checks on `main` | M0.7 |
-| A3 | The shortened terminal check on the release build (the script M1.1 produces) | M1 |
-| A4 | Push the release tag (`claude plugin tag mods/council-of-elrond --push`) | M1 |
-| A5 | Approve the eval run's token spend, and run the cloud half of the shadow week | M2 |
-| A6 | A square PNG icon, 512 to 2048 px (or approve a generated one) | M1.4 |
-| A7 | Live checks on desktop, mobile and VS Code | M5.3 |
+| MA1 | A cloud environment for this repository whose setup script does **not** install the mod (the review session ran with it loaded: finding I4) | M0, every later session |
+| MA2 | Create the `automation-failure` label (making the CI jobs required checks on `main` waits for the workflow split, Later M0.8) | M0.5 |
+| MA3 | The shortened terminal check on the release build (the script M1.4 produces) | M1 |
+| MA4 | Push the release tag (`claude plugin tag mods/council-of-elrond --push`) | M1 |
+| MA5 | Approve the eval run's token spend, and run the cloud half of the shadow week | M2 |
+| MA6 | A square PNG icon, 512 to 2048 px (or approve a generated one) | Later (M1.4's remainder) |
+| MA7 | Live checks on desktop, mobile and VS Code | M5.2 (a matrix cell may say "untested") |
 
 ## Decisions (accepted 2026-11-13)
 
 "I accept all your suggestions": the review's decisions 1 to 11 are settled as recommended. They
-join the approved decisions further down, and win where the two differ.
+join the approved decisions further down, and win where the two differ. The amendments in the next
+section win over this table where they differ.
 
 | # | Decision | Settled as |
 | :- | :- | :- |
-| D1 | Order and freeze | M0 to M7 in this order. No feature work outside these briefs until M3 is done. |
-| D2 | The default policy | Presets ship in M3: `observe`, `balanced`, `strict`. `strict` is today's behaviour. `balanced` (ordinary edits pass; sensitive files are reviewed per edit; the diff reviewer sits at `git commit`) becomes the default once M2's numbers are in and M3's regression table shows exactly the intended changes. **Loosens.** |
-| D3 | The four loosening proposals | All approved, each as its own brief with its own tests: shell reads of protected paths match the file tools (F1); recursive delete under the system temp directory asks instead of blocking (F3); the production rule judges what runs a client, not text written to a file (F4); "nobody can be asked" is not a failed attempt (F5). **Loosens.** |
-| D4 | The coverage list (review §2.5) | Every category is added in M3 as review or ask; none waits. Agent-control files become protected paths. Tightens. |
-| D5 | Release | `main` is released as one 0.6.0 (the maintainer's decision of 2026-10-22) after a **shortened** terminal check: whatever a mounted-tree or headless test can cover moves into tests first (M1.1). |
-| D6 | The refactor | Before 1.0, as M4. This replaces "after 1.0" in the v1 roadmap. |
-| D7 | `tool.check` | One probe of an ask-only hook is allowed (M5.2). SPEC §7 and the CI step stay as they are until the probe's result is decided on. |
-| D8 | Headless prompts | An `sdk` prompt sets the reviewers' "latest request" and resets rounds, failed attempts and lockouts, as a person's prompt does. It still cannot run the subcommands that loosen the gate, and still cannot give a chat approval. **Loosens** (the reset). |
-| D9 | Theme reach | Text relayed through Claude where nothing draws may carry the member's themed name and one line of voice, in themed mode only. Reviewer prompts, refusal reasons and the audit log stay plain. This amends approved decision 1. |
+| D1 | Order and freeze | M0 to M7 in the order of AM9. No feature work outside these briefs until M3 is done; AM1 extends the freeze to 1.0. |
+| D2 | The default policy | Presets `observe`, `balanced`, `strict`, shipped in M4. `strict` is today's behaviour. AM2 amends the rest: `balanced` is opt-in, and the default changes only on the pre-registered thresholds and a separate decision. |
+| D3 | The four loosening proposals | Approved, each as its own brief with its own tests: shell reads of protected paths match the file tools (finding F1); recursive delete under the system temp directory asks instead of blocking (finding F3); the production rule judges what runs a client, not text written to a file (finding F4); "nobody can be asked" is not a failed attempt (finding F5). **Loosens.** AM4 suspends the finding F5 part; AM5 confirms the other three. |
+| D4 | The coverage list (review §2.5) | Every category is added as review or ask. Agent-control files become protected paths. Tightens. AM7 moves the unambiguous categories into M1, and `make` and `npm run` wait for M2's data. |
+| D5 | Release | `main` is released as one 0.6.0 (the maintainer's decision of 2026-10-22) after a **shortened** terminal check: whatever a mounted-tree or headless test can cover moves into tests first (M1.4). |
+| D6 | The refactor | Before 1.0, as M3, moves only. This replaces "after 1.0" in the v1 roadmap. The reducer (was M4.3) is Later. |
+| D7 | `tool.check` | One probe of an ask-only hook is allowed (was M5.2, now Later). SPEC §7 and the CI step stay as they are until the probe's result is decided on. |
+| D8 | Headless prompts | An `sdk` prompt sets the reviewers' "latest request" (M5.1). It still cannot run the subcommands that loosen the gate, and still cannot give a chat approval. The reset of rounds, failed attempts and lockouts is suspended by AM4. |
+| D9 | Theme reach | Text relayed through Claude where nothing draws may carry the member's themed name and one line of voice, in themed mode only. Reviewer prompts, refusal reasons and the audit log stay plain. This amends approved decision 1. The theme pass itself (was M6.3) is Later. |
 | D10 | Vendored types | Kept in the repository. CI is pinned to the version DESIGN.md names; a scheduled job runs the latest build and reports. Upgrades run on a schedule (monthly, and before each release), not at every build. |
-| D11 | The ideas (review §7) | All accepted, placed as in the milestones below. Four are accepted in the limited form the review recommended: the model-callable check (7.1 c) only after the briefing section has shipped and been measured, and off by default; the snapshot member (7.4 d) writes only under the mod's own folder, size-capped, and is opt-in; the triage model (7.3 d) is opt-in and built only if M2 shows cost is the problem; across sessions (7.6 b) only a never-offer list and a suggestion to add a rule are remembered, never an approval. |
+| D11 | The ideas (review §7) | All accepted; those not in a milestone below are in Later. Four are accepted in the limited form the review recommended: the model-callable check (7.1 c) only after the briefing section has shipped and been measured, and off by default; the snapshot member (7.4 d) writes only under the mod's own folder, size-capped, and is opt-in; the triage model (7.3 d) is opt-in and built only if M2 shows cost is the problem; across sessions (7.6 b) only a never-offer list and a suggestion to add a rule are remembered, never an approval. |
 
 On the same day the maintainer also accepted the additions made after the review (its §8) and the
 recommendation on the item that was still open:
 
 | # | Decision | Settled as |
 | :- | :- | :- |
-| D12 | Another plugin's `tool.check` denial | Recognised as an automatic denial, like a deny rule: nobody was asked and the tool did not fail, so it is not a failed attempt (approved decision 12 already treats automatic denials this way). Brief M3.4. **Loosens.** |
-| D13 | The additions in the review's §8 | All in the briefs below: the re-probe of the API facts (M0.4), the borrowed process in full (M0.5 to M0.9), the new API to look at (M0.2, M5.4, M6.3) and the cleanups (M4.2). |
+| D12 | Another plugin's `tool.check` denial | Recognised as an automatic denial, like a deny rule: nobody was asked and the tool did not fail, so it is not a failed attempt (approved decision 12 already treats automatic denials this way). Brief: M4.6 (was M3.4). **Loosens.** AM4 suspends it until the lockout is decided as a whole. |
+| D13 | The additions in the review's §8 | The re-probe of the API facts (M0.4, now a script), the new API to look at (M0.2; the rest is Later), the cleanups (M3.2), and the borrowed process, which AM9 moves to Later except the canary (M0.5). |
 
 **Still open**, because it cannot be decided before its evidence exists:
 
-- What follows the M5.2 probe: keep the chat approval route, replace it with the engine's dialog,
-  or both. The probe's brief ends by bringing this to the maintainer.
+- What follows the probe of an ask-only `tool.check` (Later): keep the chat approval route, replace
+  it with the engine's dialog, or both. The probe's brief ends by bringing this to the maintainer.
 
-Also settled by the same acceptance: the development process borrowed from another, private project of the maintainer
-(M0.5 to M0.9). That project is proprietary; its **designs** are borrowed and every
-script and document here is written fresh. Nothing is copied from it, and nothing about its domain
-is named in this repository.
+Also settled by the same acceptance: the development process borrowed from another, private project
+of the maintainer. That project is proprietary; its **designs** are borrowed and every script and
+document here is written fresh. Nothing is copied from it, and nothing about its domain is named in
+this repository. AM9 moves most of it to Later.
+
+## Amendments after the independent review (accepted 2026-11-13)
+
+The maintainer accepted the recommendations of the independent review
+([docs/REVIEW-2026-11-INDEPENDENT.md](../../docs/REVIEW-2026-11-INDEPENDENT.md)); these amendments
+win over the decisions table above where they differ.
+
+| # | Amendment | Settled as |
+| :- | :- | :- |
+| AM1 | Freeze (amends D1) | Until 1.0 the freeze means no new command, option or configuration file beyond the briefs kept below. Briefs moved to "Later" are not exceptions. |
+| AM2 | The default policy (amends D2) | The presets ship in M4 (was M3) with `strict` as the default. `balanced` is opt-in. The default changes only if the pre-registered thresholds (AM3) are met, and then by a separate maintainer decision; it is not automatic. |
+| AM3 | Thresholds, written before M2 runs | (a) Wrong-approve rate: on cases labelled must-not-approve, each reviewer approves at most 2%, measured on at least 100 such cases per reviewer, each case run three times and counted as approved if any run approves. (b) The rules tier lets through none of the bypass-regression corpus. (c) The policy table changes only where a brief declared it. (d) `balanced` may become the default only if (a) to (c) hold and the shadow data shows that at least half of the reviews `strict` held on ordinary edits were of changes later committed, so that the commit-time review would have seen them. The numbers are the maintainer's to change, but only before M2's data is read. M2.4 no longer writes targets after the data; it reports against these. |
+| AM4 | The lockout (suspends the finding F5 part of D3, D8's reset, D12, and the M3.9 reset command) | These four changes to the retry brake are decided together in one brief (M4.6, rewritten), which first states what the lockout is for in each host (a person present; headless; cloud) and then brings one proposal to the maintainer. Until that is decided, approved decision 4 ("Nobody to ask: refuse, and it counts as a wipe") and DESIGN §14.3 stand as written. The parts of D8 that do not touch the brake (an `sdk` prompt sets the reviewers' "latest request") stay approved. |
+| AM5 | Findings F1, F3, F4 (confirms D3 in part) | Approved as before, each its own brief with its own tests, after the coverage tightenings. |
+| AM6 | Unlabelled gate changes | M3.1 (the briefing section, now Later) puts the protected list into the gated model's prompt against approved decision 1 and needs the maintainer's sign-off at its brief; M3.10's added reviewer context (Later) likewise (SPEC §12 says no transcript). M3.7 (user-level rules file, rule packs) and M4.4 (project-defined reviewers, a fourth model member) move to "Later"; SPEC §3's cap of three model members stands. A later reviewer must not be named "Boromir", which already names the proposer. |
+| AM7 | Tightenings first | Review §2.5's unambiguous categories (an unparsed tool is reviewed, agent-control files are protected paths, credential reads) move ahead of the release, as a brief in M1 (M1.1). `make` and `npm run` wait for M2's data. |
+| AM8 | Additions to 1.0 | A one-page threat model (who is defended against: a mistaken agent, a prompt-injected agent, a hostile repository; and what is out of scope): M1.2. A scripted headless probe suite run by the canary (a block rule refuses, a hook timeout fails closed, the denial wordings are still in the binary): M0.4 and M0.5, plus a one-line session-start notice when the host is newer than the last tested build: M0.6. A compatibility policy (the tested range and what happens outside it): M1.7. The policy table doubling as a bypass-regression corpus: M2.1. A trust rule for a repository-supplied rules file: M1.3. |
+| AM9 | Order | The milestones are re-ordered as below. |
 
 ---
 
@@ -107,346 +145,324 @@ Every brief lists: what to do, the files, what must not change, how it is accept
 finding or idea behind it (in docs/REVIEW-2026-11.md). Sizes: S is one implementer brief, M is two
 to four, L is a planned sequence. "Gate" says which way the brief moves the gate.
 
-### M0. Green, pinned, and a process that checks itself
+### M0. Green and current
 
 Goal: the three gates pass on a pinned Claude Code, `main` cannot go red without a commit, and the
-rules a reviewer has been checking by hand are checked by scripts. No behaviour change for users.
+facts about the host are checked by a script, not by hand. No behaviour change for users except
+one session-start line (M0.6).
 
-- [ ] **M0.1 Upgrade the types to the installed build** (S, neutral; R1, R2). Run `/upgrade-types`.
-  The vendored types are 2.1.322's; the three failing tests come from 2.1.323. Record the drift in
-  DESIGN.md as usual. Accepted when `tsc -p mods` passes against the new types.
-- [ ] **M0.2 The band on the new contract** (S, neutral; R1). From 2.1.323 the band above the prompt
-  stacks one row per plugin (`AbovePromptList`, `AbovePromptRow`) where a hook used to replace it.
-  Read both components' docs in the types, then re-decide and test three cases: a row while a full
-  council sits, no row when idle, and the survey case; honour `isCollapsed`, new on the band's
-  props in 2.1.322. Files: `hooks/register.ts` (the
-  `AbovePrompt` hook), `hooks/elrond/view.ts`, `tests/debate.test.ts`, `tests/view.test.ts`,
-  `tests/fixtures.ts`. Never weaken an assertion to get green: if the engine's row now always
-  shows, the tests say so. Accepted when all tests pass on the pinned build and DESIGN §11 records
-  the new behaviour.
-- [ ] **M0.3 Pin Claude Code in CI** (S, neutral; R3, D10). Both workflows install
-  `@anthropic-ai/claude-code@<the version DESIGN.md names>`; `/upgrade-types` gains a step that
-  bumps the pin, and one that re-checks whether `$.fs` has gained an append (the audit writer
-  rewrites the whole file for each line until it does: finding A7). Needs A1 (workflow files are protected paths where the mod is loaded).
-- [ ] **M0.4 Re-probe the hard-won facts** (M, neutral; finding A1). The review found fact 1 no
-  longer holds at validation time: a sibling module may take `$`, and so may a closure inside a
-  hook. Confirm it at run time under the test kit and headless (`/live-check`), then walk the other
-  thirteen facts and mark each "holds on <version>" or correct it. The last two type upgrades
-  carried their probes over unrun because a cloud session could not start a child `claude -p`;
-  say in `/upgrade-types` and `/live-check` where they can and cannot run. Accepted when every fact
-  carries the version it was last probed on.
-- [ ] **M0.5 A lean CLAUDE.md and one routing skill** (M, neutral; findings D2, D3 and
-  P2). CLAUDE.md keeps the contract only: what the project is, the hard rules in short
-  form with a pointer each, the ask-first list, and a budget (at most 90 lines and 8 KiB, checked
-  by M0.6). Everything else moves, unchanged in meaning, into a skill,
-  `.claude/skills/council-development/`:
-  - `SKILL.md`: a routing table, one row per task, naming the one file that holds its detail.
-  - `references/architecture.md` (the module map and layers), `references/conventions.md` (the
-    hard rules in full, each under a stable anchor), `references/api-facts.md` (the hard-won facts,
-    their single home from now on), `references/qa-and-ci.md` (every check, hook and workflow, and
-    the verify list), `references/recipes.md` (orchestration, the brief format, grep-before-coding,
-    the Implementation Decision format with a confidence label, and the rule that every
-    non-trivial diff is reviewed by an agent that did not write it).
-  - `references/workflows/`: one checklist per recurring task, each with Preconditions, Steps,
-    Verification, Docs to update and Ask first. To write now: `adding-a-member.md`,
-    `adding-a-shipped-rule.md`, `adding-a-secret-pattern.md`, `adding-a-subcommand.md`,
-    `adding-a-config-option.md`, `changing-the-pipeline.md`, `policy-change.md` (tightening and
-    loosening), `modularizing-a-module.md` (M4 follows it), `releasing.md`.
-  The existing skills (`checkpoint`, `live-check`, `upgrade-types`) stay and are routed from the
-  table. The ask-first list names what never changes without the maintainer: the block floor,
-  the shipped protected paths, anything that loosens, the verdict format, the audit record's
-  fields, the session state's shape, removing or renaming an option, and every decision in this
-  file. Accepted when each fact, rule and procedure has exactly one home and CLAUDE.md is inside
-  its budget.
-- [ ] **M0.6 Checks for the guidance and the documents** (M, neutral; D1, D3). Node scripts with no
-  dependencies under `scripts/`, each a pure function over explicit paths with its own tests
-  (`node --test`):
-  - `check-guidance.mjs`: every backticked repository path and `file.md#anchor` in CLAUDE.md, the
-    skill and the agent files resolves; CLAUDE.md is inside its budget; `SKILL.md` has valid
-    frontmatter and routes every reference and workflow file exactly once; a rule id has one
-    home; a bare `§n` with no document named fails.
-  - `check-facts.mjs` (with `--fix`): the Claude Code version, the mod version and the minimum
-    version are each stated from one source of truth (the types file's header, `plugin.json`, a
-    constant) and every document that states them agrees. Test counts and line counts come out of
-    the prose altogether.
-  - `check-docs-sync.mjs`: a change in a documented area also touches its document, or the commit
-    carries `[skip-docs]` on a line of its own. Areas, most specific first: `hooks/strings.ts`,
-    `plugin.json` `userConfig` and `hooks/elrond/commands.ts` need the user manual and
-    `CHANGELOG.md`; the rest of `hooks/` needs DESIGN.md, the manual, the changelog or the skill;
-    the workflow files need `qa-and-ci.md`; `.claude/agents/` needs `recipes.md`. Dependabot is
-    exempt for workflow files only. Two modes: `--staged <message file>` for the hook,
-    `--base <ref> --actor <login>` for CI. A git failure exits 2, never green.
-  Accepted when the three scripts pass on the repository and each has a test that fails when its
-  rule is broken.
-- [ ] **M0.7 A conventions checker in place of the reader pre-check** (M, tightens the process; A2,
-  A3, A5, D3). `scripts/check-conventions.mjs`, deterministic, replacing the trial row in CLAUDE.md:
-  `$` appears only where the layer rule allows (today `hooks/register.ts`; M4 widens it to the
-  effects layer); no prose string literal under `hooks/` outside `strings.ts` and a written
-  exemption list (rule reasons in `config/defaults.ts`, validation messages); `atom(` only in the
-  state owner and `update($, session, ...)` only with an updater from `state.ts`; imports follow
-  the layer order; no exported name is unused; no function is longer than a stated cap, with the
-  existing long ones listed as debt that may shrink but not grow. It also holds test fixtures to the documented set of paths and hosts
-  (`/work`, `/home/me`, `example.com`), with the system paths the tests really need on a written
-  list (finding T4). Accepted when it passes with the debt list and the pre-check row is removed
-  from CLAUDE.md.
-- [ ] **M0.8 Hooks by stage, CI by concern** (M, neutral; R3, P1). Needs A1 and A2.
-  - Git hooks (`.githooks/`): pre-commit runs only the fast checks (hygiene, conventions,
-    guidance, facts, `tsc`); commit-msg checks the summary and runs docs-sync; a new pre-push runs
-    the tests and validation. Today pre-commit runs everything, about forty seconds.
-  - Workflows: `ci-checks` (hygiene, the M0.6 and M0.7 scripts and their tests, `actionlint`);
-    `ci-tests` (the pinned build: tests, typecheck, strict validation, the marketplace manifest,
-    no `tool.check`); `ci-docs-sync` (pull requests, full history); `ci-canary` (weekly and on
-    demand: the three gates on the **latest** Claude Code, never required); a reusable
-    `notify-failure` that opens or comments on one `automation-failure` issue per failing
-    workflow, called by the canary. Third-party actions are pinned by commit SHA with the version
-    in a comment; every workflow has a concurrency group and a timeout.
-  Accepted when a pull request shows the three required jobs and a forced canary failure opens
-  exactly one issue.
-- [ ] **M0.9 The pull request template and CONTRIBUTING** (S, neutral). The template gains: "Gate
-  direction: tightens, loosens or neutral" with, for a loosening, the decision that approves it;
-  "Docs updated" (which, or why none); the checks run; and, from M2, the policy line (M2.2).
-  CONTRIBUTING and `docs/DEVELOPMENT.md` point to the skill instead of repeating it. Sweep every
-  document for references to sections of the v1 roadmap ("Final deliverables", "Before 1.0",
-  "Known follow-ups", the C and H items, "the stage table") and point them at this file or at
-  docs/history/ROADMAP-v1.md: `docs/MAINTENANCE.md`, the October review's banner and the
-  `checkpoint` skill are known to have them. Add a dev container definition that installs the
-  pinned Claude Code and TypeScript and runs `scripts/setup.sh`, so a new contributor or a
-  Codespace starts with the hooks wired.
+- [ ] **M0.1 Upgrade the types to the installed build, and move the CI pin with them** (S,
+  neutral; finding R1, finding R2, decision D10). Run `/upgrade-types`. The vendored types are
+  2.1.322's; the three failing tests come from 2.1.323. Files: `mods/types/claude-code.d.ts`, the
+  version line and drift note at the top of `mods/council-of-elrond/DESIGN.md`,
+  `.github/workflows/ci.yml` and `.github/workflows/release.yml` (the pin in both moves to the same
+  version as the types), and `CHANGELOG.md`. Needs MA1 (workflow files are protected paths where
+  the mod is loaded). **M0.1 and M0.2 land in one pull request:** on the newer build the three
+  gates cannot pass between them. Accepted when `tsc -p mods` passes against the new types and both
+  workflows pin the version the types are from.
+- [ ] **M0.2 The band on the new contract** (S, neutral; finding R1). From 2.1.323 the band above
+  the prompt stacks one row per plugin (`AbovePromptList`, `AbovePromptRow`) where a hook used to
+  replace it. Read both components' docs in the types, then re-decide and test three cases: a row
+  while a full council sits, no row when idle, and the survey case; honour `isCollapsed`, new on
+  the band's props in 2.1.322. Files: `hooks/register.ts` (the `AbovePrompt` hook),
+  `hooks/elrond/view.ts`, `tests/debate.test.ts`, `tests/view.test.ts`, `tests/fixtures.ts`. Never
+  weaken an assertion to get green: if the engine's row now always shows, the tests say so.
+  Accepted when all tests pass on the newly pinned build and DESIGN §11 records the new behaviour.
+- [ ] **M0.3 Pin Claude Code in CI** (S, neutral; finding R3, decision D10), partly done.
+  - [x] Both workflows install `@anthropic-ai/claude-code@<the version DESIGN.md names>`.
+  - [ ] **Open remainder:** the two `/upgrade-types` skill steps. The skill gains a step that moves
+    the pin, and one that re-checks whether `$.fs` has gained an append (the audit writer rewrites
+    the whole file for each line until it does: finding A7). File:
+    `.claude/skills/upgrade-types/SKILL.md`.
+- [ ] **M0.4 A scripted probe suite** (M, neutral; finding A1; AM8). Replaces the one-off re-probe
+  of the hard-won facts. The review (finding A1) found fact 1 no longer holds at validation time: a sibling
+  module may take `$`, and so may a closure inside a hook. A script under `scripts/` runs one
+  headless `claude -p` per behaviour, in a throwaway repository, and prints pass or fail for each:
+  fact 1 first (at run time under the test kit and headless), then a block rule refuses, a hook
+  that overruns its time is cut off and the call refused (it fails closed), and the denial wordings
+  of "Resuming" fact 13 are still in the binary; then the other facts a run can show. Every fact
+  carries the version it was last probed on ("holds on <version>" or corrected). A cloud session
+  **can** start a headless child run (verified 2026-11-13); the last two type upgrades carried
+  their probes over unrun because that was assumed not to work. Say in `/upgrade-types` and
+  `/live-check` where the suite can and cannot run, and have `/upgrade-types` run it. Accepted
+  when it runs from one command and every fact carries its version.
+- [ ] **M0.5 The canary** (M, neutral; finding R3, finding P1; was M0.8, the canary only). Needs MA1
+  and MA2. A workflow `ci-canary`: weekly and on demand, it runs the three gates and the M0.4
+  probe suite on the **latest** Claude Code, and is never required. A reusable `notify-failure`
+  workflow opens or comments on one `automation-failure` issue per failing workflow. Third-party
+  actions in the new workflows are pinned by commit SHA with the version in a comment, and each has
+  a concurrency group and a timeout. Accepted when a forced failure opens exactly one issue and the
+  existing required jobs are unchanged.
+- [ ] **M0.6 A notice when the host is newer than the last tested build** (S, neutral; AM8). At
+  session start, when `claude --version` is newer than the version DESIGN.md's header names, one
+  line says so, and enforcement continues unchanged. Where nothing draws it goes through the start
+  notice (DESIGN §13.5). Strings in `strings.ts`; the manual and the changelog in the same brief.
+  Accepted when a test shows the line for a newer host and no line for the tested one.
 
-Done when: every gate, hook and workflow above passes on the pinned build, and a session can find
-any rule from the routing table. Checkpoint, then wait.
+Done when: the three gates and `scripts/check-hygiene.sh` pass on the pinned build with M0.1 and
+M0.2 merged; the probe suite passes headless; the canary has run once on the latest build; and a
+session on a host newer than the tested build shows the notice. Checkpoint, then wait.
 
-### M1. The first release: 0.6.0
+### M1. Tightenings and the first release: 0.6.0
 
-Goal: a tag, a GitHub release, and an install that is one line on a laptop and one block in the
-cloud. Findings R4, R5, I1 to I3, I5, P1.
+Goal: the unambiguous tightenings, a threat model and a trust rule, then a tag, a GitHub release
+and an install that is one line on a laptop and one block in the cloud. Findings R4, R5, I1 to I3,
+I5, P1, S3.
 
-- [ ] **M1.1 Shorten the terminal check** (M, neutral; P1, D5). Go through the fifteen screens of
-  the v1 check. Each one a mounted tree (`$.ui.mount`) or a headless stream can prove becomes a
-  test. What is left becomes `docs/TERMINAL-CHECK.md`: numbered steps, the expected screen, ten
-  minutes. Accepted when the script exists and each removed screen names the test that replaced it.
-- [ ] **M1.2 The real minimum version** (S, tightens; R5). Run the gates on older builds to find
-  the oldest that passes; state it once (M0.6's facts check carries it everywhere); at session
-  start below it, say so in one line and keep enforcing.
-- [ ] **M1.3 Install in one line** (S, neutral; I1, I3). Everywhere an install is described:
-  `/plugin install council-of-elrond --marketplace Deluha/council-of-elrond` at the prompt,
-  `claude plugin install council-of-elrond --marketplace Deluha/council-of-elrond` from a shell,
-  the desktop route (the + button, Plugins, Add marketplace), and one cloud block for a setup
-  script with a pinned tag and the options a host that cannot ask should start with. The release
-  workflow's notes use the same lines.
-- [ ] **M1.4 Listing details** (S, neutral; I2, I5, S3). The icon (A6); one author name; the
-  one-sentence promise in `plugin.json`, the marketplace entry and both READMEs: a second opinion
-  and an audit trail beside Claude Code's own permissions, not a sandbox.
-- [ ] **M1.5 `/council doctor`** (M, neutral; idea 7.2 a). One subcommand that checks: the Claude
-  Code version against the floor, `git` on the PATH, that a model answers, which surfaces are
-  attached and so how the user will be asked, that the rules file parses, that each project
-  check's program exists, and that the mod is not loaded into its own repository. Relayed through
-  Claude where nothing draws. Pure checks in `hooks/elrond/doctor.ts`; strings in `strings.ts`;
-  the manual and the changelog in the same brief.
-- [ ] **M1.6 Release** (S; R4). Move `[Unreleased]` to `[0.6.0]`, bump `plugin.json`, fix the
-  changelog's compare links to real tags. Then A3 and A4. Accepted when the release workflow has
+- [ ] **M1.1 The tightenings that wait for nothing** (M, **tightens**; review §2.5, AM7; was part
+  of M3.6). One brief; each category has tests that fail without it: a tool the mod does not
+  parse is reviewed (the PowerShell tool is the known one); agent-control files (`CLAUDE.md`,
+  `.claude/agents/`, `.claude/skills/`, hooks and MCP configuration) join the protected paths;
+  reading credentials (the environment, key files, and `.env` through any tool) is reviewed or
+  asked. The rest of the coverage list is M4.1; `make` and package-script targets wait for M2's
+  data.
+- [ ] **M1.2 A one-page threat model** (S, neutral; AM8). Who the mod defends against: a mistaken
+  agent, a prompt-injected agent, a hostile repository; and what is out of scope. New file
+  `docs/THREAT-MODEL.md`, linked from the manual and from `SECURITY.md`. Classes only, no
+  reproduction steps.
+- [x] **M1.3 A trust rule for a repository-supplied rules file** (S, tightens; AM8). Decided and built in the hardening pull request (DESIGN §15).
+- [ ] **M1.4 Shorten the terminal check** (M, neutral; finding P1, decision D5; was M1.1). Go
+  through the fifteen screens of the v1 check. Each one a mounted tree (`$.ui.mount`) or a headless
+  stream can prove becomes a test. What is left becomes `docs/TERMINAL-CHECK.md`: numbered steps,
+  the expected screen, ten minutes. Accepted when the script exists and each removed screen names
+  the test that replaced it.
+- [ ] **M1.5 Install in one line** (S, neutral; finding I1, finding I3; was M1.3). Everywhere an
+  install is described: `/plugin install council-of-elrond --marketplace Deluha/council-of-elrond`
+  at the prompt, `claude plugin install council-of-elrond --marketplace Deluha/council-of-elrond`
+  from a shell, the desktop route (the + button, Plugins, Add marketplace), and one cloud block for
+  a setup script with a pinned tag and the options a host that cannot ask should start with. The
+  release workflow's notes use the same lines.
+- [ ] **M1.6 The promise sentence** (S, neutral; finding I2, finding I5, finding S3; was M1.4, the
+  promise only). The one-sentence promise in `plugin.json`, the marketplace entry and both
+  READMEs: a second opinion and an audit trail beside Claude Code's own permissions, not a sandbox.
+  The icon (MA6) and the single author name stay in Later.
+- [ ] **M1.7 The compatibility floor and policy** (S, neutral; finding R5, AM8; replaces was M1.2).
+  The floor is the pinned build; there is no search through older builds. One place states the
+  tested range and what happens outside it: below the floor the mod says so at session start in one
+  line and keeps enforcing; above the last tested build M0.6's notice appears. Every document that
+  states a minimum version points to that place.
+- [ ] **M1.8 Release** (S, neutral; finding R4; was M1.6). Move `[Unreleased]` to `[0.6.0]`, bump
+  `plugin.json`, fix the changelog's compare links to real tags, and mark the pinned-tag lines in
+  `docs/INSTALL.md` as available. Then MA3 and MA4. Accepted when the release workflow has
   published 0.6.0 and a fresh machine installs it with one line.
 
 Done when: the release exists and INSTALL's cloud block names its tag. Checkpoint, then wait.
 
 ### M2. Measure
 
-Goal: numbers for reviewer quality, cost and friction, and targets written from them. M3 changes
-policy and must not be done blind. Findings T1, T3.
+Goal: numbers for reviewer quality, against thresholds that were written before the data (AM3).
+M4 changes policy and must not be done blind. Findings T1, T3.
 
-- [ ] **M2.1 The eval suite** (M, neutral; T1). `mods/council-of-elrond/evals/` for
-  `claude plugin eval`: labelled cases per reviewer (destructive and harmless commands,
+- [ ] **M2.1 The policy table, its diff check and the bypass-regression corpus** (M, neutral;
+  review §4.11 of the October review, the output-parity idea borrowed in M0; was M2.2; AM3 b, AM8).
+  `tests/policy.table.ts`: several hundred rows of input, expected tier and expected rule, starting
+  from the probe sets; it is also the bypass-regression corpus, so every bypass class fixed so far
+  (DESIGN §10, §15) has rows under neutral names. `scripts/check-policy-diff.mjs` classifies the
+  table on the base and the head of a pull request; every row whose tier changed must be declared
+  in one line of the pull request's description (`policy: expect-different=<ids>`), and a row that
+  got looser also needs the decision that approves it. This makes the tightening and loosening rule
+  mechanical. Runs in the existing test job of CI. The brief also adds direct tests for the
+  rules-file writer (`withRule`, `withAllowlistEntry`; October review §4.11).
+- [ ] **M2.2 The eval suite** (M, neutral; finding T1; was M2.1). `mods/council-of-elrond/evals/`
+  for `claude plugin eval`: labelled cases per reviewer (destructive and harmless commands,
   test-weakening and honest diffs, SQL with and without WHERE, pushes of unrelated commits,
-  instructions hidden inside diffs and previews) and a council set. Out of CI; run by hand (A5);
-  results and the commit they were run on recorded in DESIGN.md.
-- [ ] **M2.2 The policy table and its diff check** (M, neutral; review §4.11 of the October review,
-  the output-parity idea borrowed in M0). `tests/policy.table.ts`: several hundred rows of input,
-  expected tier and expected rule, starting from the probe sets. `scripts/check-policy-diff.mjs`
-  classifies the table on the base and the head of a pull request; every row whose tier changed
-  must be declared in one line of the pull request's description
-  (`policy: expect-different=<ids>`), and a row that got looser also needs the decision that
-  approves it. This makes the tightening and loosening rule mechanical. Runs in `ci-tests`.
-- [ ] **M2.3 A shadow week** (maintainer and S; A5). The released build in shadow mode in another
-  repository, a terminal and a cloud session, a week of ordinary work; then `/council report`.
-  Record: reviews per session, tokens, median and worst review time, what would have been
-  refused, what was refused then allowed.
-- [ ] **M2.4 Targets** (S). From M2.1 and M2.3, written into DESIGN.md: the acceptable rate of
-  wrong refusals and wrong approvals per reviewer, tokens per session, and time added to an
-  allowed call. A benchmark test for the allowed path's own time.
-- [ ] **M2.5 Report export** (S, neutral; idea 7.5 d). `/council report --json` and a Markdown
-  form, so M2.3's numbers can be kept and shared.
+  instructions hidden inside diffs and previews) and a council set. State the sample size and run
+  each case three times (AM3 a asks for at least 100 must-not-approve cases per reviewer). Hold out
+  cases the authors of the prompts did not see. Report wrong-approve separately from wrong-block.
+  Out of CI; run by hand (MA5); results and the commit they were run on recorded in DESIGN.md.
+- [ ] **M2.3 A shadow week** (maintainer and S; MA5; was M2.3). The released build in shadow mode in
+  another repository, a terminal and a cloud session, a week of ordinary work; then
+  `/council report`. Record: reviews per session, tokens, median and worst review time, what would
+  have been refused, what was refused then allowed, and for AM3 d which reviews of ordinary edits
+  `strict` held were of changes later committed.
+- [ ] **M2.4 Report against the thresholds** (S, neutral; finding T3; was M2.4). From M2.2 and M2.3,
+  DESIGN.md records each of AM3 a to d as met or not met, with the sample sizes. It writes no
+  target of its own. It also records the wrong-block rate per reviewer, tokens per session and the
+  time added to an allowed call, and adds a benchmark test for the allowed path's own time.
+- [ ] **M2.5 The budget-guard test** (S, neutral; a v1 open item). A test that `proceed()` refuses
+  when `next.budget.remainingMs` is under 1000, if the test kit can set it. If it cannot, record
+  that in DESIGN.md and stop (the v1 decision was to skip the test unless the kit can).
 
-Done when: DESIGN.md holds the results and the targets. Checkpoint, then wait.
+Done when: DESIGN.md holds the eval results and the shadow data, each of AM3 a to d marked met or
+not met. Checkpoint, then wait.
 
-### M3. Right-size the gate
+### M3. Mechanical refactor
+
+Goal: `register.ts` loses its effects. Moves are verbatim, no behaviour change rides along, and a
+difference found on the way is reported, not patched. Evidence: findings A1 to A6; decision D6. Before M3.2
+starts, the orchestrator writes all of its briefs in one plan and shows it at a checkpoint: the
+moves depend on each other, which is the kind of work the delegation loop handles worst (finding
+P2).
+
+- [ ] **M3.1 The layer rule** (S, neutral; was M4.1). Depends on M0.4's result. If sibling modules
+  may take `$`: an effects layer, `hooks/effects/`, is the only place besides `register.ts` that
+  touches `$`; pure modules stay pure; the direction is rules, then members, then elrond, then
+  effects, then register. Written in `docs/DEVELOPMENT.md` and checked in review (a conventions
+  checker is Later, M0.7). If M0.4 shows they may not, stop and re-plan M3 with the maintainer.
+- [ ] **M3.2 Extract the effects** (L, neutral, one pull request each, in this order; was M4.2):
+  rules loading and scopes; files and real paths; git inspections and previews; the model review
+  and probe; the check runner and `convene`; the audit writer and its queue; dialogs, panes and the
+  indicator; `/council` output. Each move keeps its tests green unchanged and gives the module
+  state it uses one owner (finding A4). Along the way: drop the `as never` casts the tests use for
+  `agentId` (the test kit's `$.tool.call` takes it from 2.1.308), and give the five pure modules
+  that are tested only through their callers (`escalation`, `brief`, `checks`, `globs`, `paths`) a
+  test file each (finding T2).
+
+Done when: every moved effect lives under `hooks/effects/` with its state owned in one place, every
+test and mutation check passes unchanged, and the policy table (M2.1) shows no row changed.
+Checkpoint, then wait.
+
+### M4. Right-size the gate
 
 Goal: the defaults stop ordinary work less and stop risky work more. Every brief changes rows of
-the policy table and declares them. Findings F1 to F5 and §2.5; decisions D2 to D4.
+the policy table and declares them. Findings F1 to F5 and §2.5; decisions D2 to D4 as amended by
+AM2, AM4, AM5 and AM7.
 
-- [ ] **M3.1 Brief Claude at the start** (M, neutral; idea 7.1 a). A session-scoped section added
-  through `prompt.compose`, built from the loaded rules: what is protected, that shell reads of
-  those paths should use the file tools, what a push triggers, the project checks, how the user
-  approves on this host. Plain, a few hundred tokens, switchable off. Measure refusals per session
-  against M2.3 before and after.
-- [ ] **M3.2 Reads and writes of protected paths** (M, **loosens**; F1, D3). For shell commands,
-  a part that only reads a protected path (a fixed list of read-only programs, and git's
+- [ ] **M4.1 The rest of the coverage list** (M, **tightens**; review §2.5, decision D4; was M3.6,
+  without what moved to M1.1). Review or ask for: scheduled-job editors and session control;
+  registry pushes, forced branch re-creation, copies that overwrite, opening a pull request;
+  `make` and package-script targets whose recipe the mod can read and classify (else review), using
+  M2's data; the missing MCP verbs; built-in tools that schedule or publish.
+- [ ] **M4.2 Reads of protected paths** (M, **loosens**; finding F1, AM5; was M3.2). For shell
+  commands, a part that only reads a protected path (a fixed list of read-only programs, and git's
   read-only subcommands) classifies as the file tools do. Anything not on the list still asks.
-  `.env` and key files are the exception: see M3.6.
-- [ ] **M3.3 Temp directory and written text** (M, **loosens**; F3, F4, D3). A recursive delete
-  under the system temp directory asks instead of blocking. The production DROP and TRUNCATE rule
-  judges parts that run a database client and what is piped or redirected into one, not text
-  being written to a file.
-- [ ] **M3.4 What does not count as a failed attempt** (S, **loosens**; F5, D3, D12). A refusal
-  because nobody can be asked, and another plugin's `tool.check` denial (the wording recorded in
-  DESIGN §12.7), stop counting toward the lockout. Both are still audited as refused. A test for
-  each wording, and the three-attempt lockout re-proved for real refusals.
-- [ ] **M3.5 Presets** (L, **loosens** as a default; D2, ideas 7.1 b, 7.2 c, 7.3 c). One option,
-  `preset`, with `observe`, `balanced` and `strict`; every existing option stays as an override.
-  `balanced`: an ordinary edit inside the repository passes; edits to sensitive files (CI,
-  dependency manifests and lockfiles, tests, migrations, agent-control files) are still reviewed;
-  the diff reviewer sits at `git commit` on the staged diff; the full council sits for a push or
-  merge to a protected branch, a single git reviewer for a feature-branch push, and the project
-  checks run for both. `strict` is today's behaviour exactly, proven by the policy table. The
-  default flips to `balanced` in this brief's last pull request, only with M2's numbers attached.
-- [ ] **M3.6 Coverage** (M, tightens; §2.5, D4). Review or ask for: scheduled-job editors and
-  session control; registry pushes, forced branch re-creation, copies that overwrite, opening a
-  pull request; `make` and package-script targets whose recipe the mod can read and classify
-  (else review); reading credentials (the environment, key files, and `.env` through any tool);
-  the PowerShell tool (review, since it is not parsed); the missing MCP verbs; built-in tools
-  that schedule or publish. Agent-control files (`CLAUDE.md`, `.claude/agents/`,
-  `.claude/skills/`, hooks and MCP configuration) join the protected paths.
-- [ ] **M3.7 A user-level rules file, a schema and rule packs** (M; ideas 7.2 d to f). A rules
-  file under the user's Claude configuration folder, merged between the shipped set and the
-  project's, never below the block floor. A JSON Schema for `rules.json`, generated from or
-  tested against `config/schema.ts`. Named rule packs in the repository, switched on in
-  `rules.json`, as the home for stack-specific coverage.
-- [ ] **M3.8 `/council init`** (M, neutral; idea 7.2 b). Proposes a starter `rules.json` from the
-  repository (its test, lint and typecheck scripts as project checks, the remote's default branch
-  as protected, migration folders), shows it, and writes it only on a yes.
-- [ ] **M3.9 One approval route, and a reset** (M, **loosens** for the reset; ideas 7.3 a, b, g).
-  `/council allow <code>` and `/council deny <code>` in a terminal, the same codes as the chat
-  route; every refusal a person may override carries its code. `/council reset` (a person's
-  command) clears rounds, failed attempts and lockouts. `/council log` is relayed where nothing
-  draws.
-- [ ] **M3.10 Cheaper, better-informed reviews** (M, neutral; ideas 7.3 e, f). The fixed part of
-  each reviewer prompt goes out as a cacheable block. Reviewers also get a per-member `review`
-  text from `rules.json` and the current task list or accepted plan where one exists, fenced as
-  untrusted. Re-run M2.1 afterwards: no verdict may get worse.
+  `.env` and key files are the exception: M1.1 covers credential reads.
+- [ ] **M4.3 Recursive delete under the temp directory** (S, **loosens**; finding F3, AM5; was
+  M3.3, first half). A recursive delete under the system temp directory asks instead of blocking.
+- [ ] **M4.4 Text written to a file** (S, **loosens**; finding F4, AM5; was M3.3, second half). The
+  production DROP and TRUNCATE rule judges parts that run a database client and what is piped or
+  redirected into one, not text being written to a file.
+- [ ] **M4.5 Presets** (L, neutral while `strict` is the default; decision D2, AM2, ideas 7.1 b,
+  7.2 c, 7.3 c; was M3.5). One option, `preset`, with `observe`, `balanced` and `strict`; every
+  existing option stays as an override. `balanced`: an ordinary edit inside the repository passes;
+  edits to sensitive files (CI, dependency manifests and lockfiles, tests, migrations,
+  agent-control files) are still reviewed; the diff reviewer sits at `git commit` on the staged
+  diff; the full council sits for a push or merge to a protected branch, a single git reviewer for
+  a feature-branch push, and the project checks run for both. `strict` is today's behaviour
+  exactly, proven by the policy table, and is the default. `balanced` is opt-in. Changing the
+  default is not part of this brief: it needs AM3 a to d met and a separate maintainer decision.
+- [ ] **M4.6 The lockout** (S, a decision brief; loosens if approved; AM4; was M3.4, rewritten).
+  First states what the retry lockout is for in each host: a person present, headless, cloud. Then
+  brings one proposal to the maintainer that settles together: whether "nobody can be asked" counts
+  as a failed attempt (finding F5), whether another plugin's `tool.check` denial does (decision
+  D12; the wording is recorded in DESIGN §12.7), whether an `sdk` prompt or a person's command
+  resets rounds, failed attempts and lockouts (D8's reset, and the reset command of was M3.9), and
+  what approved decision 4 then says. No code until the maintainer decides. Until then approved
+  decision 4 and DESIGN §14.3 stand as written.
 
-Done when: the policy table changed only where a brief declared it, and M2.1 and a second shadow
-week meet M2.4's targets. Checkpoint, then wait. The feature freeze (D1) ends here.
+Done when: the policy table changed only where a brief declared it (AM3 c), the eval re-run on the
+default models meets AM3 a and b, and the lockout is decided and recorded. Checkpoint, then wait.
 
-### M4. Modular core
+### M5. Hosts
 
-Goal: `register.ts` is wiring. Follow `references/workflows/modularizing-a-module.md` (M0.5):
-moves are verbatim, no behaviour change rides along, and a difference found on the way is reported,
-not patched. Findings A1 to A6; decision D6. Before M4.2 starts, the orchestrator writes all of
-its briefs in one plan and shows it at a checkpoint: the moves depend on each other, which is the
-kind of work the delegation loop handles worst (finding P2).
+Goal: a row in a support matrix for each host, each backed by a test, a recorded live check or an
+honest "untested". Findings H1 to H3; decision D8.
 
-- [ ] **M4.1 The layer rule** (S). Depends on M0.4's result. If sibling modules may take `$`:
-  an effects layer, `hooks/effects/`, is the only place besides `register.ts` that touches `$`;
-  pure modules stay pure; the direction is rules, then members, then elrond, then effects, then
-  register. Written in `conventions.md`, enforced by M0.7's checker. If M0.4 shows they may not,
-  stop and re-plan M4 with the maintainer.
-- [ ] **M4.2 Extract the effects** (L, one pull request each, in this order): rules loading and
-  scopes; files and real paths; git inspections and previews; the model review and probe; the
-  check runner and `convene`; the audit writer and its queue; dialogs, panes and the indicator;
-  `/council` output. Each move keeps its tests green unchanged and gives the module state it
-  uses one owner (A4). Along the way: drop the `as never` casts the tests use for `agentId` (the
-  test kit's `$.tool.call` takes it from 2.1.308), and give the five pure modules that are tested
-  only through their callers (`escalation`, `brief`, `checks`, `globs`, `paths`) a test file each
-  (finding T2).
-- [ ] **M4.3 The decision pipeline as a reducer** (L). A pure function from session state,
-  classification and what the effects returned to one step: pass, refuse, ask, review, convene,
-  finish. `register.ts` executes steps. The sixteen mutable locals of the `tool.call` hook become
-  one value. Before starting, re-run every mutation check recorded in DESIGN.md and add a
-  step-by-step test of the reducer for each pipeline order SPEC §4 lists.
-- [ ] **M4.4 Members as data** (M, neutral; idea 7.4 a). A member is a registry entry: name,
-  triggers, checklist prompt, model slot, profile. The shipped members become entries; a project
-  may define its own in `rules.json` (a reviewer only: it can never approve what a shipped rule
-  blocks). "Adding a member" in the manual becomes configuration.
-- [ ] **M4.5 Wording and the shell parser** (M; A2, A6). Every prose string into `strings.ts`, or
-  onto the written exemption list. `scan` and `coreOf` in `rules/shell.ts` split along their
-  phases, with the policy table proving nothing moved.
+- [ ] **M5.1 Headless and SDK sessions** (M, neutral; finding H1, decision D8; was M5.1, without
+  the reset). An `sdk` prompt sets the reviewers' latest request. It does not reset rounds, failed
+  attempts or lockouts (that is part of M4.6), still cannot loosen the gate by command, and still
+  cannot approve by chat.
+- [ ] **M5.2 Finish the host checks** (maintainer and S; MA7; was M5.3). The pending cloud checks
+  from v1: v1 brief C4's cloud run and v1 brief C6's cloud check (steps in DESIGN §14.6), and,
+  where the maintainer can, drawing on desktop, mobile and VS Code. Each result is recorded in
+  DESIGN §14.
+- [ ] **M5.3 The support matrix** (S, neutral; finding H3; was M5.5, the matrix only). One table in
+  the manual: host, what draws, how you are asked, what is tested. A cell may say "untested".
 
-Done when: `register.ts` holds only `register`, its `on(...)` calls and step execution; the
-conventions checker has no debt list; every test and mutation check passes. Checkpoint, then wait.
+Done when: every cell of the matrix says what is tested and by what, or "untested", and C4's cloud
+run and C6's cloud check are recorded in DESIGN §14. Checkpoint, then wait.
 
-### M5. Every host
+### M6. Documents
 
-Goal: a row in a support matrix for each host, each backed by a test or a recorded live check.
-Findings H1 to H3; decisions D7, D8.
+Goal: a newcomer finds what the system is and what is next in one place each. Findings D2 to D4,
+S1.
 
-- [ ] **M5.1 Headless and SDK sessions** (M, **loosens** for the reset; H1, D8). An `sdk` prompt
-  sets the latest request and resets the per-prompt state. It still cannot loosen the gate by
-  command or approve by chat.
-- [ ] **M5.2 Probe an ask-only `tool.check`** (S, a probe only; H2, D7). From 2.1.308 a hook's ask
-  is always a person's and the input says whether a host or a person answers. In a throwaway
-  branch and a throwaway cloud environment: does the web client show the engine's own permission
-  dialog for such an ask, and can anything but a person answer it? Record the result in DESIGN
-  §14 and bring the decision (keep the chat route, replace it, or both) to the maintainer.
-- [ ] **M5.3 Finish the host checks** (maintainer and S; A7). The pending cloud checks from v1
-  (C6), and drawing on desktop, mobile and VS Code.
-- [ ] **M5.4 Visibility on every surface** (M, neutral; ideas 7.5 a, b). One quiet line under a
-  reviewed call's own row (`ui.render` on `ToolUse`; a card on mobile), and a notification
-  (`$.ui.notify`) when a call is waiting for an answer, cancelled when it is answered
-  (`$.ui.cancelNotify`, new in 2.1.322).
-- [ ] **M5.5 The support matrix and a CI recipe** (S; H3, idea 7.5 c). One table in the manual:
-  host, what draws, how you are asked, what is tested. A documented `claude -p` setup for CI:
-  enforcing, never asks, the report as an artifact. A clear statement for Windows.
+- [ ] **M6.1 A quickstart** (S, neutral; was M6.2). The first screen of the manual: install, shadow
+  mode, the first rule, the first report.
+- [ ] **M6.2 DESIGN as the system is** (L, neutral; was M6.1, trimmed). DESIGN.md is split into a
+  description of the current system (data flow, failure modes, concurrency, performance, hosts) and
+  a numbered decision log in `docs/decisions/`, one entry per decision with its date and what it
+  replaced. The version history at the top of DESIGN.md becomes a table. There are no per-folder
+  READMEs under `hooks/`.
+- [ ] **M6.3 Counts and version numbers out of prose** (S, neutral; replaces the checkers of was
+  M0.6). Documents stop stating test counts, line counts and the Claude Code version; they point to
+  DESIGN.md's header instead, which is the one place a version is stated.
+- [ ] **M6.4 A deprecation rule** (S, neutral). A written rule for shipped rules and options, since
+  after 1.0 a default cannot change in a minor release.
 
-Done when the matrix has no empty cell. Checkpoint, then wait.
-
-### M6. Documents and theme
-
-Goal: a newcomer finds what the system is and what is next in one place each; the theme reaches
-every host. Findings D2 to D4, S1; decision D9.
-
-- [ ] **M6.1 DESIGN as the system is** (L). DESIGN.md is split into a description of the current
-  system (data flow, failure modes, concurrency, performance, hosts) and a numbered decision log
-  in `docs/decisions/`, one entry per decision with its date and what it replaced. The version
-  history at the top of DESIGN.md becomes a table. Each folder under `hooks/` gets a short README
-  in one shape (purpose, files, how it works, contracts, extending), which the docs-sync check
-  then keeps in step with the code.
-- [ ] **M6.2 A quickstart** (S). The first screen of the manual: install, shadow mode, the first
-  rule, the first report.
-- [ ] **M6.3 The theme pass** (M, neutral; idea 7.7, D9). Themed preset names (Rivendell, the
-  Fellowship, the Black Gate; Leeroy mode stays) over the plain keys; a raid log at the end of a
-  session from the report; one line of voice per member and verdict; the theme in relayed text
-  where nothing draws; achievements and totals kept across sessions (`$.store`, idea 7.6 a);
-  optional sounds from the mod's own original recordings, off by default; a look at
-  `$.theme.set`, new in 2.1.322, for a themed backdrop. All behind plain mode; the plain-mode
-  tests extend to each.
+Done when: the manual's first screen holds install, shadow mode, the first rule and the first
+report; DESIGN.md's header history is a table; and a search of the documents for test counts and
+for a Claude Code version outside DESIGN.md's header and the changelog finds none. Checkpoint,
+then wait.
 
 ### M7. 1.0
 
 Done when all of these hold:
 
-- Released tags, a pinned CI and a canary that has caught at least one drift.
-- Eval results that meet M2.4's targets on the default models, re-run on the release build.
+- Released tags, a pinned CI, and the canary and its probe suite have run on schedule for four
+  weeks.
+- Eval results that meet AM3 a and b on the default models, re-run on the release build.
 - The support matrix complete.
-- `register.ts` as wiring only; the conventions checker with no debt list.
-- A stated minimum version.
-- No open **high** finding in docs/REVIEW-2026-11.md.
-- A deprecation rule for shipped rules and options, since after 1.0 a default cannot change in a
-  minor release.
+- `register.ts` as wiring only; the conventions checker with no debt list. *(Open: both depend on
+  briefs now in Later, M4.3 and M0.7. The maintainer decides whether this criterion stays.)*
+- A stated minimum version (M1.7).
+- No open **high** finding in either November review, as judged by the maintainer.
+- A deprecation rule for shipped rules and options (M6.4), since after 1.0 a default cannot change
+  in a minor release.
 - Before the tag: the policy table diffed against the previous release with every change
-  declared, as M2.2 does for a pull request.
+  declared, as M2.1 does for a pull request.
 
 ### Later (after 1.0)
 
-Accepted ideas that wait, in rough order. Each needs its own Step 0 check against the types.
+Briefs and ideas that wait, in rough order. Each needs its own Step 0 check against the types. Old
+ids are those of the first v2 numbering; AM1 says none of them is an exception to the freeze.
 
+- **M0.5** A lean CLAUDE.md and one routing skill (references, workflows, an ask-first list).
+- **M0.6** Checks for the guidance, the facts and docs-sync (`check-guidance`, `check-facts`,
+  `check-docs-sync`); M6.3 replaces the facts checker's job by removing the numbers.
+- **M0.7** A conventions checker in place of the `reader` pre-check (finding A2, finding A3,
+  finding A5, finding D3, finding T4). Until it exists the pre-check row in CLAUDE.md stays.
+- **M0.8, beyond the canary** Git hooks by stage, workflows split by concern, `actionlint`, pinning
+  the existing actions by commit SHA, making the CI jobs required checks on `main`.
+- **M0.9** The pull request template's gate-direction line, CONTRIBUTING pointers and a dev
+  container.
+- **M1.4, beyond the promise sentence** The icon (MA6) and one author name (finding I2).
+- **M1.5** `/council doctor` (idea 7.2 a).
+- **M2.5** Report export, JSON and Markdown (idea 7.5 d).
+- **M3.1** Brief Claude at the start (idea 7.1 a); needs the maintainer's sign-off at its brief
+  (AM6).
+- **M3.7** A user-level rules file, a schema and rule packs (ideas 7.2 d to f; AM6).
+- **M3.8** `/council init` (idea 7.2 b).
+- **M3.9** One approval route in a terminal, and a reset command (ideas 7.3 a, b, g); the reset is
+  part of M4.6's decision (AM4).
+- **M3.10** Cheaper, better-informed reviews (ideas 7.3 e, f); the added context needs sign-off
+  (AM6).
+- **M4.3** The decision pipeline as a reducer.
+- **M4.4** Members as data (idea 7.4 a; AM6: SPEC §3's cap stands).
+- **M4.5** Wording and the shell parser (finding A2, finding A6).
+- **M5.2** Probe an ask-only `tool.check` (finding H2, decision D7), and its open question: keep the
+  chat approval route, replace it, or both.
+- **M5.4** Visibility on every surface (ideas 7.5 a, b).
+- **M5.5, beyond the matrix** A documented `claude -p` setup for CI (idea 7.5 c) and a clear
+  statement for Windows.
+- **M6.3** The theme pass (idea 7.7, decision D9): themed preset names, a raid log, one line of
+  voice per member, the theme in relayed text, a look at `$.theme.set`. Achievements and sounds are
+  declined.
+- **A `/config` switch for the allow-rule offer** (v1), only if feedback says the offer is noisy.
+- **The `AskUserQuestion` re-entry terminal check** (v1): whether the mod's own question could
+  arrive as re-entry, so that "Allow once" must still run the call. Whether it is still relevant is
+  unknown: 2.1.304 removed the `re-entry` failure kind (DESIGN §12.6).
 - **On-demand review** (7.4 b): `/council review` seats the diff reviewer on the working tree and
   runs the project checks.
 - **Plan review** (7.4 c): one review of the plan when Claude leaves plan mode. Tightens.
-- **A dependency reviewer** (7.4 e, "Boromir"): new packages and lockfile changes. Tightens.
 - **A snapshot before destructive work** (7.4 d, "Samwise"), in D11's limited form.
 - **A check Claude can call** (7.1 c), in D11's limited form.
 - **A triage model** (7.3 d), in D11's limited form.
 - **The never-offer list and rule suggestions across sessions** (7.6 b), in D11's limited form.
 - **Telemetry for teams** (7.6 c) and **organisation policy** (7.6 d), when a team asks.
+
+Declined on 2026-11-13: a fourth model member (the dependency reviewer, 7.4 e), and achievements
+and sounds.
 
 ---
 
@@ -454,19 +470,28 @@ Accepted ideas that wait, in rough order. Each needs its own Step 0 check agains
 
 ### Commands
 
+Run from the repository root, in this order:
+
 ```
-cd mods/council-of-elrond && claude plugin test .     # all tests (675 with H3)
-tsc -p mods                                           # strict typecheck against mods/types/claude-code.d.ts
-claude plugin validate mods/council-of-elrond         # copy its hooks:/calls: lines into DESIGN.md §2
+claude plugin test mods/council-of-elrond                  # all tests
+tsc -p mods                                                # strict typecheck against mods/types/claude-code.d.ts
+claude plugin validate --strict mods/council-of-elrond     # copy its hooks:/calls: lines into DESIGN.md §2
+scripts/check-hygiene.sh                                   # generated files, personal data, links
 ```
 
-- **Check the Claude Code version.** Run `claude --version`; this was built on **2.1.289** and checked on **2.1.291** from stage 5, **2.1.294** from stage 6, and **2.1.296**, **2.1.299**, **2.1.304**, **2.1.308** and **2.1.322** after it (types regenerated each time; the drift was additive, DESIGN.md header; 2.1.299's probes found two semantic changes, DESIGN §12.5; 2.1.304 removed the `re-entry` failure kind the mod never relied on, DESIGN §12.6; 2.1.308 dropped `decider` from `tool.check`, which the mod never used, DESIGN §12.7; 2.1.322's drift is additive, DESIGN header). If it changed, regenerate the types by loading the `plugin-authoring` skill (it writes `types/claude-code.d.ts` under the skill's folder and names the path; don't write a mod folder, which would ask to hot-reload it into your session), copy them over `mods/types/claude-code.d.ts`, rerun `tsc`, and note any API drift in DESIGN.md.
+- **One rule for the Claude Code version.** CI and the local gates use the **pinned** build: the
+  version both workflows install, which DESIGN.md's header names (its history of upgrades is
+  there too). To get it locally, install it into a scratch folder and run that `claude`:
+  `npm install --prefix <a scratch folder> @anthropic-ai/claude-code@<pinned version>`, then
+  `<a scratch folder>/node_modules/.bin/claude`. Upgrades happen on a schedule, monthly and before a
+  release (decision D10), through the `/upgrade-types` skill. A newer installed build is expected;
+  it is not a reason to upgrade mid-brief.
 - **Keep the mod out of the session building it.** Don't load it into your own dev session (the skill's hot-reload folder, or `--plugin-dir` on the session you work in): it would gate your own tool calls.
 - **Live checks run headless.** Use `claude -p --plugin-dir ./mods/council-of-elrond "<prompt>"` with harmless commands, ideally in a throwaway `git init` folder, then clean it up along with the generated `.claude-plugin/types/` and `tsconfig.json` in the mod folder. `/council` output only shows with `--output-format stream-json --verbose` (as `system/ui_log`).
 
 ### Hard-won API facts (verified by probes; details in DESIGN.md)
 
-1. **Only `hooks/register.ts` may touch `$`.**
+1. **Only `hooks/register.ts` may touch `$`.** *(M0.4 re-probes this: finding A1 found it no longer holds at validation time.)*
    - Passing `$` to an imported function fails validation.
    - `$`-taking helpers must be **top-level functions in register.ts**, not closures inside a hook.
    - All decisions live in pure sibling modules.
@@ -557,3 +582,57 @@ Stage 2's own decisions (the ones the spec didn't cover) are in [DESIGN.md §6](
 
 12. **Refusals at Claude Code's own permission prompt** (answered in stage 2). The person's own refusal there, after the council let the call through, counts as a failed attempt (as "keep blocked"); an automatic denial with nobody asked (`-p`, a deny rule) does not. Recorded as `outcome: "refused-by-user"` and `"denied-by-permission"` (`outcomeOf` in `elrond/operations.ts`). *(Done.)*
 
+
+### Carried over from v1
+
+Decisions in [docs/history/ROADMAP-v1.md](../../docs/history/ROADMAP-v1.md) that stay binding. The
+"Recommendations on the remaining open decisions" section of that file says the maintainer
+approved every recommendation in it on 2026-10-13, and the approved decisions above are the first
+twelve of its own list. One line each, with the place to read the reasoning:
+
+- **C3's probe never ships as an option.** No `cloudAsk` option exists in any release: an ask with
+  no timeout can hold a call indefinitely. v1, [Recommendations on the remaining open decisions](../../docs/history/ROADMAP-v1.md#recommendations-on-the-remaining-open-decisions-2026-10-13), table "The cloud work items' open choices", row "C3, how the probe ships".
+- **C4, which prompts may approve.** `council allow` and `council deny` count only as a whole line
+  from a person's origin (`composer`, `bridge`, and the kind the web client's prompts arrive with,
+  which C3 showed to be `composer`); never from `peer`, `peer-send-message`, `plugin`, `channel`,
+  `scheduled-trigger`, `task-notification`, `coordinator`, `observer`, `auto-continuation` or
+  `unclassified`; `sdk` was dropped from the person's origins on 2026-10-20 (DESIGN §14.3). Same
+  section, row "C4, which prompts may approve".
+- **C4, the `session` allowance** is limited as the allow-rule offer is: never for a script, an
+  expanding word, a multi-line or long command, a block rule, a protected path or any secrets
+  finding. Same section, row "C4, the `session` allowance".
+- **Where a rules file may sit.** Only at the top of a repository (a folder holding `.git`)
+  directly below the session root, never at an arbitrary depth. Same section, row "C5, where a
+  rules file may sit".
+- **Protected paths are `**/`-prefixed** so they hold in every repository below a multi-repository
+  root. Same section, row "C5, protected paths".
+- **The origin rule for `command.run` (the v1 H2 brief).** The subcommands that loosen the gate
+  (`off`, `shadow on`, `model`) need a person's origin; the others answer any origin. Same section,
+  table "H2: pipeline robustness", row "§2.9 `command.run` origin".
+- **The `exact` field in the rule schema is declined.** v1,
+  [Decisions on the open items](../../docs/history/ROADMAP-v1.md#decisions-on-the-open-items-after-the-final-deliverables),
+  row "An `exact` field in the rule schema". Same table, rows "An allow rule pins text, not the
+  folder" (documented; pinning the working folder is declined), "Windows" (unsupported), "`isReadOnly`
+  unused" (left unused) and "`$.ui.ask` in SDK and cloud hosts" (the mod refuses where no surface is
+  attached).
+- **What the H1 checkpoint approved on 2026-10-13:** redaction uses its own, narrower test of
+  plainly-code values; the password warning follows a `kind` on each secret pattern; the
+  compound-name prefix is capped at 64 characters; and the standing rule that a loosening is put
+  to the maintainer before it is committed and a tightening is decided, recorded and reported
+  (it is in CLAUDE.md). The paragraph "Approved after the H1 checkpoint" in the v1
+  "Recommendations" section.
+- **The remaining decisions from the October review.** The two-session audit race is documented
+  only; the allowlist-oracle note is in the manual; the `register.ts` reducer refactor is Later
+  (decision D6 moves only the effects). v1, table "The Stage 5 review's remaining decisions".
+- **Test secrets are built at run time** from two halves (`tests/fixtures.ts`), so no committed line
+  holds a well-formed token; the audit appender's whole-file re-read stays until latency shows.
+  The paragraph "Also decided after the final deliverables" in v1 "Known follow-ups".
+
+Open items in v1 that have no other home in v2, and where they now sit:
+
+- **A `/config` switch for the allow-rule offer:** "Later".
+- **The `AskUserQuestion` re-entry terminal check:** "Later"; whether it is still relevant is
+  unknown.
+- **C4's pending cloud run and C6's pending cloud check:** M5.2.
+- **The `proceed()` budget-guard test:** M2.5.
+- **The ~40-case live eval:** M2.2.

@@ -1,14 +1,18 @@
 import type { CouncilSession } from '../../types'
-import type { CompiledConfig } from '../config/schema.js'
+import type { CompiledConfig, LoadedConfig } from '../config/schema.js'
+import { codeOf, isCode } from '../config/trust.js'
+import type { TrustCounts, TrustSummary } from '../config/trust.js'
 import { MEMBERS, MODEL_SLOTS, TIERS } from '../config/types.js'
 import type { MemberName, ModelSlot } from '../config/types.js'
 import { whoOf } from '../members/brief.js'
+import { redact } from '../redact.js'
+import type { SecretPattern } from '../redact.js'
 import type { Classification } from '../rules/classify.js'
 import type { Big, CouncilSeat } from './council.js'
 import { councilSeatId } from './council.js'
 import { median } from '../state.js'
 import { text } from '../strings.js'
-import type { StringKey } from '../strings.js'
+import type { Mode, StringKey } from '../strings.js'
 import type { ModelChoice } from './models.js'
 import type { Operation } from './operations.js'
 import { attemptsOf } from './operations.js'
@@ -30,6 +34,8 @@ export type CouncilCommand =
   | { kind: 'test'; command: string }
   | { kind: 'models' }
   | { kind: 'model'; slot: string; model: string; save: boolean }
+  | { kind: 'trust'; code?: string }
+  | { kind: 'untrust' }
   | { kind: 'reload' }
   | { kind: 'report' }
   | { kind: 'debate' }
@@ -83,6 +89,13 @@ export function parseCouncil(args: string): CouncilCommand {
       if (slot === undefined || model === undefined) return { kind: 'usage', key: 'cmd.modelUsage', params: { slots: MODEL_SLOTS.join(', ') } }
       return { kind: 'model', slot: slot.toLowerCase(), model, save }
     }
+    case 'trust': {
+      const code = rest[0]?.toLowerCase()
+      if (code === undefined) return { kind: 'trust' }
+      return rest.length === 1 && isCode(code) ? { kind: 'trust', code } : { kind: 'usage', key: 'trust.usage' }
+    }
+    case 'untrust':
+      return rest.length === 0 ? { kind: 'untrust' } : { kind: 'usage', key: 'trust.usage' }
     case 'reload':
       return { kind: 'reload' }
     case 'report':
@@ -95,12 +108,13 @@ export function parseCouncil(args: string): CouncilCommand {
 }
 
 /**
- * Whether a subcommand loosens the gate (bypass on, shadow on, a model switch),
- * so only a person typing it may run it. `models` (the listing), `on`,
- * `shadow off` and the rest change nothing that lets more through.
+ * Whether a subcommand loosens the gate (bypass on, shadow on, a model switch,
+ * confirming a rules file or listing what confirming would enable), so only a
+ * person typing it may run it. `models` (the listing), `on`, `shadow off`,
+ * `untrust` and the rest change nothing that lets more through.
  */
 export const needsPerson = (command: CouncilCommand): boolean =>
-  (command.kind === 'bypass' && command.on) || (command.kind === 'shadow' && command.on) || command.kind === 'model'
+  (command.kind === 'bypass' && command.on) || (command.kind === 'shadow' && command.on) || command.kind === 'model' || command.kind === 'trust'
 
 /**
  * Whether a prompt submission runs the `/council` command (`name`): it never asks
@@ -126,6 +140,8 @@ export type StatusInput = {
   gollumEnabled: boolean
   galadrielEnabled: boolean
   tokenBudget: number
+  /** How the project rules file stands (`trustLines`); counts only. */
+  trust?: readonly string[]
 }
 
 const ZERO_COUNTS = { approved: 0, revised: 0, blocked: 0, failed: 0 }
@@ -171,6 +187,7 @@ export function statusOutput(input: StatusInput): Output {
       typical === undefined
         ? text('cmd.noReviews')
         : text('cmd.median', { time: `${(typical / 1000).toFixed(1)} s`, reviews: session.reviewMs.length }),
+      ...(input.trust ?? []),
     ],
   }
 }
@@ -211,7 +228,7 @@ export function logOutput(logText: string, count: number): Output {
  * `forModel`: the copy relayed through Claude (relay.ts). An exact-string allowlist
  * entry shows no character at all, where the person's own copy shows its first three.
  */
-export function rulesOutput(compiled: CompiledConfig, origin: string, errors: readonly string[], forModel = false): Output {
+export function rulesOutput(compiled: CompiledConfig, origin: string, errors: readonly string[], forModel = false, trust: readonly string[] = []): Output {
   const rules = [...compiled.rules].sort((a, b) => TIERS.indexOf(b.tier) - TIERS.indexOf(a.tier))
   const list = (key: StringKey, items: readonly string[]): string[] =>
     items.length === 0 ? [] : [text('cmd.listLine', { name: text(key), items: items.join(', ') })]
@@ -219,6 +236,7 @@ export function rulesOutput(compiled: CompiledConfig, origin: string, errors: re
     title: text('cmd.rulesTitle', { origin }),
     lines: [
       ...(errors.length > 0 ? [text('cmd.configErrors', { errors: errors.join('; ') })] : []),
+      ...trust,
       ...rules.map(rule => text('cmd.ruleLine', { tier: rule.tier.padEnd(6), id: rule.id, source: rule.source, reason: rule.reason })),
       ...list('cmd.list.protectedPaths', compiled.config.protectedPaths),
       ...list('cmd.list.protectedBranches', compiled.config.protectedBranches),
@@ -247,6 +265,8 @@ export type CouncilPreview = {
   checks: readonly string[]
   /** A merge counted as big without the current branch being checked. */
   isBranchAssumed: boolean
+  /** Project checks held back because their rules file is not trusted: they would not run, and the council would block. */
+  ignoredChecks?: number
 }
 
 const seatLine = (seat: CouncilSeat): string =>
@@ -259,9 +279,12 @@ function councilLines(council: CouncilPreview): string[] {
   if (council.seats.length === 0) return [text('cmd.testCouncilNobody', { entry: council.big.entry, who })]
   return [
     text('cmd.testCouncil', { who, entry: council.big.entry, model: council.choice.model, source: council.choice.source, seats: council.seats.map(seatLine).join('; ') }),
-    council.checks.length > 0
-      ? text('cmd.testCouncilChecks', { who: text('who.gimli'), names: council.checks.map(name => `"${name}"`).join(', ') })
-      : text('cmd.testCouncilNoChecks'),
+    ...(council.checks.length > 0
+      ? [text('cmd.testCouncilChecks', { who: text('who.gimli'), names: council.checks.map(name => `"${name}"`).join(', ') })]
+      : (council.ignoredChecks ?? 0) === 0
+        ? [text('cmd.testCouncilNoChecks')]
+        : []),
+    ...((council.ignoredChecks ?? 0) > 0 ? [text('cmd.testCouncilChecksUntrusted', { who: text('who.gimli') })] : []),
     ...(council.isBranchAssumed ? [text('cmd.testCouncilBranch', { who })] : []),
   ]
 }
@@ -311,5 +334,88 @@ export function modelsOutput(choices: Readonly<Record<ModelSlot, ModelChoice>>):
   return {
     title: text('cmd.modelTitle'),
     lines: MODEL_SLOTS.map(slot => text('cmd.modelLine', { id: slot, model: choices[slot].model, source: choices[slot].source })),
+  }
+}
+
+// Trusting a project's rules file (DESIGN §15): what confirming would enable, and where a file stands.
+
+/** The counts as one phrase: `2 allow or review rule(s), 1 project check(s)`. */
+export function countsText(counts: TrustCounts, mode?: Mode): string {
+  const kinds = [
+    ['rules', 'trust.count.rules'],
+    ['disabled', 'trust.count.disabled'],
+    ['allowlist', 'trust.count.allowlist'],
+    ['models', 'trust.count.models'],
+    ['checks', 'trust.count.checks'],
+    ['patterns', 'trust.count.patterns'],
+  ] as const
+  return kinds
+    .filter(([kind]) => counts[kind] > 0)
+    .map(([kind, key]) => text(key, { n: counts[kind] }, mode))
+    .join(', ')
+}
+
+/** How a loaded file stands, for `/council rules` and `status`: counts only, never text from the file. */
+export function trustLines(loaded: Pick<LoadedConfig, 'file' | 'needsTrust'>, mode?: Mode): string[] {
+  const state = loaded.file?.state
+  if (state === 'confirmed') return [text('trust.state.confirmed', {}, mode)]
+  if (state === 'option') return [text('trust.state.option', {}, mode)]
+  if (state === 'untrusted' && loaded.needsTrust !== undefined) return [text('trust.state.untrusted', { summary: countsText(loaded.needsTrust.counts, mode) }, mode)]
+  return []
+}
+
+/** One file's settings that wait for confirmation, as `/council trust` lists them. */
+export type TrustFileView = { where: string; hash: string; summary: TrustSummary; counts: TrustCounts }
+
+const MAX_PER_KIND = 10
+const MAX_FILES = 20
+const MAX_LINE_CHARS = 300
+
+// What a terminal can be made to act on or to hide: C0 and C1 controls, and the Unicode line and paragraph separators.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g
+
+/** A value taken from the rules file (or the disk), as the listing shows it: redacted, on one line, capped. */
+function cleaned(value: string, patterns: readonly SecretPattern[]): string {
+  const line = redact(value, patterns).replace(CONTROL, ' ').trim()
+  return line.length > MAX_LINE_CHARS ? `${line.slice(0, MAX_LINE_CHARS)}…` : line
+}
+
+/** `cleaned`, after the gutter, so no line of it can pass for a line of the mod's own. */
+const fromFile = (value: string, patterns: readonly SecretPattern[]): string => `${text('ask.gutter')}${cleaned(value, patterns)}`
+
+const ruleShown = (rule: TrustSummary['rules'][number]): string =>
+  [rule.id, `tools: ${rule.tools.join(', ')}`, ...(['command', 'path', 'input'] as const).flatMap(key => (rule[key] === undefined ? [] : [`${key}: ${rule[key]}`]))].join('; ')
+
+/** The first MAX_PER_KIND of a kind, then "and N more". Each item is its own lines. */
+function capped<T>(items: readonly T[], lines: (item: T) => string[]): string[] {
+  const shown = items.slice(0, MAX_PER_KIND).flatMap(lines)
+  return items.length > MAX_PER_KIND ? [...shown, text('trust.more', { n: items.length - MAX_PER_KIND })] : shown
+}
+
+/** `/council trust`: for each file, what confirming would enable and the code to type. */
+export function trustOutput(files: readonly TrustFileView[], patterns: readonly SecretPattern[]): Output {
+  const title = text('cmd.title')
+  if (files.length === 0) return { title, lines: [text('trust.none')] }
+  const lines = files.slice(0, MAX_FILES).flatMap(file => {
+    const { summary } = file
+    return [
+      text('trust.file', { where: cleaned(file.where, patterns), summary: countsText(file.counts) }),
+      ...capped(summary.rules, rule => [text('trust.rule', { tier: rule.tier }), fromFile(ruleShown(rule), patterns)]),
+      ...capped(summary.disabledRules, id => [text('trust.disabled'), fromFile(id, patterns)]),
+      ...(summary.allowlist > 0 ? [text('trust.allowlist', { n: summary.allowlist })] : []),
+      ...capped(summary.models, entry => [text('trust.model', { slot: entry.slot }), fromFile(entry.model, patterns)]),
+      ...capped(summary.checks, check => [text('trust.check'), fromFile(check.argv.join(' '), patterns)]),
+      ...capped(summary.patterns, pattern => [text('trust.pattern'), fromFile(pattern.id, patterns)]),
+      text('trust.code', { code: codeOf(file.hash) }),
+    ]
+  })
+  return { title, lines: files.length > MAX_FILES ? [...lines, text('trust.more', { n: files.length - MAX_FILES })] : lines }
+}
+
+/** `/council trust <code>`, done: which files were confirmed and what is now in force. */
+export function trustedOutput(files: readonly { where: string; counts: TrustCounts }[]): Output {
+  return {
+    title: text('cmd.title'),
+    lines: files.map(file => text('trust.confirmedFile', { where: file.where.replace(CONTROL, ' '), summary: countsText(file.counts) })),
   }
 }

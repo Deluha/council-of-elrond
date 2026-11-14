@@ -125,18 +125,103 @@ describe('failed attempts and lockout', () => {
   })
 })
 
+describe('a part retried inside a compound command', () => {
+  const COMPOUNDS = ['rm -rf build; rmdir /work/tmp/zz', 'rmdir /work/tmp/zz && rm -rf build']
+
+  test('a part locked out refuses the compound, with no model call or question', async ($, on) => {
+    const w = world(on, { replies: [BLOCK, BLOCK], answer: KEEP_BLOCKED })
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }) // block: 1
+    await $.tool.call({ tool: 'Bash', command: 'rm -r build' }) // block: 2
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build/' }) // out of rounds, keep blocked: 3
+    const asked = w.asked.length
+    for (const command of COMPOUNDS) {
+      const deny = denyOf(await $.tool.call({ tool: 'Bash', command }))
+      expect(deny, command).toContain('Decided by: the council (locked out).')
+      expect(deny, command).toContain('Stop retrying this.')
+      expect(deny, command).toContain('The same operation was refused or failed 3 times')
+    }
+    expect(w.modelRequests).toHaveLength(2)
+    expect(w.asked).toHaveLength(asked)
+    expect(w.ran).toHaveLength(0)
+    const lines = await auditLines(w)
+    expect(lines.slice(-2)).toMatchObject([{ verdict: 'locked out', outcome: 'refused' }, { verdict: 'locked out', outcome: 'refused' }])
+    // The audit line keeps the whole key.
+    expect(lines.at(-2)?.opKey).toBe('shell:rm build ; rmdir tmp/zz')
+    // The other part alone is another operation: it is reviewed.
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rmdir /work/tmp/zz' })) ?? '').not.toContain('locked out')
+  })
+
+  test('failed attempts of a compound lock each of its parts', async ($, on) => {
+    const w = world(on, { replies: [BLOCK, BLOCK], answer: KEEP_BLOCKED })
+    for (const command of ['rm -rf build; rmdir /work/tmp/zz', 'rmdir /work/tmp/zz; rm -r build/', 'rm -rf build && rmdir /work/tmp/zz']) await $.tool.call({ tool: 'Bash', command })
+    const requests = w.modelRequests.length
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('locked out')
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rmdir /work/tmp/zz' }))).toContain('locked out')
+    expect(w.modelRequests).toHaveLength(requests)
+  })
+
+  test('five failed attempts on one kind lock a compound that holds a part of that kind', async ($, on) => {
+    const w = world(on, { replies: [BLOCK] })
+    for (const target of ['a', 'b', 'c', 'd', 'e']) await $.tool.call({ tool: 'Bash', command: `rm -rf ${target}` })
+    const requests = w.modelRequests.length
+    const deny = denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf f; rmdir /work/tmp/zz' }))
+    expect(deny).toContain('Operations of this kind (rm)')
+    expect(w.modelRequests).toHaveLength(requests)
+  })
+
+  test('a part out of rounds sends the compound to the person, with no model call', async ($, on) => {
+    const w = world(on, { replies: [REVISE, REVISE, APPROVE], answer: KEEP_BLOCKED })
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+    await $.tool.call({ tool: 'Bash', command: 'rm -r build/' })
+    expect(w.modelRequests).toHaveLength(2)
+    const deny = denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build; rmdir /work/tmp/zz' }))
+    expect(w.modelRequests).toHaveLength(2)
+    expect(w.asked).toHaveLength(1)
+    expect(w.asked[0]?.question).toContain('refused this operation twice')
+    expect(deny).toContain('(keep blocked)')
+    expect(w.ran).toHaveLength(0)
+  })
+
+  test('the person\'s instruction on a compound resets its whole key only: a part out of rounds still goes to the person', async ($, on) => {
+    const w = world(on, { replies: [REVISE, REVISE, APPROVE], answer: 'Only delete build/tmp' })
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build; rmdir /work/tmp/zz' })
+    await $.tool.call({ tool: 'Bash', command: 'rmdir /work/tmp/zz; rm -r build' })
+    expect(w.modelRequests).toHaveLength(2)
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build/; rmdir /work/tmp/zz' }))).toContain('"Only delete build/tmp". Follow it.')
+    expect(w.asked).toHaveLength(1)
+    // The parts keep their rounds: the compound, and each part alone, go to the person again, with no model call.
+    for (const command of ['rm -rf build/; rmdir /work/tmp/zz', 'rm -rf build', 'rmdir /work/tmp/zz']) {
+      expect(denyOf(await $.tool.call({ tool: 'Bash', command })), command).toContain('"Only delete build/tmp". Follow it.')
+    }
+    expect(w.modelRequests).toHaveLength(2)
+    expect(w.asked).toHaveLength(4)
+    expect(w.ran).toHaveLength(0)
+  })
+})
+
 describe('cache', () => {
   test('an approve is reused for the identical call this prompt; a new prompt reviews again', async ($, on) => {
     const w = world(on, { replies: [APPROVE] })
     on('prompt.submit', ($$, e) => ({ text: e.text }))
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
-    await $.tool.call({ tool: 'Bash', command: 'rm  -rf   build' })
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(w.modelRequests).toHaveLength(1)
     expect(w.ran).toHaveLength(2)
     expect((await auditLines(w))[1]).toMatchObject({ cached: true, verdict: 'approve', outcome: 'ran' })
     await submit($ as never, 'again')
     await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
     expect(w.modelRequests).toHaveLength(2)
+  })
+
+  test('a command differing only by a newline in place of a space is reviewed again, not a cached approve', async ($, on) => {
+    const w = world(on, { replies: [APPROVE, APPROVE] })
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf\nbuild' })
+    expect(w.modelRequests).toHaveLength(2)
+    expect((await auditLines(w))[1]?.cached).not.toBe(true)
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf\nbuild' })
+    expect(w.modelRequests).toHaveLength(2)
+    expect((await auditLines(w))[2]).toMatchObject({ cached: true, verdict: 'approve' })
   })
 
   test('a block or revise is never reused', async ($, on) => {

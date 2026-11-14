@@ -200,6 +200,17 @@
       "description": "On: no theme text anywhere (names, flavour, the loot roll). Off: themed. Claude always reads plain refusals.",
       "required": false,
       "default": false
+    },
+    "trustProjectRules": {
+      "type": "string",
+      "title": "Trust project rules files",
+      "description": "confirm: the settings of a project's rules file that loosen the gate or run code (allow and review rules, disabled rules, the secrets allowlist, models, project checks, extra secret patterns) take effect only after you confirm that exact file with /council trust. always: every rules file is trusted, as before; only for a host whose owner controls which repositories it opens (a cloud or CI environment).",
+      "required": false,
+      "default": "confirm",
+      "options": [
+        "confirm",
+        "always"
+      ]
     }
   }
 }

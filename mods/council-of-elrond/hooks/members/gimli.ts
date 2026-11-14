@@ -74,3 +74,10 @@ export const isGimliBlock = (run: GimliRun): boolean => run.status === 'failed' 
 
 /** The longest any configured command may run: with the model deadline, how long a council can take. */
 export const longestTimeout = (commands: readonly GimliCommand[]): number => commands.reduce((most, command) => Math.max(most, command.timeoutMs), 0)
+
+/**
+ * What stands in for the project's checks while their rules file is not
+ * trusted: a check that could not be started, which blocks the council as one
+ * does. Nothing was run; the strings come from the caller.
+ */
+export const notRunCheck = (name: string, problem: string): GimliRun => ({ name, status: 'error', tail: '', problem, ms: 0 })

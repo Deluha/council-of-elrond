@@ -1,4 +1,5 @@
-import { ANSWER_FORMAT, label, truncate, untrusted, untrustedRules } from './shared.js'
+import { ANSWER_FORMAT, fenced, label, noteLines, OMISSION_RULES, projectReasonLines, untrustedRules } from './shared.js'
+import type { Omitted } from './shared.js'
 import type { CallDiff } from './legolas.js'
 import { seatOf } from '../elrond/routing.js'
 import type { Classification } from '../rules/classify.js'
@@ -13,8 +14,14 @@ export type AragornGitContext = {
   /** The command, redacted already. */
   call: string
   ruleReasons: readonly string[]
+  /** The project rules' reasons, cleaned (`reasonsOf`); shown inside a data block. */
+  projectReasons?: readonly string[]
   /** The read-only preview: branch, remote and the commits a push would send, or recent history. */
   preview?: string
+  /** What the preview's own cut left out, when it was cut before it got here. */
+  previewOmitted?: Omitted
+  /** What the preview could not show (a push's commits), in the mod's own words. */
+  notes?: readonly string[]
   /** The configured protected branches (names or globs). */
   protectedBranches: readonly string[]
   latestPrompt: string
@@ -27,8 +34,12 @@ export type AragornDatabaseContext = {
   /** The command or the call's arguments, redacted already. */
   call: string
   ruleReasons: readonly string[]
-  /** SQL the call runs or writes: inline (`-c`, heredoc), files it names, or a file tool's diff. Redacted already. */
+  /** The project rules' reasons, cleaned (`reasonsOf`); shown inside a data block. */
+  projectReasons?: readonly string[]
+  /** SQL the call runs or writes: inline (`-c`, heredoc), files it names, or a file tool's diff. Redacted whole already; the prompt cuts it. */
   sql: readonly SqlPiece[]
+  /** SQL files the call names that are not in `sql`: outside the project, missing or unreadable, or past the cap. */
+  unseenSqlFiles?: number
   /** For a file tool: the diff of the SQL file. */
   diff?: CallDiff
   /** What in the call looks like production, by the configured patterns. */
@@ -90,7 +101,7 @@ const isSqlFile = (word: string): boolean => /\.sql$/i.test(word)
  * an input redirect or an argument). Files are only named here; register.ts
  * reads them.
  */
-export function sqlOf(classification: Classification): { inline: SqlPiece[]; files: { word: string; cwd?: string }[] } {
+export function sqlOf(classification: Classification): { inline: SqlPiece[]; files: { word: string; cwd?: string }[]; pastCap: number } {
   const inline: SqlPiece[] = []
   const files: { word: string; cwd?: string }[] = []
   for (const finding of classification.findings) {
@@ -129,7 +140,7 @@ export function sqlOf(classification: Classification): { inline: SqlPiece[]; fil
     if (part.input.trim() !== '') inline.push({ label: `${program} input (heredoc)`, text: part.input })
   }
   const unique = new Map(files.map(file => [`${file.cwd ?? ''}\u0000${file.word}`, file]))
-  return { inline, files: [...unique.values()].slice(0, ARAGORN_LIMITS.maxSqlFiles) }
+  return { inline, files: [...unique.values()].slice(0, ARAGORN_LIMITS.maxSqlFiles), pastCap: Math.max(0, unique.size - ARAGORN_LIMITS.maxSqlFiles) }
 }
 
 /** The text in `text` each production pattern matches, once each. */
@@ -153,6 +164,7 @@ export function aragornGitSystem(nonce: string): string {
     '5. Intent: does it match what the user asked for in their latest message?',
     'A rule already flagged this call; that alone is not a reason to block. Block what is clearly dangerous or unrequested, revise what has a safer form (a feature branch, --force-with-lease, a revert instead of a rewrite), approve what is proportionate.',
     untrustedRules(nonce),
+    OMISSION_RULES,
     ANSWER_FORMAT,
   ].join('\n')
 }
@@ -162,14 +174,16 @@ export function aragornGitPrompt(context: AragornGitContext, nonce: string): str
   const sections = [
     `Tool: ${context.tool}`,
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
+    ...projectReasonLines(context.projectReasons, nonce),
     `Protected branches: ${context.protectedBranches.join(', ') || '(none configured)'}`,
     'Proposed command:',
-    untrusted('call', truncate(context.call, limits.callLines, limits.callChars), nonce),
+    fenced('call', context.call, nonce, { limits: { lines: limits.callLines, chars: limits.callChars } }),
     context.preview !== undefined
-      ? `The repository (read-only preview):\n${untrusted('preview', truncate(context.preview, limits.previewLines, limits.previewChars), nonce)}`
+      ? `The repository (read-only preview):\n${fenced('preview', context.preview, nonce, { limits: { lines: limits.previewLines, chars: limits.previewChars }, ...(context.previewOmitted !== undefined && { earlier: context.previewOmitted }) })}`
       : 'No preview is available.',
+    ...noteLines(context.notes),
     "The user's latest message:",
-    untrusted('user-request', truncate(context.latestPrompt || '(none recorded)', 60, limits.promptChars), nonce),
+    fenced('user-request', context.latestPrompt || '(none recorded)', nonce, { limits: { lines: 60, chars: limits.promptChars } }),
     'Your verdict, as JSON only:',
   ]
   return sections.join('\n\n')
@@ -188,23 +202,30 @@ export function aragornDatabaseSystem(nonce: string): string {
     '7. Intent: does it match what the user asked for in their latest message?',
     'A rule already flagged this call; that alone is not a reason to block. Block what is clearly dangerous or unrequested, revise what has a safer form (a WHERE clause, a transaction, a staging target), approve what is proportionate.',
     untrustedRules(nonce),
+    OMISSION_RULES,
     ANSWER_FORMAT,
   ].join('\n')
 }
+
+/** Said outside any data block: SQL that is left out is not SQL that is harmless. */
+const unseenSqlNote = (count: number): string =>
+  `Note: ${count === 1 ? 'a SQL file' : `${count} SQL files`} the call names could not be shown to you (outside the project, missing, unreadable or past the limit), so ${count === 1 ? 'its' : 'their'} content is unknown.`
 
 export function aragornDatabasePrompt(context: AragornDatabaseContext, nonce: string): string {
   const limits = ARAGORN_LIMITS
   const sections = [
     `Tool: ${context.tool}`,
     `Flagged because: ${context.ruleReasons.join(' ') || 'it matched a review rule.'}`,
+    ...projectReasonLines(context.projectReasons, nonce),
     `Looks like production: ${context.production.length > 0 ? context.production.map(hit => JSON.stringify(hit)).join(', ') : 'nothing matched the configured patterns'}`,
     context.diff !== undefined ? `Proposed change${context.diff.isNew ? ' (new file)' : ''}:` : 'Proposed call:',
     context.diff !== undefined
-      ? untrusted('diff', context.diff.diff, nonce)
-      : untrusted('call', truncate(context.call, limits.callLines, limits.callChars), nonce),
-    ...context.sql.map(piece => `SQL (${label(piece.label)}):\n${untrusted('sql', truncate(piece.text, limits.sqlLines, limits.sqlChars), nonce)}`),
+      ? fenced('diff', context.diff.diff, nonce, context.diff.omitted === undefined ? {} : { earlier: context.diff.omitted })
+      : fenced('call', context.call, nonce, { limits: { lines: limits.callLines, chars: limits.callChars } }),
+    ...context.sql.map(piece => `SQL (${label(piece.label)}):\n${fenced('sql', piece.text, nonce, { limits: { lines: limits.sqlLines, chars: limits.sqlChars } })}`),
+    ...(context.unseenSqlFiles !== undefined && context.unseenSqlFiles > 0 ? [unseenSqlNote(context.unseenSqlFiles)] : []),
     "The user's latest message:",
-    untrusted('user-request', truncate(context.latestPrompt || '(none recorded)', 60, limits.promptChars), nonce),
+    fenced('user-request', context.latestPrompt || '(none recorded)', nonce, { limits: { lines: 60, chars: limits.promptChars } }),
     'Your verdict, as JSON only:',
   ]
   return sections.join('\n\n')

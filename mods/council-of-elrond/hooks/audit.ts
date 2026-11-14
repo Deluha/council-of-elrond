@@ -79,21 +79,20 @@ export function auditLine(record: AuditRecord): string {
   return `${JSON.stringify({ ...record, reason })}\n`
 }
 
-// Fields whose whitespace carries no meaning, so a reformatted value is the
-// same call. A shell command is one; a file's content is NOT (indentation is
-// significant in YAML, Python, Makefiles), so it is hashed exactly, or a
-// re-indented write would reuse an earlier approve without review.
-const INSIGNIFICANT_WHITESPACE = new Set(['command'])
+// No field's whitespace is collapsed: every string is hashed exactly. In a
+// shell command a newline separates commands and whitespace inside quotes is
+// data, so a reformatted command can be a different call; in a file's content
+// indentation is significant too (YAML, Python, Makefiles). A reformatted call
+// is reviewed again rather than reusing an earlier approve.
 
-/** Sorts keys; collapses whitespace only in fields where it has no meaning. */
-function canonical(value: unknown, collapseWhitespace = false): unknown {
-  if (typeof value === 'string') return collapseWhitespace ? value.replace(/\s+/g, ' ').trim() : value
-  if (Array.isArray(value)) return value.map(item => canonical(item, collapseWhitespace))
+/** Sorts keys; every value is kept exactly as given. */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical)
   if (typeof value === 'object' && value !== null) {
     return Object.fromEntries(
       Object.keys(value)
         .sort()
-        .map(key => [key, canonical((value as Record<string, unknown>)[key], INSIGNIFICANT_WHITESPACE.has(key))]),
+        .map(key => [key, canonical((value as Record<string, unknown>)[key])]),
     )
   }
   return value

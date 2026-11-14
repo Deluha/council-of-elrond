@@ -105,7 +105,7 @@ describe("no re-entry from the mod's own calls", () => {
     expect((await auditLines(w)).filter(line => line.tool !== 'Bash')).toEqual([])
   })
 
-  test("no re-entry from the mod's own calls: its project checks and writes never reach the gate", async ($, on) => {
+  test("no re-entry from the mod's own calls: its project checks and writes never reach the gate", { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     rulesWith(w, { ...blockAsking, gimli: { commands: [{ name: 'tests', argv: ['npm', 'test'] }] } })
     expect(await $.tool.call(PUSH)).toEqual({ result: 'ran' })

@@ -222,7 +222,7 @@ describe('what the touched scopes share', () => {
 const lines = (w: World, dir: string) => auditLines(w, logOf(dir))
 
 describe('rules per repository', () => {
-  test('a file edit in app resolves app\'s rules; in lib the shipped defaults; a command run in lib gets the defaults', async ($, on) => {
+  test('a file edit in app resolves app\'s rules; in lib the shipped defaults; a command run in lib gets the defaults', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { multiRepo: true, answer: KEEP_BLOCKED, replies: [APPROVE] })
     // app: its project protected path applies.
     await $.tool.call({ tool: 'Edit', file_path: `${APP}/config/secret/x`, old_string: 'a', new_string: 'b' })
@@ -307,7 +307,7 @@ describe('rules per repository', () => {
     })
   }
 
-  test('shell targets: cd into a repository keeps the root scope for the part before it; an unknowable cd brings in the root', async ($, on) => {
+  test('shell targets: cd into a repository keeps the root scope for the part before it; an unknowable cd brings in the root', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { multiRepo: true, replies: [APPROVE] })
     // From the root: `cd app && npm publish` is app's allow rule AND the root's defaults: the stricter.
     await $.tool.call({ tool: 'Bash', command: 'cd app && npm publish' })
@@ -322,7 +322,7 @@ describe('rules per repository', () => {
     expect(w.modelRequests).toHaveLength(2)
   })
 
-  test('shell targets: a path in another repository brings it in; a path in none does not bring in the root', async ($, on) => {
+  test('shell targets: a path in another repository brings it in; a path in none does not bring in the root', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { multiRepo: true, answer: KEEP_BLOCKED, replies: [APPROVE] })
     // From lib, naming app's protected path: app's scope sees it.
     w.cwd = LIB
@@ -336,7 +336,7 @@ describe('rules per repository', () => {
     expect(w.modelRequests).toHaveLength(0)
   })
 
-  test('two repositories: the strictest decides', async ($, on) => {
+  test('two repositories: the strictest decides', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { multiRepo: true, replies: [BLOCK] })
     w.cwd = APP
     // app allows `npm publish`; lib's defaults review it. Named together, it is reviewed.
@@ -383,7 +383,7 @@ const withChecks = (w: World, path: string, names: readonly string[]): void => {
 }
 
 describe('the project checks and git, per repository', () => {
-  test('a council call in app runs app\'s checks in app', async ($, on) => {
+  test('a council call in app runs app\'s checks in app', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { multiRepo: true, isClockMocked: true, replies: [APPROVE] })
     w.cwd = APP
     expect(await $.tool.call({ tool: 'Bash', command: PUSH })).toEqual({ result: 'ran' })
@@ -392,7 +392,7 @@ describe('the project checks and git, per repository', () => {
     expect((await lines(w, APP))[0]?.council).toMatchObject({ checks: [{ name: 'app-tests', status: 'passed' }] })
   })
 
-  test('two repositories: each check runs in its own directory, eight at most', async ($, on) => {
+  test('two repositories: each check runs in its own directory, eight at most', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { multiRepo: true, surfaces: [], isClockMocked: true, replies: [APPROVE] })
     withChecks(w, APP_RULES, ['a1', 'a2', 'a3', 'a4', 'a5'])
     withChecks(w, `${LIB}/${RULES}`, ['l1', 'l2', 'l3', 'l4', 'l5'])
@@ -405,7 +405,7 @@ describe('the project checks and git, per repository', () => {
     expect(w.logs.join('\n')).toContain('Gimli would run alongside: "a1", "a2", "a3", "a4", "a5", "l1", "l2", "l3".')
   })
 
-  test('switched off, none runs; the root scope alone keeps today\'s checks', async ($, on) => {
+  test('switched off, none runs; the root scope alone keeps today\'s checks', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { multiRepo: true, isClockMocked: true, replies: [APPROVE] })
     withChecks(w, `${ROOT}/${RULES}`, ['root-check'])
     // A root rules file turns the lookup off: the one scope is the root's, run in the root.
@@ -509,7 +509,7 @@ describe('offers and the allowlist', () => {
     expect((await auditLines(w)).map(line => line.ruleAdded)).toEqual([undefined])
   })
 
-  test('a call in one repository: the rule is written to that repository\'s file, and the next call sees it', async ($, on) => {
+  test('a call in one repository: the rule is written to that repository\'s file, and the next call sees it', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { multiRepo: true, answers: [ALLOW_ONCE, 'Add the rule'], answer: KEEP_BLOCKED })
     w.cwd = APP
     expect(await $.tool.call(SECRET_COMMAND)).toEqual({ result: 'ran' })
@@ -528,7 +528,7 @@ describe('offers and the allowlist', () => {
     expect(w.asked).toHaveLength(3)
   })
 
-  test('the allowlist option only where one repository\'s file can take the entry', async ($, on) => {
+  test('the allowlist option only where one repository\'s file can take the entry', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const secret = { tool: 'Write', content: 'const password = "hunter2xyz"' } as const
     const w = world(on, { multiRepo: true, answer: KEEP_BLOCKED })
     await $.tool.call({ ...secret, file_path: `${APP}/src/db.ts` })
@@ -543,7 +543,7 @@ describe('offers and the allowlist', () => {
     expect(w.asked[2]?.question).toContain('may be a secret')
   })
 
-  test('the allowlist entry goes to that repository\'s file and is honoured there', async ($, on) => {
+  test('the allowlist entry goes to that repository\'s file and is honoured there', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { multiRepo: true, answers: [ALLOWLIST, 'Add it'], answer: KEEP_BLOCKED, replies: [APPROVE] })
     const call = { tool: 'Write', file_path: `${APP}/src/db.ts`, content: 'const password = "hunter2xyz"' } as const
     expect(await $.tool.call(call)).toEqual({ result: 'ran' })
@@ -555,7 +555,7 @@ describe('offers and the allowlist', () => {
     expect(w.asked).toHaveLength(2)
   })
 
-  test('the secrets allowlist is the intersection of the touched repositories\'', async ($, on) => {
+  test('the secrets allowlist is the intersection of the touched repositories\'', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const acme = 'ACME-12345678'
     const w = world(on, { multiRepo: true, replies: [APPROVE] })
     w.files.set(
@@ -624,7 +624,7 @@ describe('the verdict cache and the chat key', () => {
 })
 
 describe('reloading', () => {
-  test('a repository\'s file is read once; /council reload reads it again, and sees a repository made since', async ($, on) => {
+  test('a repository\'s file is read once; /council reload reads it again, and sees a repository made since', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { multiRepo: true, replies: [APPROVE] })
     w.cwd = APP
     expect(await $.tool.call({ tool: 'Bash', command: 'npm publish' })).toEqual({ result: 'ran' })
@@ -665,7 +665,7 @@ describe('reloading', () => {
 })
 
 describe('/council in a repository', () => {
-  test('rules and models read the working directory\'s repository; test classifies like a real call', async ($, on) => {
+  test('rules and models read the working directory\'s repository; test classifies like a real call', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { multiRepo: true, surfaces: [] })
     w.cwd = APP
     await council($, 'rules')

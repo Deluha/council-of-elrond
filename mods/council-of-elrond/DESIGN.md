@@ -77,15 +77,19 @@ hooks: session.start, session.detach, session.attach, prompt.submit, command.run
        ui.render{component=AbovePrompt}, ui.render{component=SessionMode}, tool.call
 calls: $.clock.after (via epicDrop, runCheck), $.clock.now, $.command.register,
        $.config.set (via councilModel), $.env.get (via loadContext), $.fs.exists,
-       $.fs.list (via previewOf), $.fs.read (via appendAudit, councilOutput, fileDiffOf, loadRules,
-       reportFrom, scriptsOf, sqlFilesOf, writeOverrides), $.fs.stat (via gitDirOf, loadChild,
-       loadContext, previewOf, realPathOf, sqlFilesOf), $.fs.write (via appendAudit, writeOverrides),
+       $.fs.list (via previewOf, rulesDirsInScope), $.fs.read (via appendAudit, councilOutput,
+       fileDiffOf, loadRules, readRulesFiles, reportFrom, scriptsOf, sqlFilesOf, writeOverrides),
+       $.fs.stat (via loadChild, loadContext, previewOf, realDirInside, realPathOf, rulesKeyOf,
+       sqlFilesOf),
+       $.fs.write (via appendAudit, writeOverrides),
        $.model.complete (via probeModel, review), $.process.run (via currentBranchOf,
-       runGitInspection), $.process.spawn (via runCheck), $.session.append (via announce), $.session.cwd,
+       runGitInspection), $.process.spawn (via runCheck),
+       $.session.append (via announce, noticeUntrusted), $.session.cwd,
        $.session.root (via loadContext),
-       $.session.surfaces (via announce, escalate, offerRule, openDebatePane, relayOf, show, showDebate,
-       syncIndicator),
-       $.state.get, $.state.set, $.ui.ask (via confirmAllowlist, escalate, offerRule), $.ui.log,
+       $.session.surfaces (via announce, escalate, noticeUntrusted, offerRule, openDebatePane, relayOf,
+       show, showDebate, syncIndicator),
+       $.state.get, $.state.set, $.store.get (via readTrust), $.store.set (via saveTrust),
+       $.ui.ask (via confirmAllowlist, escalate, offerRule), $.ui.log,
        $.ui.notice, $.ui.open (via openDebatePane, show, showDebate), $.ui.resolve,
        $.ui.status (via syncIndicator), $.ui.toast (via epicDrop, warnOnce)
 env reads: HOME
@@ -97,7 +101,11 @@ Re-run after C2 (§13.5): `session.detach` and `session.attach` hooks, and `$.se
 deliverables on 2.1.294: the lines were unchanged. Re-run on 2.1.296: unchanged
 but for `$.process.run`, now reached through `runGitInspection` (the push-range change after the
 final deliverables). Re-run on 2.1.299: unchanged. Re-run for C5 (§14.5): `loadContext`'s file read
-goes through `loadRules`, and `loadChild` joins the `$.fs.stat` callers.
+goes through `loadRules`, and `loadChild` joins the `$.fs.stat` callers. Re-run for the rules-file
+trust rule (§15 item 22): `$.store.get` and `$.store.set` are new (the trust record), `$.fs.list`
+gains `rulesDirsInScope`, `$.fs.read` gains `readRulesFiles`, `$.fs.stat` gains `rulesKeyOf`, and
+`noticeUntrusted` joins the `$.session.append` and `$.session.surfaces` callers; the hooks line is
+unchanged.
 
 There is no `tool.check` hook: the mod never takes part in the permission decision. The processes it
 starts are read-only `git` commands from Galadriel's table (§6, §8), and, for a big operation, the
@@ -156,7 +164,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 ```
 
 - **Files.** `hooks/register.ts` is the only file that touches `$`. Rules (`rules/`), config (`config/`), members (`members/`: one file per member, `brief.ts` pairing each member and profile with its prompts, `gimli.ts` the checks' outcomes), routing, the full council's seats (`elrond/council.ts`) and its verdict (`elrond/combine.ts`), escalation, refusal, model choice, the allow rule offered after "allow once" (`elrond/suggest.ts`), the report (`elrond/report.ts`) and the rows the debate pane and the band draw (`elrond/view.ts`) (`elrond/`), state (`state.ts`), audit (`audit.ts`), redaction and strings are pure modules.
-- **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 4), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt a person sends (composer or bridge origin) except a `/council` command: it clears rounds, failed attempts, lockouts and the cache. Any other prompt, `sdk` included, clears only the cache (§14.3).
+- **State.** The session value `council-of-elrond.session` (`types/index.d.ts`, shape version 5), plus `council-of-elrond.panel`, the lines the `/council` pane draws. `resetForPrompt` is the single reset, run on every prompt a person sends (composer or bridge origin) except a `/council` command: it clears rounds, failed attempts, lockouts and the cache. Any other prompt, `sdk` included, clears only the cache (§14.3).
 - **Config.** The shipped defaults are a TS module. Project overrides live at `.claude/council-of-elrond/rules.json`, read once per load, after the mod's own writes (an allowlist entry, an allow rule), and on `/council reload` (never by watching the file). Both writes go through `editOverrides` (`config/write.ts`). Where the session root is the parent of several repositories, each repository's own file is read the same way, once per repository, and a call is classified against the repositories it touches (§14.5).
 
 ## 4. Failure modes
@@ -173,12 +181,15 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | Model error, timeout (`timeoutMs`), empty reply, malformed verdict, request refused | Escalate to you; "keep blocked" refuses. |
 | Token budget spent / no enabled member can take the call (the named one and Gandalf off) | Escalate without a model call. |
 | The file a diff needs can't be read (over 4 MiB, permissions) | The diff shows the call's own text and the prompt says so; the review goes on. |
-| A `.sql` file the call names is missing, unreadable, or lands outside the project (by name or real path) | Left out of the database reviewer's context; the review goes on. |
+| A `.sql` file the call names is missing, unreadable, or lands outside the project (by name or real path) | Left out of the database reviewer's context, with a one-line note in its prompt saying so (§15.13); the review goes on. |
 | Nobody can be asked (no surface) | Refuse, naming the operation, the rule and the reviewers' names (never their reasons) and the way to let it run; a failed attempt (§13.5 e). |
 | The start notice can't be appended (`$.session.append` rejects, or resolves `{ deny }`) | A debug line (`notice.appendFailed`); `session.start` goes on and returns `next(e)`. Nothing is retried; the refusal still tells Claude why (§13.5 d). |
 | The status sync after a roster change fails (`session.attach`, `session.detach`) | Caught where it is made; the hook returns what `next(e)` gave. The status line keeps its last value until the next sync (§13.5 f). |
 | `$.ui.ask` dismissed / "Chat about this" | Refuse, a failed attempt (recorded as `dismissed`; the two cannot be told apart, §12.4). "Talk first" refuses without counting (recorded as `chat`). |
 | Overrides file broken, unknown version, invalid field | Ignored whole; shipped rules enforce; a transcript line lists errors by field, plus a toast. Each repository's file under a multi-repository root is checked on its own and warns once (§14.5). |
+| The trust record cannot be read (`$.store.get` rejects, or the stored value is not the expected shape) | Nothing is trusted by it: a rules file with settings that wait for confirmation is held back, exactly as with no record. The tightening part of the file still applies. `/council trust <code>` then confirms nothing and says the record could not be read or saved (§15 item 22). With `trustProjectRules` at `always` the store is never read. |
+| The trust record cannot be saved (`$.store.set` rejects) | `/council trust <code>` confirms nothing and says why. After the mod's own write (the rule or allowlist offer the person answered), the new content is simply not trusted: a transcript line (`notice.trustNotSaved`) says to run `/council trust`. |
+| A rules file's content differs from the one confirmed (any byte; a copy at another path; a link that now points elsewhere) | Untrusted: the hash, or the real path, no longer matches the record. Its settings that wait for confirmation are held back at the next load (session start, `/council reload`, or when a call first reaches a repository below a multi-repository root); a session already running keeps the content it loaded and confirmed. |
 | Audit write fails | Logged to the debug log (`notice.auditFailed`); never changes a decision, and the queue goes on to the next line. Nothing waits for the queue: a write that never returns holds back only the lines queued after it, never a decision or a later call (§13.4 d). `/council log` and `/council report` read the files, so they may not show a line still queued. |
 | Two Claude Code sessions in one project share the audit log | `$.fs` has no lock and no append, so each write reads the whole file and writes it back: lines of the two sessions can interleave, and a line can be lost when two writes cross. Each session's own writes are queued in order. `/council report` skips any line it cannot parse (§13.4 e). |
 | A preview inspection fails or times out (5 s) | That inspection is left out; no preview is never a reason to allow or block. |
@@ -197,6 +208,8 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | A project check fails, times out or can't start | A block, with its last 20 lines (redacted) for Claude; none of its output in the audit log. |
 | A project check ignores being ended | The council stops waiting at its timeout and calls `return()` on the stream, which kills the child (verified live). |
 | The current branch can't be read for a `git merge` | The merge counts as one into a protected branch (full council). |
+| The current branch can't be read for a force push of it (`git push -f`, `-f origin HEAD`, `origin +HEAD`: git fails or times out, a detached HEAD, git pointed elsewhere, a folder outside the project or past the third) | The push is the ask tier, rule `force-push-unknown-branch`: the user is asked, or the call is refused where nobody can be asked. Never allowed and never hangs: the lookup has the previews' 5 s timeout and their git protections (§15.17). |
+| A range a push would send can't be named (a source or destination that is no plain ref name, no remote that is a plain name) or can't be read (git fails, times out), or the push names more than three refspecs | That refspec has no commit list and no diff. The preview says so, and every reviewer's prompt carries a trusted `Note:` line outside the data blocks, so the checked-out branch's commits are never read as the push's (§15.18). A diff reviewer with no readable range sits out (`council.noRange`). |
 | The range a push or merge would change can't be read (a bad ref; a new branch with no remote named, or a remote with no `<remote>/HEAD`) | For a push that names a remote, the table's fallback against `<remote>/HEAD` is tried once (§13.1). If that can't be read either, the diff reviewer sits out of that council; the others decide. |
 | Esc during a review or a council | The model requests abort and the check processes are killed with the dispatch (and `convene` ends its own checks on the dispatch's signal too). The mod then refuses plainly, whatever the partial answers were (§10.9): no dialog opens on the abandoned dispatch, no round and no failed attempt is counted, no tokens or verdict counts are added, the debate is closed `aborted`, and the call is audited as `refused` with verdict `aborted` and no decision. |
 | A check outlives a council that throws | Not any more: `convene` ends its checks in a `finally`, so a throw (a `$` call rejecting between members) ends them at once instead of at their own timeouts. The call is then refused, as any throw before the call runs (§13.4 b). |
@@ -263,7 +276,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 3. **Who sits** (`councilSeats`). Every enabled model member with something of this call to review:
    - Gandalf always.
    - Aragorn once per profile the call's review parts ask for (both, for `git push && psql …`), so neither prompt carries the other's baggage. A big operation that is neither git nor database (a project's `kubectl apply`) gets no Aragorn.
-   - Legolas for a file tool's diff, or for a push or merge: the changes it would send (`<remote>/<branch>..HEAD`, or `@{upstream}..HEAD`) or bring in (`HEAD...<ref>`), read by one `git diff --no-color --no-ext-diff --no-textconv <range> --` from Galadriel's table (refs validated as before). It is cut to the diff limit and redacted, and only runs while the preview is on. A range git can't read (a branch the remote doesn't have yet) seats nobody: Legolas sits out.
+   - Legolas for a file tool's diff, or for a push or merge: the changes it would send (per refspec, `<remote>/<destination>..<source>`, or `@{upstream}..HEAD` for a push that names none; §15.18) or bring in (`HEAD...<ref>`), read by `git diff --no-color --no-ext-diff --no-textconv <range> --` from Galadriel's table, one per range (refs validated as before). It is cut to the diff limit and redacted, and only runs while the preview is on. A range git can't read (a branch the remote doesn't have yet) seats nobody: Legolas sits out.
    - Legolas's system prompt now names both kinds of change, and the prompt says which it is.
    - Each seat gets its own brief from the shared `briefOf`, and every seat runs on the `council` model slot.
    - A new branch's push (a range git can't read) falls back to the remote's default branch: §13.1.
@@ -341,7 +354,7 @@ fixed before Stage 6. The decisions:
    a key can hold a target a command named verbatim (a push URL with a token).
 6. **The approve-cache fingerprint** (`audit.ts`) collapses whitespace only for fields where it
    has no meaning (a shell `command`); a file's content is hashed exactly, so a re-indented write
-   is not reused unreviewed.
+   is not reused unreviewed. *A shell command is hashed exactly too since §15 item 8.*
 7. **The allow rule offered after "allow once"** (`elrond/suggest.ts`) forbids the
    sandbox-disabled variant of the command, and the offer is withheld if the rule cannot be made
    safe.
@@ -1068,3 +1081,410 @@ ROADMAP C6.
 6. Record the result here and tick C6 in ROADMAP.md.
 
 **Passing the message on** *(approved 2026-10-20)*. `runCheck` keeps the rejection's message and returns it as `GimliRun.problem`, only when the final status is `error`: a run the clock or the council ended never carries one. Where the council's runs are redacted, the message is redacted too, with the call's patterns, and only then cut to one line of `PROBLEM_CHARS` (400) characters, so a cut cannot split a secret. `withTail` puts it after the status line and before the tail, in the reason Claude reads (`The error: …`); the audit `summary`, the `opinions` and the debate record are built from `runLine` and carry none of it, like the tail. Tests: "a check that cannot start blocks" (error in the refusal, none in the audit line), the redaction and cap test (a project's own pattern, which the refusal's own shipped-pattern redaction would miss), and a `combine` test. Mutations: dropping the problem from `withTail` fails those three; dropping `redact` on it fails the redaction test alone. Checked live headless on 2.1.304 with the same probe (one council, three reviews): Claude read `"bare" could not be started. The error: council-of-elrond: $.process.spawn(c6-no-such-binary) failed to start: ENOENT: Executable not found in $PATH: "c6-no-such-binary"`, and the audit line held no `ENOENT`.
+
+## 15. Hardening after the November review
+
+An independent audit of the rules tier found forms that reached a weaker tier than intended: a
+command the parser did not see, or a program it did not know. The rules tier is the safety
+boundary, so each was closed the same way as in §10. Every decision below is a **tightening**: more
+calls are reviewed, asked about or blocked, and none moves down a tier. They are recorded here as
+decided; the live list of what still passes is the README's "Known gaps in shell parsing".
+
+1. **Unquoted heredoc bodies are scanned for substitutions.** A heredoc whose delimiter has no
+   quote or backslash (`<<EOF`, `<<-EOF`) is expanded by the shell, so `$(...)` and backticks in the
+   body run. `takeHeredocs` (`rules/shell.ts`) now records, per heredoc, whether the delimiter was
+   quoted, and for an expanding one passes each substitution found in the body (`substitutionsIn`:
+   a backslash escapes the next character, `$((...))` is searched inside) to the nested scan, so it
+   becomes a part like any other. A body fed to a shell was already scanned whole; a quoted
+   delimiter keeps the body as data. Decided: a substitution in an expanding body counts even when
+   the heredoc feeds a program that only prints it, because the shell runs it first.
+2. **Wrappers that carry a positional or a split string.**
+   - `chrt` (priority), `taskset` (mask or list) and `setarch` (architecture) skip that word
+     before the command. For `chrt` and `taskset`, a pid form (`-p`, `--pid`, in a cluster too)
+     runs no command, so nothing is skipped and nothing is invented: the words parse as they always
+     did, which is why `taskset` keeps `-p` as a value option. `setarch` skips its first word only
+     when it is a known architecture name, so a command is never taken for one.
+   - `exec` reads a cluster ending in `-a` (`-la name`, `-cla name`) as taking the next word.
+   - `env -S` is read attached (`-S'cmd'`), in a cluster of `i`, `v` and `0` (`-vS`), and as
+     `--split-string=`; the words after the string are appended to it as its arguments before it is
+     classified.
+3. **Multi-call binaries and runners.**
+   - `busybox` and `toybox` are wrappers, so the applet is the command (`busybox sh -c` still reads
+     its script).
+   - `fakeroot`, `firejail` and `systemd-run` are wrappers. `fakeroot` and `systemd-run` have every
+     option listed, so an option they do not know cannot be skipped by guesswork.
+   - `op run`, `doppler run` and `mise exec`/`x` are runners, with `mise`'s `tool@version`
+     words read before its `--`.
+   - `script -c`, `nix-shell --run|--command` and `tmux new-session|new-window|split-window|
+     respawn-pane` (and their short names) are not stripped: their command string is classified
+     as `sh -c` is, from `inlineScriptOf`, so the program's own arguments stay visible to the
+     protected-path check. `script FILE COMMAND` (the BSD form) reads what follows the file.
+   - The two-word runners' option skipping assumed every option took a value, so a flag
+     (`npm exec --yes`) swallowed the command. Each runner now has the options it takes a value
+     for, a shared list of flags, and optional script options (`npm exec -c`, `doppler run
+     --command`, `mise exec -c`). **An option in neither list is read as taking a value, as every
+     option was before**, so no command that was seen is lost, and the call is also classified as
+     it stands: `coreOf` returns the words from the runner on as `unresolved`, `endPart` adds them as
+     a part, and the review rule `shell-runner-unresolved` matches it. The inner command keeps its
+     own tier when that is stricter (a block still blocks). This is the "cannot reliably find the
+     inner command: review" decision; the cost is a review for a rare valued option the tables lack,
+     and the fix is to add it to the table.
+   - The rule's pattern repeats the runner names in `rules/shell.ts`; the two are kept in step by
+     hand, and the rule's comment says so.
+4. **A program name computed at run time.** After assignments and wrappers are stripped, a first
+   word that contains `$` (a variable, `${...}`, a substitution; backticks and `$(...)` leave a
+   placeholder) is a program nobody can name: the review rule `shell-dynamic-program`. It is a
+   review, not an ask or a block, because a script that runs `"$@"` is ordinary, and a stricter rule
+   (block, ask, or another review that matched) still decides. A quoted `'$X'` is indistinguishable
+   after parsing and is reviewed too. Separately, an unquoted `$IFS` or `${IFS}` (with the empty `$9`
+   trick that follows it) ends the word, as whitespace, before classification, so `rm${IFS}-rf${IFS}~`
+   reaches the `rm` rule; inside double quotes it is data, as in the shell. The review rule is the
+   floor if a form of `IFS` slips past the separator.
+5. **Interpreters fed code without a flag.** The review rule `script-stdin` uses a new code check,
+   `interpreter-stdin` (`rules/checks.ts`; a name in `CHECKS`, so a project rule can name it too).
+   It holds for `python`, `python3`, `pythonX.Y`, `node`, `nodejs`, `deno`, `bun`, `perl`, `ruby`,
+   `php`, `Rscript` and `lua` when standard input is a pipe (`ShellPart.isPiped`, set by the scanner
+   for the part after `|` or `|&`), a heredoc, a here-string or a `<` redirect (not to
+   `/dev/null`), and no word names a script, module or subcommand, and none is a module (`-m`),
+   version or help flag. Decided: a pipe into a named script, `python3 -m json.tool` and
+   `bun run build` stay as they were. An explicit `-` and `-c` are the inline-code rule's.
+6. **Attached and clustered inline-code flags.** `script-inline` keeps its pattern for a code flag
+   anywhere in the arguments and gains branches for the attached and clustered forms, matched only
+   among the options before the script, so `python3 -m pytest -rA` and `node app.js --print=x` are
+   not read as inline code. The perl and ruby clusters name the switches that take no value
+   (`-ne`, `-pe`, `-0777ne`); `-Mfeature=say` is not one.
+7. **The mod protects itself.** `plugin-manage` (ask) covers `claude plugin|plugins`
+   `disable|uninstall|remove|rm|update|install|enable` and `plugin marketplace add|remove|rm|update`,
+   through wrappers and a path to the binary. Ask, not block, because the user may do it on purpose.
+   `claude plugin test|validate|list|eval` are not matched. The protected paths gain
+   `**/.claude/plugins/**`; the user-level `~/.claude/settings.json` and `settings.local.json` were
+   already covered by the existing `**/` entries, which match a path outside the root by its absolute
+   form. A glob cannot name a home folder, so the entry is not limited to `~/.claude/plugins/`: a
+   `.claude/plugins/` folder in a repository is protected too, the same breadth the settings
+   entries have. A read of a plugin file asks as well, as a read of `.env` does.
+8. **Commands are hashed exactly.** The verdict cache and chat approvals match a command exactly,
+   not after collapsing whitespace (this supersedes the shell-command half of §10 item 6).
+   A newline separates commands, and whitespace inside quotes is data, so no normalisation is safe
+   without parsing the command, and the parse cannot be the cache key's. A reformatted command is
+   reviewed again; the cost is one more review for a command retyped with different spacing.
+9. **Cut input keeps both ends** (a tightening). `truncate` kept the start and dropped the end, so
+   the end of a command, a script or a diff was never seen. `cut` (`members/shared.ts`) keeps about
+   two thirds of each limit from the start and one third from the end, on line boundaries (a line
+   longer than its share is cut inside), with one marker line, `[... N lines, M characters omitted
+   ...]`. Every place a reviewer's input, or the dialog's call text, was cut now uses it, and the
+   call's own redaction runs first. Where a text is cut twice (the preview: by the `previewLines`
+   setting, then by the reviewer's own limit; a diff cut while it is built) the amounts add up in
+   the note. Decided: a script and a `.sql` file are no longer cut in `register.ts` but redacted
+   whole and cut by the prompt, so one limit decides and the note can say how much; the production
+   patterns therefore match against the whole SQL, not its cut (more matches, never fewer). The
+   range diff is no longer pre-sliced to four times its limit before redaction: the engine already
+   caps a process's output at 4 MiB, and slicing first would drop the true end of the diff without
+   a word.
+10. **Reviewers are told what a cut means** (a tightening). The marker sits inside the data block,
+    where the call's own text can write the same line, so it proves nothing. Every system prompt
+    (`OMISSION_RULES`) says: content that was left out has not been seen and is not to be assumed
+    safe; approve only if what is visible and the nature of the call make the rest low-risk,
+    otherwise revise and ask for smaller pieces; a marker-like line with no cut notice after its
+    block is just content. The prompt builder writes that notice (`fenced`, `Cut notice: ...`)
+    outside the fence, after a block that was really cut, with the amount; text inside the fence can
+    imitate it, but not outside it, so the one place that is trusted is the one the call cannot
+    reach. Notes for context left out of a brief (item 13) are written the same way.
+11. **A cut shell command is never approved by a model alone** (a tightening). A command that is cut
+    hides code that will run, unlike a file or a diff, whose reviewer judges what it sees and is
+    told the rest is missing. When the command text of a shell call (`isCommandCut`, `members/
+    brief.ts`: the call limits of the general and the git and database reviewers; the range
+    command's own 40 lines and 4,000 characters for the diff reviewer) is past its reviewer's limit
+    and the verdict is an approve, the call is treated as one with no verdict: `askUser` with
+    `escalate.commandCut`, so it comes to the person where one can be asked and is refused where not
+    (`nobodyToAsk`, a failed attempt). A revise or a block stands. Nothing is cached, counts as no
+    round, and the audit line keeps the reviewer's `approve` with the reason. In shadow mode a
+    verdict never enforces, so the call runs and is not remembered. In the full council the rule
+    applies to a combined approve when any seat's command was cut; an objection from any seat
+    decides as before. A file tool's call text (its content) is never this: only a shell tool's
+    command.
+12. **Redact before cutting** (a tightening). A script, a `.sql` file, the changes a push would
+    send, the read-only preview and a file's diff were redacted after the cut, so a secret across
+    the cut no longer matched its pattern and a piece of it was shown. Each is redacted whole, then
+    cut, as the full council's check tail already is and the dialog's call and preview are. `callDiff` and
+    `formatPreviewCut` take the redaction as a function, so the order is theirs to keep.
+13. **Context left out is said so** (a tightening). A `.sql` file outside the project, missing or
+    unreadable (or past the three read) and a script not written through a file tool this session or
+    unreadable were dropped without a word; the reviewer now gets a one-line note, as the diff
+    reviewer already did for a file it could not read. The note counts; it names no path, so it
+    carries nothing the call wrote.
+14. **The dialog renders call text behind a gutter** (a tightening). The call and the preview came
+    out as lines of the question, so a command could contain a line that looked like the dialog's own
+    (a reviewer's verdict, a heading). Every line of the call and the preview now starts with the
+    gutter (`ask.gutter`) and has its control characters, C1 controls and Unicode line separators
+    replaced by a space; the dialog's own omission marker starts with two spaces and no bar, which a
+    line of the call never does. A reviewer's reason, a failure's problem and a secret's label and
+    snippet are put on one line the same way. `questionText` is still the one builder, and the
+    excerpt keeps its 12 lines and 600 characters (15 and 900 for the preview), now from both ends.
+15. **A malformed verdict echoes less** (a tightening). `parseVerdict` printed every unexpected key
+    the reviewer chose, uncapped, into a dialog, a refusal and the log. It names at most three, each
+    cut to 40 characters with control characters removed (`label`), and counts the rest.
+16. **More secrets are redacted** (a tightening). A value counts as a placeholder only when all of it
+    is one; a literal that merely starts with such a character is redacted and reported. Quoted
+    passwords with spaces, shorter values, `curl -u user:password`, `--password` for the known
+    database clients, and the `Authorization: Token`, `X-Api-Key` and `X-Auth-Token` headers are
+    covered, and text past the scan limit has its end scanned.
+17. **A force push of the current branch meets the protected-branch block** (a tightening).
+    `forcePushProtected` (`rules/checks.ts`) only read refspecs that name a branch, so a force push
+    that names none (`git push --force`, `-f`, `-f origin`) or only `HEAD` (`-f origin HEAD`,
+    `origin +HEAD`), which overwrites whatever branch is checked out, was only a review even with
+    `main` checked out. The check context gains an optional `currentBranch`
+    (`CheckContext`, so `ClassifyContext` too); `forcesCurrentBranch(part)` is the one test for such a
+    push (no refspec and a force flag, or a refspec landing on `HEAD` or `@` with a force flag or a
+    `+`; `--all`, `--mirror` and `--prune` stay `forcePushProtected`'s whole). With a force of the
+    current branch:
+    - the branch is a protected one (`protectedBranches`, globs included): the block rule
+      `force-push-protected-branch` fires;
+    - the branch is unknown (not supplied, empty, or `HEAD`, a detached checkout): the new shipped ask
+      rule `force-push-unknown-branch` (check `force-push-unknown-branch`, in `CHECKS`) fires. Ask,
+      not block, as the branch may be a feature branch; a project rule can still decide a call, but
+      cannot lower the block, and `disableRules` can switch the ask rule off like any shipped ask rule;
+    - the branch is known and not protected: unchanged (review).
+    A destination-only delete, a refspec naming a protected branch (`+HEAD:refs/heads/main`), `--all`
+    and `--mirror` keep their handling. `git push.default` and other config are not read.
+    - **Who reads the branch.** `register.ts` (`pushBranchOf`), before the call is classified, and
+      only for a call with a part `forcesCurrentBranch` is true for (`forcePushPlaces` in
+      `rules/classify.ts`, a walk over the parts with each part's folder after any `cd`, the same
+      `cwdAfter` the classifier uses). Any other call starts no process. Decided: this is narrower
+      than "any call with a `git push` part", so an ordinary push, which cannot change the outcome,
+      pays no extra git process and no existing process count moved. The read is `git rev-parse
+      --abbrev-ref HEAD` through `currentBranchOf`: `GIT_ENV` (no locks or prompts, `core.fsmonitor` and
+      `log.showSignature` off) and the 5 s inspection timeout. The session's own folder is used as
+      it is; a folder a `cd` leads to is resolved and must lie inside the real root (`realDirInside`,
+      the check `gitDirOf` makes).
+    - **Unknown, never allow.** A part git would run elsewhere (`runsElsewhere`: `-C`, `--git-dir`,
+      a location variable, a folder outside the root or one `cd` cannot name), a folder that resolves
+      outside the root, a git failure, a timeout, empty output, a detached `HEAD`, or pushes in more
+      than three distinct folders, leave the branch unknown: the call asks.
+    - **Pushes in several folders.** `currentBranch` is one value, so when one call forces the current
+      branch in folders on different branches, a branch the root's protected branches match is the
+      answer (the block then covers each of them: the safer side), else unknown (ask).
+    - `/council test` runs nothing, so it reads no branch: such a push shows as asked about, as a
+      merge is assumed to land on a protected branch.
+    - `--force-if-includes` counts as a force flag. It only modifies `--force-with-lease`, so this goes
+      one step past git; a tightening, and the shared parser (item 19) takes any `--force-...` option.
+    Tests: `rules.test.ts` (the block, review and ask matrix with the branch supplied, unknown,
+    detached and empty; `forcePushPlaces`), `pipeline.test.ts` (through `register`: block, review,
+    git failing, timing out, detached, empty, allow once, nobody to ask, no lookup for another call,
+    a `cd`, git pointed elsewhere, two folders, more than three folders). Mutations: ignoring
+    `currentBranch` in the check fails the block tests; treating an unknown branch as review fails
+    the ask tests.
+18. **A push's preview and range diff show what is pushed** (a tightening). Galadriel read the first
+    refspec's destination only and always took `HEAD` as the source, so `git push origin
+    other:main`, `git push origin other` and `git push origin a b` showed the checked-out branch's
+    commits as what would be sent. Every refspec is now read (`pushPlan` in `members/galadriel.ts`),
+    at most `MAX_PUSH_REFSPECS` (3): its range is `<remote>/<destination>..<source>` (a bare name is
+    its own source), the log and the council's diff both, each with its own `orElse` against
+    `<remote>/HEAD` for a branch the remote lacks (`<remote>/HEAD..<source>`, and three dots for the
+    diff). A push that names no refspec is the current branch, `@{upstream}..HEAD`, as before.
+    - **Nothing is shown for what cannot be named.** A source or destination that is not a safe ref
+      (`SAFE_REF`: a space, `..`, a wildcard, a leading `-`), or any named refspec when the remote is
+      not a plain name (a URL), has no range; a delete (`:old`, `--delete`, `-d`) sends no commits and
+      has none, and no note. A range git cannot read (also after the fallback) counts as unseen.
+    - **Said, trusted.** The count of refspecs with no range and the number past the cap become
+      `note` steps of the plan (not counted against the cap; shown in the preview, so the person sees
+      them), and a commit list that read nothing adds one more line (`unreadCommitsNote`). Every
+      reviewer's prompt then carries each as a `Note:` line after its preview, outside any data block
+      (`noteLines` in `members/shared.ts`, the same place `Cut notice:` and the unseen-script and SQL
+      notes stand), in the general, git and diff reviewer's contexts (`notes`). The diff reviewer
+      gets its own note for a range of the council's diff that could not be read; with none readable it
+      sits out as before. Decided: a push with no readable range shows no commit list and no
+      checked-out branch's commits in its place.
+    - **Several ranges, one cap.** A push lists up to three commit lists beside the branch and the
+      remote, so the plan's cap (3, DEVELOPMENT.md) rises by one per extra list (at most 5 for a
+      push); every other kind of preview keeps 3. The council's diff of several ranges shares the
+      diff limits (each range gets an equal share, then each sits under `# <range>` in one diff).
+    - **Labels.** `commits it would send (<range>)` and the fallback's label name the range actually
+      computed, per refspec, so the text of a push's labels changed (`origin/feature..feature`, where
+      it read `origin/feature..HEAD`).
+    - **Broad pushes (done in item 21).** `--all`, `--mirror` and `--tags` with no refspec still show
+      the current branch's commits (`@{upstream}..HEAD`, labelled as such), though the push sends
+      more than that; item 21 adds a trusted note saying so.
+    `rangeDiffInspection` became `rangeDiffInspections` (a list and the notes). Tests:
+    `galadriel.test.ts` ("what a push shows is what it pushes", and the pipeline tests that follow
+    it), `gitcwd.test.ts` and `council.test.ts` for the changed range text. Mutation: taking `HEAD`
+    as the source again fails the preview and council tests.
+19. **One reading of push arguments** (`parsePush`, `rules/push.ts`). The force-push check, the
+    operation key (`pushTargets`, `elrond/operations.ts`) and the preview (`pushPlan`) each had their
+    own loop over the words after `push`. They now share one: it skips the value of an option in
+    `PUSH_OPTIONS_WITH_ARG` (moved here from `rules/checks.ts`, which §13.7 (k) and (q) name), reads
+    the force, delete and every-ref flags, and returns the remote and each refspec as source and
+    destination (`+` and `refs/heads/` stripped from the destination; an empty source is a delete).
+    `rules/` is the one folder `elrond/` and `members/` both already import, so no new cross-folder
+    import. Operation keys are unchanged: every key `operations.test.ts` pins holds, and the new
+    tests pin more forms. An empty word is dropped for the key and the preview and kept for the
+    force-push check (`keepEmpty`), as each always read it, so no call that was blocked is read
+    differently. Differences that tighten, by design: a `+` after the colon (`a:+main`) is stripped
+    before the protected-branch test; any `--force-` option counts as force (item 17).
+20. **The retry brake follows each part of a compound command** (a tightening). An operation's key
+    and verb key were built from every gated part of a shell call joined together, so a part that
+    was locked out or out of rounds came back under a new key, and a new verb key, once another
+    gated part was added to the command: fresh rounds, no lockout, and every new combination the
+    same. `Operation` (`elrond/operations.ts`) now also holds `partKeys` (each gated part's own key,
+    exactly what a call of that part alone gets, redacted and capped alike) and `partVerbKeys` (each
+    part's verb key). For a call of one part, a file tool or another tool they hold just `key` and
+    `verbKey`, so those are counted and reset as before. Every reader goes through a helper that
+    takes the `Operation`, so no caller checks a bare key (`roundsLeft`, `isOutOfRounds`,
+    `noteRound`, `resetRounds`, `resetOperation`, `noteWipe`, `lockoutOf`, `lockedVerbOf`).
+    - **Counting.** A failed attempt counts on the whole key, on each part key that differs from it,
+      and on each distinct part verb key; the joined verb key is not counted any more (the per-verb
+      counters replace it). A review round counts on the whole key and each part key.
+    - **Checking.** Locked out: the whole key or any part key has 3 failed attempts, or any part
+      verb key has 5. Out of rounds (the next attempt goes to the person, with no model call): the
+      whole key or any part key has used its 2 rounds. The refusal's "rounds left" is the fewest
+      across those keys. The lockout reason names the verb that reached its cap.
+    - **Resets stay narrow.** A call that ran clears its whole key only; its part keys and the verb
+      counters stay. The person's typed instruction gives the whole key its rounds back, not its part
+      keys', so a compound whose part is out of rounds still goes to the person after it (and so does
+      that part alone). For a call of one part, a file tool or another tool the whole key is the only
+      key, so these resets are what they were. A new person's prompt resets everything, as before.
+      The wider resets (a success or an instruction also clearing the part keys) were considered and
+      left to the maintainer: they could lower a count a call of that part alone had earned, which is
+      a loosening.
+    - **State.** The stored shape is unchanged (version 5): `ops` and `verbWipes` hold the extra keys,
+      so nothing is migrated and no lockout is lost. A joined verb key already stored (from a
+      version that counted it) is still read: a call whose joined verb key equals it is locked out
+      by it until the next prompt, so an upgrade drops no lockout. It is no longer written.
+    - **Bounded.** Only the first `MAX_PART_KEYS` (8) gated parts of a call get part keys and part
+      verb keys. A call with more is decided by its whole key plus those eight, and a failed attempt
+      records at most nine keys, so a huge compound command cannot grow the session record (`ops`
+      stays capped at 200 entries as before).
+    - **The status** (`attemptsOf`, the pane and `/council`) counts a verb at its cap as locked out,
+      so it cannot say "0 locked out" while a verb is locked. Side effects of the keys sharing one
+      map: "operations" counts every tracked key, part keys included; "attempts" is the sum of the
+      verb counters, so a command with two kinds counts once on each; "locked out" counts keys and
+      verbs, so one locked compound can show as more than one.
+    - **Left as it was.** The lockout text for a part's key still reads "the same operation" (a part
+      of this call is the same operation). A retry through another tool or verb is still another
+      operation.
+    Tests: `operations.test.ts` (keys, counting, checking, resets, the stored joined verb key, the
+    status, and single-part, file and tool operations pinned to explicit state), `rounds.test.ts`
+    (through `register`: a locked part refuses a compound with no model request or question; an
+    out-of-rounds part sends it to the person with no model request; the typed instruction). Mutations:
+    checking only the whole key fails the lockout tests, counting a failed attempt only on the whole
+    key fails the counting and pipeline tests, ignoring part keys in `isOutOfRounds` fails the rounds
+    tests, resetting the part keys too (on a success or an instruction) fails the reset tests, leaving
+    verb lockouts out of the status fails its test.
+21. **A push of every branch or tag says so** (a tightening). `git push` with `--all`, `--mirror` or
+    `--tags` and no refspec still previews the current branch's `@{upstream}..HEAD`, as item 18 left
+    it, and its plan now carries a trusted `note` step (`broadPushNote`, `members/galadriel.ts`) saying the
+    push sends more branches or tags than the commits shown. It is in the preview the person reads
+    and in the `Note:` line every reviewer's prompt carries outside any data block, and in the notes
+    of the council's diff. A note is not counted against the preview's cap. A push that names a
+    refspec is read per refspec, as before, and has no such note. The shipped rules block `--all` and
+    `--mirror` (`force-push-protected-branch`), so in practice the note shows for `--tags`; the
+    plan and its tests cover all three. Test: `galadriel.test.ts`.
+22. **A project's rules file is trusted only after a person confirmed it** (a tightening; ROADMAP M1.3,
+    amendment AM8). A rules file arrives with a cloned repository and was honoured in full with
+    nobody confirming it: it could allow any tool, switch shipped review rules off, choose models,
+    blank what reviewers see with its own patterns, allowlist secrets and name commands the mod
+    spawns outside Claude Code's permission check. Decided by the maintainer on 2026-11-13: the
+    settings that loosen the gate or run code take effect only after a person has confirmed that
+    exact file content; until then they are ignored, and the settings that can only tighten still
+    apply, so an untrusted file can never make the gate weaker than no file.
+    - **The split** is one pure function, `splitByTrust` (`config/trust.ts`), driven by the table
+      `FIELD_TRUST` (a `Record` over every field of the schema, so a field added without a
+      classification fails the typecheck, and `trust.test.ts` compares the table with `TOP_KEYS`,
+      `GOLLUM_KEYS` and `GIMLI_KEYS`):
+
+      | Field | Held back until confirmed? | Why |
+      | :- | :- | :- |
+      | `rules` with tier `allow` | yes | lets a call through |
+      | `rules` with tier `review` | yes | see below |
+      | `rules` with tier `ask`, `block` | no | at or above every tier a project rule displaces |
+      | `disableRules` | yes | gates fewer calls |
+      | `protectedPaths`, `protectedBranches`, `productionPatterns` | no | lists that only add to the shipped ones |
+      | `bigOperations` | no | sends more calls to the full council |
+      | `models` | yes | names a model the mod sends the call to |
+      | `gollum.patterns` | yes | runs on call text and blanks what reviewers see |
+      | `gollum.allowlist` | yes | lets a secret through the scan |
+      | `gimli.commands` | yes | starts processes outside the permission prompts |
+
+      **`review` rules wait too (a tightening over the brief's first list).** A project rule decides
+      before the shipped non-block rules do (`classify`), so a project `review` rule that matches
+      what a shipped `ask` rule matches lowers it to a review: `sudo ls` under a project review rule
+      for `ls` is a review where the shipped rules ask. Tightening-only could not be shown for it,
+      so it is held back with the `allow` rules. `ask` and `block` rules cannot loosen anything
+      (block rules are a floor), so they apply at once. With the allow and review rules removed the
+      remaining project rules keep their order, and what they uncover is only ask or block.
+      `loadConfig(text, shipped, isTrusted)` merges only `split.always` when `isTrusted` is false
+      and reports the rest as `needsTrust` (counts and a summary); nothing held back is compiled,
+      so no held-back pattern is ever used as a regex on call text, and no held-back model id is
+      ever sent a request.
+    - **The record** is one value in the plugin's own store (`$.store`, key `trustedRules`):
+      `{ v: 1, files: [{ path, hash }] }`, oldest first, at most 200 (`TRUST_CAP`; the oldest is
+      dropped). `path` is the file's real path (`$.fs.stat` with `resolve`; the path as given when it
+      cannot be resolved) and `hash` the SHA-256, in hex, of the exact text as `$.fs.read` returned
+      it, the same text that is parsed, so what was hashed is what is enforced. A file is trusted
+      when its current hash equals the one stored for its path. Any change to the file, or a copy at
+      another path, is untrusted. A store that cannot be read, or holds another shape, trusts
+      nothing. The record lives outside the repository and outside session state.
+    - **The option.** `trustProjectRules` (`/config`): `confirm` (default) or `always`; any other value
+      is `confirm`. `always` trusts every file and reads no record (today's behaviour), for a host whose
+      owner controls which repositories it opens (cloud, CI). It is the user's configuration and is
+      never read from a rules file. Tests run with the manifest default, so those whose fixture holds
+      settings that wait set `{ options: { trustProjectRules: 'always' } }` on the test itself: the
+      shared fixture cannot set a default (the kit takes options per test): 31 tests in `council`,
+      `debate`, `done`, `gollum`, `pipeline`, `relay`, `robustness` and `scopes`, each with a project
+      file of allow rules, models, patterns, an allowlist or checks.
+    - **Project checks never silently drop.** A big operation whose touched scopes hold held-back
+      `gimli.commands` runs none of them (no process is spawned) and gets in their place one check
+      result, `project checks`, status `error`, problem `not run: the rules file is not trusted ...`
+      (`notRunCheck`), which `combine` counts as a check that could not be started: a block, with
+      the reason to Claude. With Gimli switched off in `/config` nothing is dropped, so nothing is
+      said. A trusted scope's checks in the same call still run. `/council test` says the council
+      would block.
+    - **The person is told** once per session per file content (`warnOnce` under `trust:<path>:<hash>`):
+      a transcript line and a toast with counts only, and, where nothing draws, one model-readable row
+      through the relay (`relay.rulesUntrusted`, like the start notice) that holds counts and no text
+      from the file. `/council rules` and `status` show per file: trusted (confirmed), trusted by the
+      option, or not trusted with the counts ignored, and say that no allow rule or allowlist entry is
+      offered meanwhile.
+    - **Confirming.** `/council trust` lists, per untrusted file in scope (the root's, or each
+      repository below a multi-repository root, §14.5), the counts and every allow or review rule
+      (id, tools, patterns), disabled rule id, model, check (its argv) and pattern id, then the
+      file's code, the first 8 hex characters of its hash. Allowlist entries are counted, never
+      shown (an entry may be the secret). Every value is redacted with the shipped patterns,
+      stripped of control characters (C0, C1, U+2028 and U+2029) so it is one line, capped at 300
+      characters and printed after the dialog's gutter (`ask.gutter`); ten items per kind, then
+      "and N more"; twenty files. `/council trust <code>` re-reads and re-hashes every file in
+      scope at that moment and confirms the ones whose hash starts with the code (8 to 64 hex
+      characters), records them, reloads the config and says what is now in force. No match, or
+      matches with different content, confirms nothing and says so; several files with the very same
+      content share a code and are confirmed together (decided: the person saw that content listed
+      for each). `/council untrust` removes the record of every file in scope and reloads. `trust`
+      (both forms) needs a person (`needsPerson`: `composer` or `bridge`, like `off`); `untrust`
+      only tightens and runs from any source. `/council reload` reads the record and trusts nothing.
+      The listing is not relayed where nothing draws (the relay's four subcommands stay four): such a
+      host sets the option.
+    - **The mod's own writes.** After the person answered "Add the rule" or confirmed an allowlist
+      entry, the content just written is recorded as trusted when the file was trusted before the
+      write, held nothing that waits, or did not exist (the person confirmed exactly that change). No
+      other path records trust. The offers themselves are skipped for a file that is held back (the
+      entry would not take effect), and `writeOverrides` re-reads and refuses the same case, so a
+      file that changed meanwhile is never rewritten. With the option at `always` nothing is recorded.
+    - **Project text is shown as the project's** (decided with the above). A project rule's
+      reason reached reviewers after "Flagged because" and the dialog as if it were the mod's own
+      words. `reasonsOf` (`members/shared.ts`) keeps the shipped rules' reasons as written and puts
+      the project's, cleaned (one line, control characters stripped, 200 characters), in their own
+      `projectReasons`: each reviewer's prompt shows them inside a `project-rule-reason` data block
+      under a lead-in that says they are the project's text, and the dialog shows them after the
+      gutter under "the project's own words". This applies to a trusted file as well.
+    - **Not covered.** The reason of a project block or ask rule is still part of the refusal Claude
+      reads and of the audit line, as before. A project regex in an `ask` or `block` rule, or in
+      `bigOperations`, is compiled and run on call text before trust, as before: it can only tighten,
+      but a pattern that backtracks without end could stall the hook (the engine's own 10 s budget
+      cuts the hook off from 2.1.299).
+    Tests: `trust.test.ts` (the table against the schema, the split per field, `loadConfig` held
+    back and never looser than no file, the record, the listing's redaction, caps and gutter, the
+    prompts and the dialog, and through `register` every effect before and after confirming, the
+    wrong and the stale code, an edited file, the `sdk` origin, `untrust`, the option, a failing
+    store, the mod's own writes, two repositories). Mutations: treating every file as trusted fails 22
+    tests; dropping `trust` from `needsPerson` fails the origin tests; comparing only the path fails
+    the edited-file and record tests; running the checks of an untrusted file fails the spawn test;
+    reading review rules as tightening fails the table and the never-looser test; dropping the
+    not-run check fails its test; offering the rule for an untrusted file fails the offer tests.

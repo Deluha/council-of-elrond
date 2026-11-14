@@ -14,8 +14,9 @@ the mod never takes part in Claude Code's own permission decision.
 > security product. The limits are stated plainly in the
 > [user manual](mods/council-of-elrond/README.md#what-it-does-not-protect-against).
 
-**Status:** pre-release. The original build stages are done; no version has been tagged yet. The
-road to the first release (0.6.0) and to 1.0 is in
+**Status:** pre-release. The original build stages are done; no version has been tagged yet (0.5.0
+and 0.6.0 are headings in the changelog on `main`, and the first tag will be 0.6.0). The
+road to the first release and to 1.0 is in
 [ROADMAP.md](mods/council-of-elrond/ROADMAP.md), milestones M0 to M7.
 
 ## Quick start
@@ -44,7 +45,7 @@ Full instructions, configuration, updating and removal: [docs/INSTALL.md](docs/I
 | :- | :- |
 | Users | [User manual](mods/council-of-elrond/README.md): tiers, reviewers, the full council, rules, models, options, commands, the secrets scan, escalation, the audit log, limits. [Installing and using](docs/INSTALL.md). |
 | Contributors | [CONTRIBUTING.md](CONTRIBUTING.md), [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (layout, conventions, tests, live checks, recipes), [ROADMAP.md](mods/council-of-elrond/ROADMAP.md) (status, next tasks, decisions, API facts). |
-| Maintainers | [docs/MAINTENANCE.md](docs/MAINTENANCE.md) (Claude Code updates, releases, review, triage), [docs/GITHUB.md](docs/GITHUB.md) (workflows, hooks, repository settings), [docs/REVIEW-2026-10.md](docs/REVIEW-2026-10.md) (the Stage 5 review: findings, since fixed in 0.5.0, and amendments, since decided). |
+| Maintainers | [docs/MAINTENANCE.md](docs/MAINTENANCE.md) (Claude Code updates, releases, review, triage), [docs/GITHUB.md](docs/GITHUB.md) (workflows, hooks, repository settings), [docs/REVIEW-2026-10.md](docs/REVIEW-2026-10.md) (the Stage 5 review: findings, mostly closed; its banner lists what remains open), [docs/REVIEW-2026-11.md](docs/REVIEW-2026-11.md) and [docs/REVIEW-2026-11-INDEPENDENT.md](docs/REVIEW-2026-11-INDEPENDENT.md) (the November review of the roadmap and the independent review of it). |
 | Design | [DESIGN.md](mods/council-of-elrond/DESIGN.md) (how it works, failure modes, every decision), [SPEC.md](mods/council-of-elrond/SPEC.md) (the original spec). |
 | Security | [SECURITY.md](SECURITY.md): what counts as a bypass and how to report one privately. [SUPPORT.md](SUPPORT.md) for everything else. |
 
@@ -52,11 +53,11 @@ Full instructions, configuration, updating and removal: [docs/INSTALL.md](docs/I
 
 ```
 mods/council-of-elrond/   the mod: manifest, hooks, tests, user manual, design, roadmap, spec
-mods/types/               Claude Code's generated API types for the build it targets (2.1.299)
+mods/types/               Claude Code's generated API types for the build it targets (DESIGN.md's header names it)
 docs/                     install, development, maintenance guides and reviews
 .claude-plugin/           marketplace manifest, so `claude plugin install` works from this repo
 .claude/skills/           skills for Claude Code sessions working on this repo
-.claude/agents/           agents those sessions delegate to (scribe: dictated edits and verify runs)
+.claude/agents/           agents those sessions delegate to (implementer edits and runs tests, reader reads across files, scribe writes internal notes; see CLAUDE.md "Orchestration")
 .github/                  CI, release workflow, issue and pull request templates, CODEOWNERS
 .githooks/ scripts/       pre-commit and commit-msg hooks, setup and hygiene scripts
 ```
@@ -64,7 +65,7 @@ docs/                     install, development, maintenance guides and reviews
 ```sh
 claude plugin test mods/council-of-elrond       # run the tests
 tsc -p mods                                    # typecheck
-claude plugin validate mods/council-of-elrond  # validate the plugin
+claude plugin validate --strict mods/council-of-elrond  # validate the plugin
 ```
 
 ## Contributing

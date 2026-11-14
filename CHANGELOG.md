@@ -11,6 +11,13 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 ## [Unreleased]
 
 ### Added
+- **`/council trust`, `/council trust <code>`, `/council untrust` and the option "Trust project rules
+  files".** `trust` lists what a project's rules file would enable once confirmed (counts, each allow
+  or review rule, disabled rule, model, check and pattern id, redacted and capped; secrets allowlist
+  entries counted, never shown) with the file's code; `trust <code>` confirms the file whose hash
+  starts with that code, as it stands now; `untrust` takes the confirmation back. Only a person's own
+  command runs `trust`. The option `trustProjectRules` is `confirm` (default) or `always`. See the
+  first entry under "Changed".
 - **Rules per repository under one root.** When the session root is the parent of several
   repositories (no `rules.json` of its own, no `.git`), each repository directly below it can have
   its own `.claude/council-of-elrond/rules.json`. A call is decided by the repositories it touches
@@ -82,6 +89,26 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   statement after the database file (`sqlite3 app.db "DROP TABLE x"`) and from `-init` files.
 
 ### Changed
+- **A project's rules file is ignored where it loosens the gate or runs code, until you confirm it.
+  After upgrading, your `rules.json` is untrusted until you act.** A rules file arrives with a cloned
+  repository and used to be honoured in full with nobody confirming it. Now its allow and review
+  rules, `disableRules`, `models`, `gollum.patterns`, `gollum.allowlist` and `gimli.commands` take
+  effect only after a person has confirmed that exact file content; until then they are as if absent
+  (so a big operation whose project checks are among them is refused with "not run: the rules file is
+  not trusted"), and its block and ask rules, protected paths, protected branches, production
+  patterns and `bigOperations` still apply. **Two ways to get the old behaviour back:** run
+  `/council trust`, read what it lists and type `/council trust <code>` (any change to the file makes
+  it untrusted again, and `/council untrust` takes it back); or set the new option "Trust project
+  rules files" to `always` (`trustProjectRules=always`) for a host whose owner controls which
+  repositories it opens, such as a cloud or CI environment. The confirmation is kept in the plugin's
+  own store, never in the repository. `/council rules` and `/council` show where each file stands; the
+  mod does not offer an allow rule or allowlist entry for a file that waits, and after your own
+  "Add the rule" or allowlist answer the file is trusted at its new content. See "Trusting a
+  project's rules file" in the README.
+- **A project rule's reason is shown as the project's text.** In a reviewer's prompt it sits inside a
+  data block under a lead-in that says so (not after "Flagged because"), and in the dialog it is
+  shown after the `|` bar, on one line of at most 200 characters. A shipped rule's reason is as it
+  was.
 - **The nobody-to-ask refusal says what was refused.** Where nothing draws and a call needs you, the
   refusal names the operation (the audit log's redacted key), the rule behind it and the reviewers
   by name, and tells Claude to tell you and how you can let the call run. Never the call's text, a
@@ -144,6 +171,42 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 
 
 ### Security
+- **A repository's rules file can no longer loosen the gate or run code on its own say-so.** See the
+  first entry under "Changed": its allow and review rules, disabled shipped rules, model choices,
+  extra secret patterns, secrets allowlist and project checks wait for a person to confirm that exact
+  content (a hash in the plugin's own store); a file that has not been confirmed can never make the
+  gate weaker than no file, and a project check it names is reported as not run, never dropped.
+  `/council trust` needs a person at the composer, as `/council off` does.
+- **A reformatted command is reviewed again.** An approval used to be reused for a later command that differed only in whitespace. Whitespace can change what a shell command does, so the verdict cache and chat approvals now match a command exactly.
+- **A heredoc body is read when the shell expands it.** With an unquoted delimiter (`<<EOF`,
+  `<<-EOF`) the shell runs the `$(...)` and backticks in the body; those commands are now classified
+  like any other part, so a delete or force push inside one is blocked or reviewed as usual. A quoted
+  delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) keeps the body as plain data, as before.
+- **More wrappers show the command they run.** `chrt`, `taskset` and `setarch` (their priority, mask
+  or architecture is skipped), `exec -a name` and `exec -la name`, `env -S'...'` and `env -vS ...`,
+  `busybox` and `toybox` (the applet is the command), `fakeroot`, `firejail`, `systemd-run`,
+  `op run`, `doppler run` and `mise exec`. The command strings of `script -c`, `nix-shell --run`,
+  `--command` and the `tmux` subcommands that start a command (`new-session`, `new-window`,
+  `split-window`, `respawn-pane`) are classified like `sh -c`. The package runners (`npm exec`,
+  `uv run`, `conda run` and the rest) now skip their own flags correctly (`npm exec --yes <cmd>`,
+  `conda run --no-capture-output <cmd>`), so the command after them is still seen. When a runner's
+  options cannot be read with certainty, the call is reviewed (`shell-runner-unresolved`) and the
+  inner command keeps its own tier if that is stricter.
+- **A program name computed at run time is reviewed** (`shell-dynamic-program`): a variable, `${...}`
+  or a substitution in the program position means the program is not known. An unquoted `$IFS` or
+  `${IFS}` is now read as a space, so a command written with it reaches its rule.
+- **Code fed to an interpreter without a flag is reviewed** (`script-stdin`): `python3`, `node`,
+  `deno`, `bun`, `perl`, `ruby`, `php`, `Rscript` or `lua` given no script and reading a pipe, a
+  heredoc, a here-string or a `<` redirect. A named script, `python3 -m module`, and a version or help
+  flag are unchanged.
+- **Inline code flags are matched attached and in clusters** (`script-inline`): `python3 -c'...'`,
+  `python3 -Bc '...'`, `perl -ne`, `-pe`, `-E`, `ruby -ne`, `-pe`, `node -pe`, `--eval=...`,
+  `--print=...`, `-e'...'` and `php -r'...'`.
+- **The mod protects itself.** `claude plugin disable|uninstall|remove|rm|update|install|enable` and
+  `claude plugin marketplace add|remove|rm|update` now ask (`plugin-manage`); `claude plugin test`,
+  `validate`, `list` and `eval` do not. Your plugin folders (`**/.claude/plugins/**`) are protected
+  paths like `.claude/settings.json`, which already covered `~/.claude/settings.json` and
+  `~/.claude/settings.local.json`.
 - **Allowed calls are scanned for high-confidence secrets.** A literal key in an allowed `curl` or
   `echo` used to reach the network or the transcript unscanned; it is now refused, as on a gated
   call, and logged with tier `allow` so `/council report` counts it. Low-confidence findings on an
@@ -157,6 +220,70 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **The mod's own git starts no configured program.** The write preview's `git diff --stat` turns off
   external diff drivers and textconv filters, and every git the mod runs switches off `core.fsmonitor`
   and `log.showSignature` (which runs the configured gpg program).
+- **A command too long to review is never approved by a model alone.** A reviewer reads at most 200
+  lines or 12,000 characters of a shell command (40 lines or 4,000 characters of the push or merge
+  command a diff reviewer quotes). Past that, an approve no longer lets the call run: it comes to
+  you with "The command was too long to review in full", or is refused where nobody can be asked,
+  exactly as a call with no verdict is. The approve is not remembered, and the audit line shows the
+  reviewer's approve with that reason. A revise or a block still stands, and a long file or diff is
+  not held back (its reviewer is told, below). In the full council it applies when every member
+  approves and one of them saw only part of the command.
+- **Cut input keeps both ends, and reviewers are told what was left out.** Input over a limit used
+  to keep its start and end with `[... truncated]`, and no reviewer was told what that meant. It now
+  keeps about two thirds from the start and one third from the end, with one line saying how many
+  lines and characters are missing. Every reviewer's instructions say that what was left out has not
+  been seen and is not to be assumed safe: approve only when the rest is low-risk, otherwise ask for
+  the change in smaller pieces. A note from the council, outside the quoted material, says when and
+  by how much a block was cut, so a marker typed into a command or a file means nothing.
+- **Secrets are redacted before a cut, not after.** A script, a `.sql` file, the changes a push would
+  send, the read-only preview and a file's diff were cut first, so a secret that straddled the cut no
+  longer matched its pattern and a piece of it reached the reviewer. They are redacted whole first.
+- **Left-out context is named.** A `.sql` file the call names that is outside the project, missing or
+  unreadable (or past the three the reviewer reads), and a script the call runs that was not written
+  through a file tool this session or could not be read, are now said so in one line of the prompt,
+  where they used to be left out without a word.
+- **The question shows call text behind a gutter.** Every line of the call and the preview in the
+  escalation question starts with `  | ` and has control characters removed, so text in a command
+  cannot imitate a line of the dialog (a reviewer's verdict, a heading). A reviewer's reason, a
+  problem and a secret snippet are kept to one line. A long call or preview shows its start and its
+  end with the amount not shown, within the same 12 lines and 600 characters as before.
+- **A malformed verdict echoes less.** The names of unexpected fields in a reviewer's reply are
+  capped (three, 40 characters each, control characters removed) before they reach a dialog, a
+  refusal or the log.
+- **More secrets are redacted.** A value is treated as a placeholder only when all of it is one (`$NAME`, `${NAME}`, `<your-key>`, `{{ ... }}`, `****`); a literal that merely starts with such a character is redacted and reported. Quoted passwords containing spaces, shorter values, `curl -u user:password`, `--password` for the database clients already known, and `Authorization: Token`, `X-Api-Key` and `X-Auth-Token` headers are now covered. Text longer than the scan limit also has its end scanned.
+- **A force push of the checked-out branch meets the protected-branch block.** A force push that
+  names no branch, or only `HEAD` (`git push --force`, `-f`, `-f origin`, `-f origin HEAD`,
+  `origin +HEAD`), overwrites the current branch, so the mod reads the branch checked out where the
+  push runs (only for such a push, in the folder it runs in, with the same git protections as the
+  previews) and blocks it when it matches your protected branches. When that branch cannot be
+  determined (a detached HEAD, git failing or timing out, git pointed elsewhere, more than three
+  folders), it asks (`force-push-unknown-branch`). On another branch it is reviewed as before.
+  `--force-if-includes` now counts as a force flag. `/council test` does not read the branch, so it
+  shows such a push as asked about.
+- **A push's preview and range diff show what is pushed.** The commits the preview lists and the
+  changes the diff reviewer reads are read per refspec (the first three), from its own source
+  against the remote branch it lands on: `git push origin other:main` shows `origin/main..other`, `git push origin a b` shows both.
+  A delete shows none. A refspec the mod cannot name safely, a range git cannot read, no remote that
+  is a plain name, or more than three refspecs is said in the preview and in a line the reviewers
+  read outside the preview, so they never take the checked-out branch's commits for the push's.
+  The operation key of a push is unchanged.
+- **Rounds, failed attempts and lockouts follow each part of a compound command.** A command made of
+  several gated parts used to be one operation as a whole, so the same part inside another
+  combination started again with no failed attempts and fresh review rounds. Each gated part now has
+  a key of its own (the key a call of that part alone has), and so does each part's verb. A failed
+  attempt counts on the whole call, on each part and on each verb of the call; a review round on the
+  whole call and each part. A call is locked out when its whole key or any part's key reached three
+  failed attempts, or any verb in it reached five; it goes to you without a model call when its
+  whole key or any part has used its two rounds. Your typed instruction gives the whole call its
+  rounds back, and a call that ran clears its whole key; neither touches a part's key or the verb
+  counters, so a part keeps what a call of that part alone has used. The status and the debate
+  pane count a locked verb as locked out. The first eight
+  gated parts of a call have part keys, so a long command cannot grow the session record. Existing
+  counts and lockouts are kept. A call of one part, a file tool or another tool counts as before.
+- **A push of every branch or tag says so in the preview.** `git push --all`, `--mirror` or `--tags`
+  with no refspec still lists the current branch's commits, and now adds a line, in the preview and
+  to every reviewer outside the preview, that the push sends more branches or tags than the commits
+  shown.
 
 ### Fixed
 - **The status line is cleared when its surface leaves.** A label set for a phone or VS Code

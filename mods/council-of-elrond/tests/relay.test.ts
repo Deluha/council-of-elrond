@@ -176,7 +176,7 @@ describe('/council output reaches Claude where nothing draws', () => {
     expect(result.context?.[0]).not.toContain(FAKE_GITHUB_TOKEN)
   })
 
-  test('rules: an exact-string allowlist entry shows no character of it to Claude, and still its first three to the person', async ($, on) => {
+  test('rules: an exact-string allowlist entry shows no character of it to Claude, and still its first three to the person', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { surfaces: [] })
     const entry = 'zq9-exact-string-entry'
     const hash = 'sha256:0123456789abcdef'

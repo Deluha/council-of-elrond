@@ -16,7 +16,8 @@ developer guide is [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Setup
 
-You need Claude Code 2.1.287 or later (the mod was built on 2.1.289 and checked on 2.1.294) and a
+You need Claude Code 2.1.287 or later (the version it was built and checked on is at the top of
+[`DESIGN.md`](mods/council-of-elrond/DESIGN.md)) and a
 TypeScript compiler (`npm install -g typescript`, or use `npx tsc`). There are no runtime
 dependencies and no `node_modules`.
 
@@ -75,8 +76,8 @@ The full conventions, with the reasons behind them, are in
 1. Branch from `main`. Keep the pull request to one topic.
 2. Run the three checks above. Paste the `hooks:` and `calls:` lines from
    `claude plugin validate` into `DESIGN.md` §2 if they changed.
-3. If you took a decision the spec or the roadmap does not cover, add it to the current stage's
-   section in `DESIGN.md` and mention it in the pull request.
+3. If you took a decision the spec or the roadmap does not cover, add it to `DESIGN.md`, in the
+   section for the current milestone or hardening pass, and mention it in the pull request.
 4. Update the user manual for any user-visible change, and `CHANGELOG.md` under "Unreleased".
 5. Fill in the pull request template. Say what you verified live, if anything, and what you did
    not. Label it (`rules`, `reviewers`, `pipeline`, `ui`, `docs`, `bug`, `ci`); the labels feed the

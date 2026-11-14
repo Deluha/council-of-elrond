@@ -130,7 +130,8 @@ describe('Legolas: the diff', () => {
     const big = Array.from({ length: 1000 }, (_, i) => `line ${i}`).join('\n')
     const diff = textDiff('big', undefined, big, 50)
     expect(diff.split('\n').length).toBeLessThanOrEqual(53)
-    expect(diff).toContain('[... truncated]')
+    // The marker's wording is the mod's; the cut keeps the start and the end (tests below).
+    expect(diff).toMatch(/\[\.\.\. \d+ lines, \d+ characters omitted \.\.\.\]/)
     const before = Array.from({ length: 2000 }, (_, i) => `a${i}`)
     const after = Array.from({ length: 2000 }, (_, i) => `b${i}`)
     const ops = lineOps(before, after)
@@ -219,7 +220,7 @@ describe('in the pipeline', () => {
     await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })
     // A push sits the full council; the git reviewer's request is the one with its checklist.
     const prompt = String(w.modelRequests.find(request => String(request.system).includes('Published history'))?.prompt)
-    expect(prompt).toContain('commits it would send (origin/feature..HEAD)')
+    expect(prompt).toContain('commits it would send (origin/feature..feature)')
     expect(prompt).toContain('abc123 Unrelated tweak')
     expect(prompt).toContain('Protected branches: main, master')
   })

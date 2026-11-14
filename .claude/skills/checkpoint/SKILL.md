@@ -1,11 +1,11 @@
 ---
 name: checkpoint
-description: Run the mod's three gates (tests, typecheck, validate) and draft the stage checkpoint summary SPEC §20 asks for. Use at the end of a stage, before a commit, or when asked "are we ready to commit / checkpoint".
+description: Run the mod's three gates (tests, typecheck, validate) and draft the checkpoint summary SPEC §20 asks for. Use at the end of a milestone, before a commit, or when asked "are we ready to commit / checkpoint".
 ---
 
-# Stage checkpoint
+# Milestone checkpoint
 
-The project stops at every stage checkpoint (SPEC §20) and waits for the maintainer. A checkpoint
+The project stops at every milestone checkpoint (SPEC §20) and waits for the maintainer. A checkpoint
 is: the three gates pass, DESIGN.md and ROADMAP.md are current, and the maintainer gets a short
 summary. Do these steps in order; stop and report at the first failure.
 
@@ -16,27 +16,27 @@ Run from the repository root:
 ```sh
 claude plugin test mods/council-of-elrond
 tsc -p mods
-claude plugin validate mods/council-of-elrond
+claude plugin validate --strict mods/council-of-elrond
 ```
 
-All three must pass. Paste the test count. If `validate` prints new `hooks:` or `calls:` lines
+Run them with the Claude Code build CI pins (ROADMAP "Resuming"). All three must pass. Paste the test count. If `validate` prints new `hooks:` or `calls:` lines
 (compare with DESIGN.md §2), update that section with the new lines.
 
 ## 2. Documents
 
 Check each and fix what is stale:
 
-- `mods/council-of-elrond/DESIGN.md`: the status line at the top; a numbered section "Decisions the
-  spec did not cover (Stage N)" holding every choice this stage made that SPEC.md and ROADMAP.md
-  did not already settle; the failure-mode table (§4) for any new failure path; §2's `hooks:` and
+- `mods/council-of-elrond/DESIGN.md`: the status line at the top; a numbered decision in its
+  section for the current milestone or hardening pass, for every choice this milestone made that
+  SPEC.md and ROADMAP.md did not already settle; the failure-mode table (§4) for any new failure path; §2's `hooks:` and
   `calls:` lines.
-- `mods/council-of-elrond/ROADMAP.md`: the stage table row (status, pull request link once it
-  exists); the stage's checklist ticked; new follow-ups under "Known follow-ups" with the stage
-  they came from.
+- `mods/council-of-elrond/ROADMAP.md`: the "Status" table (the milestone's status, a pull request
+  link once it exists); the milestone's briefs ticked; new follow-ups under "Later" with the
+  brief they came from.
 - `mods/council-of-elrond/README.md`: every user-visible change; the status paragraph.
 - `CHANGELOG.md`: the change under "Unreleased".
 - `mods/council-of-elrond/.claude-plugin/plugin.json`: `version` bumped only at a release, when
-  the "Unreleased" entries move under the new version (docs/MAINTENANCE.md); never at a stage
+  the "Unreleased" entries move under the new version (docs/MAINTENANCE.md); never at a
   checkpoint.
 - CI green on the branch (the "Hygiene" and "Test, typecheck, validate" jobs) before the
   checkpoint is reported.
@@ -61,4 +61,4 @@ Write it for the maintainer, in this order, each part a few lines:
    needing a terminal: dialogs, panes, bands, labels).
 5. **Gate results**: the test count, `tsc` clean, `validate` passed.
 
-Then stop and wait for the go-ahead. Do not start the next stage.
+Then stop and wait for the go-ahead. Do not start the next milestone.

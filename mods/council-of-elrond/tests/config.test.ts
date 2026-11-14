@@ -17,6 +17,16 @@ describe('config', () => {
     expect(loaded.compiled.rules.length).toBe(SHIPPED.rules.length)
   })
 
+  test('the November hardening rules are shipped, with the tiers they were decided at', () => {
+    const tiers = Object.fromEntries(SHIPPED.rules.map(rule => [rule.id, rule.tier]))
+    expect(tiers['plugin-manage']).toBe('ask')
+    for (const id of ['shell-dynamic-program', 'shell-runner-unresolved', 'script-stdin', 'script-inline']) expect(tiers[id], id).toBe('review')
+    expect(SHIPPED.protectedPaths).toContain('**/.claude/plugins/**')
+    // The check a rule names is one the schema knows, so a project rule can name it too.
+    const named = loadConfig(JSON.stringify({ schemaVersion: 1, rules: [{ id: 'mine', tier: 'review', tools: ['Bash'], check: 'interpreter-stdin', reason: 'r' }] }))
+    expect(named.errors).toEqual([])
+  })
+
   test('a file that is not JSON falls back to the shipped rules, with the error', () => {
     const loaded = loadConfig('{ not json')
     expect(loaded.origin).toBe('shipped')
