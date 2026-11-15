@@ -15,7 +15,13 @@ Type: <!-- fix / rules / reviewer / pipeline / ui / docs / ci --> · Milestone o
 - [ ] No new text in logic: strings are in `hooks/strings.ts`
 - [ ] Only `hooks/register.ts` touches `$`
 - [ ] Hooks installed (`scripts/setup.sh`) and the pre-commit hook passed, or the same checks were run by hand
-- [ ] If this touches `hooks/rules/`, `hooks/config/{defaults,schema,trust}.ts`, `hooks/register.ts`, `hooks/redact.ts`, `hooks/audit.ts`, `hooks/state.ts`, `hooks/members/{gollum,galadriel,shared,brief}.ts` or `hooks/elrond/{operations,commands,suggest,chat,escalation,refusal}.ts`: labelled `security` or `rules`, and no bypass input is quoted in the title or description
+- [ ] If this touches a path in the safety-boundary block of `.github/CODEOWNERS`: labelled `security` or `rules`, and no bypass input is quoted in the title or description
+
+## Gate
+
+**Gate:** tightens / neutral / loosens (approved by: …). Lower than `main`: none, or the list.
+
+**Lessons:** each review finding became a checker rule, a test, a hook or one guidance line, in that order of preference; list them, and each finding declined with the reason.
 
 ## Safety
 
