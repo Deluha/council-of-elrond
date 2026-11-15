@@ -89,12 +89,11 @@ copy (`git worktree` or `git archive` into scratch space).
 
 ## R13
 
-A headless live check (`/live-check`) where the brief asks for one. Name a small model and a
-budget explicitly: a child run otherwise inherits the session's model, plugins and permission
-mode, and costs real money.
-A child run inherits the session's model, plugins and permission mode unless flags say
-otherwise, and costs real money: single runs in the hardening sessions cost from about 0.2 to
-0.7 USD on the session's own model. Name `--model`, `--permission-mode` and a budget.
+A headless child run (`/live-check`, where a brief asks for one) names a small model, a
+permission mode and a budget on its command line (`--model`, `--permission-mode`, a budget flag),
+because a child run otherwise inherits the session's model, plugins and permission mode, and
+costs real money. Single runs in the hardening sessions cost from about 0.2 to 0.7 USD on the
+session's own model.
 How: `references/workflows/live-check.md`.
 
 ## R14

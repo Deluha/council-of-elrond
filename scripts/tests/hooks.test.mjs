@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, describe, test } from 'node:test'
@@ -152,25 +152,59 @@ describe('lint-edited.mjs', () => {
 
 describe('session-start.sh', () => {
   const PIN = '2.1.322'
+  // stdin is ignored on purpose: a bash whose stdin is a socket sources the system bashrc, which can add folders to PATH.
+  const quiet = ['ignore', 'pipe', 'pipe']
+  const found = (tool) => spawnSync('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim()
+  const BASH = found('bash')
+  // The only host tools the script needs. They are linked into the stub folder, which is the whole
+  // PATH of every run, so no real npm, claude or tsc can be reached and nothing can touch the network.
+  const TOOLS = ['grep', 'head', 'sed', 'mkdir', 'chmod', 'dirname', 'cat', 'git']
 
-  /** A project folder (a git repository with the CI pin and a .githooks folder), a home, and a folder of stub tools. */
-  function setup({ npmFails = false } = {}) {
+  /**
+   * A project folder (a git repository with the CI pin and a .githooks folder), a home, and a stub
+   * folder that is the entire PATH: stub npm, claude and timeout, plus links to TOOLS.
+   * Options: npmFails (every install fails), npmFailsFor (a package whose install fails),
+   * timesOutFor (a package whose install times out: the stub timeout exits 124 without running it),
+   * npm (false: no npm at all).
+   */
+  function setup({ npmFails = false, npmFailsFor = null, timesOutFor = null, npm = true } = {}) {
     const base = tmp('session-')
     const project = join(base, 'project')
     const home = join(base, 'home')
     const stubs = join(base, 'stubs')
     const log = join(base, 'npm.log')
+    const timeoutLog = join(base, 'timeout.log')
+    const flag = join(base, 'env-at-typescript')
     mkdirSync(home, { recursive: true })
+    mkdirSync(stubs, { recursive: true })
+    for (const tool of TOOLS) {
+      const real = found(tool)
+      assert.ok(real, `${tool} is needed by the test`)
+      symlinkSync(real, join(stubs, tool))
+    }
     put(project, '.github/workflows/ci.yml', `run: npm install -g @anthropic-ai/claude-code@${PIN} typescript\n`)
     put(project, '.githooks/pre-commit', '#!/bin/sh\n')
     const git = (...args) => spawnSync('git', args, { cwd: project, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } })
     git('init', '-q')
     git('add', '.')
     git('-c', 'user.name=me', '-c', 'user.email=me@example.com', 'commit', '-q', '-m', 'fixture')
+    // What is in the env file when the typescript step starts: the export must already be there.
+    const mark = `case "$*" in *typescript*) if grep -q COUNCIL_CLAUDE "$CLAUDE_ENV_FILE" 2>/dev/null; then echo ready > "${flag}"; else echo missing > "${flag}"; fi ;; esac`
+    // timeout: logs its bound and the command, and can claim the command timed out.
+    put(stubs, 'timeout', `#!/bin/sh
+secs=$1; shift
+echo "$secs $*" >> "${timeoutLog}"
+${mark}
+${timesOutFor ? `case "$*" in *${timesOutFor}*) exit 124 ;; esac` : ''}
+exec "$@"
+`, 0o755)
     // npm: logs its arguments and creates what the real one would.
-    put(stubs, 'npm', `#!/bin/sh
+    if (npm) {
+      put(stubs, 'npm', `#!/bin/sh
 echo "$*" >> "${log}"
+${mark}
 ${npmFails ? 'echo "npm ERR! offline" >&2; exit 1' : ''}
+${npmFailsFor ? `case "$*" in *${npmFailsFor}*) echo "npm ERR! offline" >&2; exit 1 ;; esac` : ''}
 prefix=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -189,10 +223,11 @@ else
   chmod +x "$prefix/node_modules/.bin/tsc"
 fi
 `, 0o755)
+    }
     // claude: `plugin list` says what STUB_PLUGINS says.
     put(stubs, 'claude', '#!/bin/sh\n[ "$1 $2" = "plugin list" ] && echo "$STUB_PLUGINS"\nexit 0\n', 0o755)
     const env = (extra = {}) => ({
-      PATH: `${stubs}:/usr/bin:/bin`,
+      PATH: stubs,
       HOME: home,
       CLAUDE_PROJECT_DIR: project,
       GIT_CONFIG_GLOBAL: '/dev/null',
@@ -200,14 +235,17 @@ fi
       ...extra,
     })
     const run = (extra) => {
-      const r = spawnSync('bash', [START], { env: env(extra), encoding: 'utf8', timeout: 60_000 })
+      const r = spawnSync(BASH, [START], { env: env(extra), encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL', stdio: quiet })
+      assert.equal(r.error, undefined, 'the hook ran to the end inside its test timeout')
       return { status: r.status, stdout: r.stdout, stderr: r.stderr }
     }
-    const installs = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : [])
+    const lines = (file) => (existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n').filter(Boolean) : [])
+    const installs = () => lines(log)
+    const bounds = () => lines(timeoutLog)
+    const envAtTypescript = () => (existsSync(flag) ? readFileSync(flag, 'utf8').trim() : null)
     const hooksPath = () => git('config', '--get', 'core.hooksPath').stdout.trim()
     const status = () => git('status', '--porcelain').stdout
-    const tscPresent = spawnSync('bash', ['-c', 'command -v tsc'], { env: { PATH: '/usr/bin:/bin' } }).status === 0
-    return { base, project, home, run, installs, hooksPath, status, git, tscPresent }
+    return { base, project, home, stubs, run, installs, bounds, envAtTypescript, hooksPath, status, git }
   }
 
   test('outside a cloud session it does nothing', () => {
@@ -228,6 +266,16 @@ fi
     assert.equal(s.hooksPath(), '')
   })
 
+  test('the PATH of a run holds the stub folder and nothing else, so no real npm can run', () => {
+    const s = setup()
+    const where = (tool) => spawnSync(BASH, ['-c', `command -v ${tool}`], { env: { PATH: s.stubs }, encoding: 'utf8', stdio: quiet }).stdout.trim()
+    assert.equal(where('npm'), join(s.stubs, 'npm'))
+    assert.equal(where('claude'), join(s.stubs, 'claude'))
+    assert.equal(where('timeout'), join(s.stubs, 'timeout'))
+    assert.equal(where('tsc'), '', 'no real tsc either')
+    assert.equal(spawnSync(BASH, ['-c', 'echo "$PATH"'], { env: { PATH: s.stubs }, encoding: 'utf8', stdio: quiet }).stdout.trim(), s.stubs)
+  })
+
   test('the first run installs the pinned build and typescript outside the repository; the second run installs nothing', () => {
     const s = setup()
     const envFile = join(s.base, 'envfile')
@@ -237,10 +285,11 @@ fi
     const cache = join(s.home, '.cache', 'council-of-elrond')
     const installs = s.installs()
     assert.ok(installs.some((l) => l.includes(`--prefix ${cache}/claude-${PIN}`) && l.includes(`@anthropic-ai/claude-code@${PIN}`)), installs.join('\n'))
-    if (!s.tscPresent) assert.ok(installs.some((l) => l.includes('typescript')), installs.join('\n'))
+    assert.ok(installs.some((l) => l.includes('typescript')), installs.join('\n'))
     assert.match(first.stdout, new RegExp(`COUNCIL_CLAUDE=${cache}/claude-${PIN}/node_modules/\\.bin/claude`))
     assert.match(readFileSync(envFile, 'utf8'), /^export COUNCIL_CLAUDE=.*claude-2\.1\.322.*\.bin\/claude$/m)
     assert.equal(s.hooksPath(), '.githooks')
+    assert.match(first.stdout, /set core\.hooksPath to \.githooks/)
     assert.equal(s.status(), '', 'the project is untouched')
 
     const before = s.installs().length
@@ -250,6 +299,38 @@ fi
     assert.match(second.stdout, /COUNCIL_CLAUDE=/)
     assert.equal(s.status(), '')
   })
+
+  test('the steps are bounded well inside the hook timeout: 200 s, 60 s and 10 s', () => {
+    const s = setup()
+    s.run({ CLAUDE_CODE_REMOTE: 'true' })
+    const b = s.bounds()
+    assert.ok(b.some((l) => /^200 npm install .*@anthropic-ai\/claude-code@/.test(l)), b.join('\n'))
+    assert.ok(b.some((l) => /^60 npm install .*typescript/.test(l)), b.join('\n'))
+    assert.ok(b.some((l) => /^10 claude plugin list/.test(l)), b.join('\n'))
+    const total = b.reduce((n, l) => n + Number(l.split(' ')[0]), 0)
+    const settings = JSON.parse(readFileSync(join(repo, '.claude', 'settings.json'), 'utf8'))
+    const hookTimeout = settings.hooks.SessionStart[0].hooks[0].timeout
+    assert.ok(total < hookTimeout, `${total} s of bounds against the hook's ${hookTimeout} s`)
+  })
+
+  for (const [name, options] of [
+    ['fails', { npmFailsFor: 'typescript' }],
+    ['times out', { timesOutFor: 'typescript' }],
+  ]) {
+    test(`COUNCIL_CLAUDE is exported before the typescript step, and stays exported when that step ${name}`, () => {
+      const s = setup(options)
+      const envFile = join(s.base, 'envfile')
+      writeFileSync(envFile, '')
+      const r = s.run({ CLAUDE_CODE_REMOTE: 'true', CLAUDE_ENV_FILE: envFile })
+      assert.equal(r.status, 0)
+      assert.equal(s.envAtTypescript(), 'ready', 'the env file already named COUNCIL_CLAUDE when the typescript install started')
+      assert.match(r.stdout, /installing typescript failed or timed out/)
+      assert.ok(r.stdout.indexOf('COUNCIL_CLAUDE=') >= 0 && r.stdout.indexOf('COUNCIL_CLAUDE=') < r.stdout.indexOf('installing typescript failed'), 'the context line comes first')
+      assert.match(readFileSync(envFile, 'utf8'), /^export COUNCIL_CLAUDE=.*\.bin\/claude$/m)
+      assert.doesNotMatch(readFileSync(envFile, 'utf8'), /PATH/)
+      assert.equal(s.hooksPath(), '.githooks', 'the steps after it still run')
+    })
+  }
 
   test('a cache holding another version is replaced', () => {
     const s = setup()
@@ -285,7 +366,7 @@ fi
   })
 
   test('no workflow file, no npm and an unreadable pin all exit 0', () => {
-    const s = setup()
+    const s = setup({ npm: false })
     rmSync(join(s.project, '.github'), { recursive: true })
     const r = s.run({ CLAUDE_CODE_REMOTE: 'true' })
     assert.equal(r.status, 0)
@@ -295,8 +376,10 @@ fi
     assert.equal(r2.status, 0)
     assert.match(r2.stdout, /could not read the pinned/)
     put(s.project, '.github/workflows/ci.yml', `run: @anthropic-ai/claude-code@${PIN}\n`)
-    const noNpm = spawnSync('bash', [START], { env: { PATH: '/usr/bin:/bin', HOME: s.home, CLAUDE_PROJECT_DIR: s.project, CLAUDE_CODE_REMOTE: 'true', GIT_CONFIG_GLOBAL: '/dev/null' }, encoding: 'utf8' })
+    const noNpm = s.run({ CLAUDE_CODE_REMOTE: 'true' })
     assert.equal(noNpm.status, 0)
+    assert.match(noNpm.stdout, /npm not found/)
+    assert.deepEqual(s.installs(), [])
   })
 
   test('the script itself parses', () => {

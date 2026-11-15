@@ -27,7 +27,7 @@ types/claude-code.d.ts under the skill's own folder and prints the path. **Do no
 `mods/council-of-elrond`**: writing into a mod folder makes it offer to hot-reload that mod into
 this session, which would gate your own tool calls.
 
-Copy the generated file over `mods/types/claude-code.d.ts`.
+Copy the generated file over `mods/types/claude-code.d.ts`. Probed on 2.1.322: a `deny` rule on a path also refuses a shell command that writes it, so while `.claude/settings.json` denies `Edit(/mods/types/claude-code.d.ts)` this copy may be refused. If it is refused, the session stops and asks the maintainer; it never removes or edits the rule itself. Re-check this on each upgrade.
 
 ### Measure the drift
 
@@ -98,14 +98,15 @@ The gates above pass on the new build (`tsc -p mods`, the tests, `claude plugin 
 
 ## Docs to update
 
-- DESIGN.md header: the new version (the "Targets" line) and the drift in one sentence.
+- DESIGN.md header: the new version (the "Targets" line), the drift in one sentence, and any
+  changed decision.
 - CHANGELOG.md "Unreleased": "Types regenerated for Claude Code X.Y.Z; drift: …".
 - CI (`.github/workflows/ci.yml` and `.github/workflows/release.yml`): move the pin in both
   workflows to the new version (decision D10).
 
 ## Ask first
 
-- **The vendored types** (`mods/types/claude-code.d.ts`): the edit is denied; replace the file by a copy of the generated one, never an edit (R2).
+- **The vendored types** (`mods/types/claude-code.d.ts`): a hand edit is denied; replace the file by a copy of the generated one, never an edit (R2). If the copy is refused, stop and ask the maintainer.
 - **The CI pin and the workflows** (`.github/`): path-gated, the edit prompts; the pin moves only in an upgrade brief. Confirm the maintainer action about pushing workflow files first (MA9).
 - **The denial wordings** (`hooks/elrond/operations.ts`), if the binary's text changed: stop and ask.
 - **The release heading and the version**: not at an upgrade.

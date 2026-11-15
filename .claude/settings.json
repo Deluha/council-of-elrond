@@ -4,10 +4,12 @@
     "allow": [
       "Bash(node scripts/verify.mjs:*)",
       "Bash(node scripts/check-guidance.mjs:*)",
-      "Bash(scripts/check-hygiene.sh:*)",
-      "Bash(bash scripts/check-hygiene.sh:*)",
+      "Bash(scripts/check-hygiene.sh)",
+      "Bash(scripts/check-hygiene.sh --staged)",
+      "Bash(bash scripts/check-hygiene.sh)",
+      "Bash(bash scripts/check-hygiene.sh --staged)",
       "Bash(tsc -p mods)",
-      "Bash(node --test scripts/tests/:*)"
+      "Bash(node --test scripts/tests/)"
     ],
     "ask": [
       "Edit(/mods/council-of-elrond/hooks/rules/**)",

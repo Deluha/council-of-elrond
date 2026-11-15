@@ -38,7 +38,7 @@ that takes the project to 1.0.0.
 
 | Milestone | Goal | State |
 | :- | :- | :- |
-| P0 | A development process for this repository: lean guidance, one skill, one verify command | Phase 1 approved (MA10); Phase 2 built on the hardening branch (commits grouped A to H); verify before relying on it. Once it is merged, section 3's pointer is the protocol's home |
+| P0 | A development process for this repository: lean guidance, one skill, one verify command | See the P0 brief (section 5, "Status") |
 | M0 | Green, current, probed: the pinned build, the types, a scripted probe suite, the canary | In progress (M0.3 done) |
 | M1 | Tightenings and the first release, 0.6.0, installable with one line | In progress (M1.3 done; M1.4 started) |
 | M2 | Measure the reviewers and write down the policy | Not started |
@@ -92,9 +92,11 @@ The protocol for one session (set up and look first, run the brief, stop conditi
   is marked parallel-safe with it (their file sets are disjoint). Two sessions never run briefs
   that are not marked parallel-safe with each other.
 - Claim yours the same way: open the draft pull request first.
-- **P0 comes first.** Every other brief depends on it, so until its pull request has merged no
-  other brief starts, unless the maintainer says in the session to go on without it. A session
-  that finds P0 still waiting for the maintainer (MA10) says so and stops.
+- **P0 comes first.** Every other brief depends on it. If `scripts/verify.mjs` and
+  `.claude/skills/council-of-elrond-development/SKILL.md` exist on `main`, P0 is done (tick it) and
+  the first brief is the next open one on the board. If they do not, no other brief starts, unless
+  the maintainer says in the session to go on without it; a session that finds P0 still waiting for
+  the maintainer (MA10) says so and stops.
 
 ## 4. Maintainer actions
 
@@ -125,7 +127,7 @@ run it alone. Nearly every behaviour brief edits `hooks/register.ts`, `hooks/str
 
 | # | Id | Brief | Size | Gate | Depends on | Needs | Parallel-safe with | State |
 | -: | :- | :- | :- | :- | :- | :- | :- | :- |
-| 1 | P0 | Development process | L | neutral | the hardening pull request merged | MA10 | none: it lands alone, before any other brief | Phase 2 built on the hardening branch (commits grouped A to H); verify before relying on it. Once it is merged, section 3's pointer is the protocol's home |
+| 1 | P0 | Development process | L | neutral | the hardening pull request merged | MA10 | none: it lands alone, before any other brief | See the P0 brief ("Status") |
 | 2 | M0.4 | The scripted probe suite | M | neutral | P0 | | M1.2, M0.7 | open |
 | 3 | M0.7 | The audit line carries the prompt epoch and the lock | S | neutral | P0 | | M0.4, M1.2 | open |
 | 4 | M1.2 | The threat model | S | neutral | P0 | | M0.4, M0.7 | open |
@@ -165,8 +167,8 @@ run it alone. Nearly every behaviour brief edits `hooks/register.ts`, `hooks/str
 | 38 | M6.4 | A deprecation rule | S | neutral | | | M6.1 | open |
 | 39 | M7 | Release 1.0.0 | S | neutral | everything above | MA3, MA4, OD marked "before 1.0" | | open |
 
-In every brief below, **Verify** means the standard verify of section 3 (the three gates on the
-pinned build and `scripts/check-hygiene.sh`; after P0: the single verify command) plus what the
+In every brief below, **Verify** means the verify command, `node scripts/verify.mjs`, described in
+[qa-ci.md](../../.claude/skills/council-of-elrond-development/references/qa-ci.md), plus what the
 brief adds. Paths are under `mods/council-of-elrond/` unless they start with `docs/`, `scripts/`,
 `.github/` or `.claude/`. File lists name the paths as they stood when v3 was written: where P0
 has since moved a piece of guidance (out of a skill, `docs/DEVELOPMENT.md` or `CONTRIBUTING.md`),
@@ -176,8 +178,8 @@ edit the file that now holds it.
 
 - [ ] **P0 A development process for this repository** (L, neutral). Asked for by the maintainer
   on 2026-11-15, in two phases with their approval between.
-  - **Phase 1** (in progress in the hardening session): a read-only survey of the repository's
-    guidance, checks and workflows, and a proposal. It changes no file.
+  - **Phase 1**: a read-only survey of the repository's guidance, checks and workflows, and a
+    proposal. It changed no file.
   - **Phase 2** waits for MA10, then lands as **one** pull request of its own, before any other
     brief, with one commit per group:
     - (A) `CLAUDE.md` of at most 80 lines: a one-line description, the operating principles, the
@@ -201,8 +203,10 @@ edit the file that now holds it.
       budget, one routing row per reference file, each rule id has one home, rules and command
       skills are pointer-only), each check tested;
     - (H) an evals file of about ten prompts and a "lessons" line in the pull request template.
-  - **Status.** Phase 2 built on the hardening branch (commits grouped A to H); verify before relying
-    on it. Once it is merged, section 3's pointer is the protocol's home.
+  - **Status.** P0: Phase 1 (survey and proposal) done and approved 2026-11-15; Phase 2 (groups A to
+    H) built in the hardening pull request. If `scripts/verify.mjs` and
+    `.claude/skills/council-of-elrond-development/SKILL.md` exist on `main`, P0 is done: tick it. The
+    first brief a session takes is then the next open one on the board.
   - **Every fact lives in exactly one file.** Section 3 of this file, "Resuming" (section 8),
     `docs/DEVELOPMENT.md`, `CONTRIBUTING.md` and the three existing skills are the sources to move
     from; what moves leaves a pointer behind.
@@ -400,7 +404,7 @@ P1, S3.
     any shell mention, asks, as every protected path does. The settings files and the plugin
     folders are already covered.
   - **Acceptance.** One test per path for Write, Edit and a shell write; an unrelated
-    `docs/CLAUDE-notes.md` is unchanged. The sweep (R9, `references/conventions.md#r9`).
+    `docs/CLAUDE-notes.md` is unchanged. The sweep (R9, `.claude/skills/council-of-elrond-development/references/conventions.md#r9`).
   - **Mutation.** Removing each entry fails its test.
   - **Consequence to report.** A shell read of these files asks (the alternative is the
     write-protected list: OD9). Developing this repository with the mod loaded would ask on every
@@ -426,7 +430,7 @@ P1, S3.
   input holds a `command` string and that is not one of the shell tools the classifier parses
   gets a shipped review rule; the PowerShell tool is the known one and the test. Files:
   `hooks/config/defaults.ts`, `hooks/rules/classify.ts`, `tests/rules.test.ts`, the manual,
-  DESIGN.md, `CHANGELOG.md`. The sweep (R9, `references/conventions.md#r9`).
+  DESIGN.md, `CHANGELOG.md`. The sweep (R9, `.claude/skills/council-of-elrond-development/references/conventions.md#r9`).
 - [ ] **M1.11 `PATH` assignments are reviewed** (S, **tightens**). Extend the shipped
   `dangerous-env-assignment` rule to a `PATH` assignment that prefixes a command, to
   `export PATH=` and to `env PATH=`: it makes a reviewed program name mean another program.
@@ -500,7 +504,7 @@ policy and must not be done blind. Findings T1, T3.
     plugin folder) lived in scratch space and are gone. The brief writes
     `scripts/generate-policy-corpus.mjs`, which rebuilds them from the tables in
     `hooks/rules/shell.ts`, and commits a reviewed sample as the table; the full generated set
-    runs as the sweep (R9, `references/conventions.md#r9`).
+    runs as the sweep (R9, `.claude/skills/council-of-elrond-development/references/conventions.md#r9`).
   - `scripts/check-policy-diff.mjs` classifies the table on the base and the head of a pull
     request; every row whose tier changed must be declared in one line of the description
     (`policy: expect-different=<ids>`), and a row that got looser also needs the decision that

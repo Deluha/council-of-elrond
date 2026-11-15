@@ -69,3 +69,7 @@ Each is to be re-probed by M0.4; until then treat the ones marked as read, not p
 - **The test kit records what the mod hands the question dialog, not its paint.** Wrapping,
   markup and what a narrow window does are only seen in a terminal
   (`docs/TERMINAL-CHECK.md`).
+- **Permission rules on a path, for the developing session (not the mod), probed headless on 2.1.322.**
+  A `deny` rule on a path refuses a shell command that writes it as well as the Edit tool. An
+  `ask` rule on a path prompts for the Edit and Write tools, but a shell write to it is not
+  prompted. `Edit(/path)` anchors at the project root as written.

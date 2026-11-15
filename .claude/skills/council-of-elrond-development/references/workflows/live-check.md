@@ -6,8 +6,10 @@ The unit tests stand in for the engine. A live check runs the real one. Two rule
 
 1. **Never load the mod into this session (R1).** Not with `--plugin-dir` on the session you work in,
    not through the plugin-authoring skill's hot-reload folder. It would gate your own tool calls.
-2. **Never probe inside this repository.** Use a throwaway folder, so the probe's audit log and
-   rules.json don't land here.
+2. **Never probe inside this repository, and never load the mod from it.** Use a throwaway
+   repository for the probe, so its audit log and rules.json don't land here, and run a copy of
+   the mod from a scratch folder outside the repository, so the files loading generates don't
+   land here either.
 
 A review-tier probe makes a real model request on the reviewer's model. Keep probes to a handful,
 prefer `/council test` (runs nothing, asks no model) for classification questions, and say in the
@@ -16,6 +18,18 @@ summary how many reviews ran.
 A child run names a small model, a permission mode and a budget (R13). `claude -p` is never on the allow list in `.claude/settings.json`, so it prompts; that is intended.
 
 ## Steps
+
+### Copy the mod to a scratch folder
+
+From the repository root. `git archive` copies the last commit; `cp -r` copies the working tree, uncommitted changes included:
+
+```sh
+SCRATCH=$(mktemp -d)
+git archive HEAD mods | tar -x -C "$SCRATCH"     # or: cp -r mods "$SCRATCH"/
+MOD=$SCRATCH/mods/council-of-elrond
+```
+
+`--plugin-dir` points at this copy, never at the repository's own mod folder.
 
 ### Set up a probe repository
 
@@ -30,7 +44,6 @@ Add a .claude/council-of-elrond/rules.json there if the check needs project rule
 ### Run a prompt
 
 ```sh
-MOD=/absolute/path/to/council-of-elrond/mods/council-of-elrond
 claude -p --plugin-dir "$MOD" --output-format stream-json --verbose \
   --model <a small model> --permission-mode <a mode> --max-budget-usd <an amount> \
   "Run exactly this shell command and report its result verbatim: rm -r build"
@@ -76,12 +89,14 @@ by the maintainer in a terminal; list them as unverified.
 ### Clean up
 
 ```sh
-rm -rf "$(dirname "$P")"
+rm -rf "$(dirname "$P")" "$SCRATCH"
 cd /path/to/council-of-elrond && git status --short   # nothing from the probe should show
 ```
 
-Loading writes .claude-plugin/types/ and tsconfig.json into the mod folder; both are
-gitignored. If `git status` shows them, the ignore file is broken: fix that, don't commit them.
+Loading writes .claude-plugin/types/ and tsconfig.json into the mod folder you pointed
+`--plugin-dir` at. That is why it is a copy: they land in the scratch folder, never in the
+repository. If `git status` shows anything from the probe, a run used the repository's mod folder:
+remove what it wrote and don't commit it.
 
 ## Docs to update
 

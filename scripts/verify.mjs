@@ -9,7 +9,9 @@
 //
 // Prints one table (check, result, time, note) and one summary line. Exit 0 only when no row is FAIL.
 // Results: PASS, FAIL, WARN (counted, never fails), SKIP (with the reason), MANUAL (a check no
-// tool does yet; the row says what to do), INFO.
+// tool does yet; the row says what to do), INFO. A SKIP is acceptable only for a reason that is not
+// a missing prerequisite; a row that cannot run because the pinned build or a binary is missing is
+// a SKIP marked `missing`, and the run then fails: the summary says FAIL and the exit status is 1.
 //
 // Environment: COUNCIL_CLAUDE (the Claude Code binary, default "claude"); COUNCIL_ALLOW_UNPINNED=1
 // (run on a build other than CI's pin; the pinned-build row then says WARN).
@@ -75,6 +77,10 @@ const AUTOMATION = /^(?:scripts|\.githooks|\.claude|\.github)\//
 const MUTATION_TOKENS = /\bnext\(|\.catch\(|\bproceed\(|\bdeny:/
 
 const GATES = ['pinned-build', 'tests', 'typecheck', 'validate-plugin', 'no-tool-check', 'conventions']
+/** The rows that run the Claude Code binary, so they need the pinned build (and the pinned-build row). */
+const NEEDS_PIN = ['tests', 'validate-plugin', 'no-tool-check', 'validate-marketplace']
+/** A change to a workflow may move the pin: the gates then run on another build. */
+const WORKFLOW = /^\.github\/workflows\/(?:ci|release)\.yml$/
 
 /**
  * The check ids a change needs, in table order.
@@ -90,11 +96,13 @@ export function selectChecks(paths, ctx = {}) {
     const p = raw.replace(/^\.\//, '')
     if (MOD_CODE.test(p)) for (const g of GATES) sel.add(g)
     if (MANIFEST.test(p)) sel.add('validate-marketplace')
+    if (WORKFLOW.test(p)) for (const c of [...GATES, 'validate-marketplace']) sel.add(c)
     if (SWEEP.test(p)) sel.add('sweep')
     if (MUTATION_FILES.includes(p)) sel.add('mutation')
     if (p === REGISTER && (ctx.registerHunks === undefined || ctx.registerHunks.some((h) => hunkTouchesGate(h)))) sel.add('mutation')
     if (AUTOMATION.test(p)) sel.add('scripts-tests')
   }
+  if (NEEDS_PIN.some((c) => sel.has(c))) sel.add('pinned-build')
   return CHECKS.filter((c) => sel.has(c))
 }
 
@@ -240,15 +248,15 @@ export function askFirstMatches(changed, patterns) {
 // ---------------------------------------------------------------------------------------------
 // Summary and table
 
+/** A row that fails the run: FAIL, or a SKIP that is a missing prerequisite (the pinned build, a binary). */
+export const isFailing = (row) => row.result === 'FAIL' || (row.result === 'SKIP' && row.missing === true)
+
 /** The one summary line: never PASS with a FAIL row, never a bare PASS with anything outstanding. */
 export function summarize(rows) {
   const count = (r) => rows.filter((x) => x.result === r).length
-  const fails = count('FAIL')
+  const failing = rows.filter(isFailing)
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
-  if (fails > 0) {
-    const names = rows.filter((x) => x.result === 'FAIL').map((x) => x.id)
-    return `FAIL (${names.join(', ')})`
-  }
+  if (failing.length > 0) return `FAIL (${failing.map((x) => x.id).join(', ')})`
   const extras = []
   const manual = count('MANUAL')
   const warn = count('WARN')
@@ -421,7 +429,14 @@ export async function main(argv, env = process.env, deps = {}) {
   }
 
   const impl = {
-    hygiene: () => commandRow('check-hygiene.sh', 'bash', ['scripts/check-hygiene.sh', ...(staged ? ['--staged'] : [])], 120_000),
+    hygiene: () => {
+      const row = commandRow('check-hygiene.sh', 'bash', ['scripts/check-hygiene.sh', ...(staged ? ['--staged'] : [])], 120_000)
+      if (row.result !== 'PASS') return row
+      // check-hygiene.sh skips its link check without python3, silently; say so here.
+      const py = run('python3', ['--version'], { cwd: root, timeout: 30_000, env })
+      if (py.error || py.status !== 0) return { ...row, result: 'WARN', note: 'link check skipped: python3 not found' }
+      return row
+    },
     guidance: () => {
       const r = run('node', ['scripts/check-guidance.mjs', '--json'], { cwd: root, timeout: 120_000, env })
       if (r.error || (r.status !== 0 && r.status !== 1)) return outcome(r, 'check-guidance.mjs', 120_000)
@@ -454,19 +469,19 @@ export async function main(argv, env = process.env, deps = {}) {
       return { result: 'FAIL', note: p.note }
     },
     tests: () => {
-      if (!canUsePinned()) return { result: 'SKIP', note: 'not the pinned build' }
+      if (!canUsePinned()) return { result: 'SKIP', missing: true, note: 'not the pinned build' }
       return commandRow(`${bin} plugin test`, bin, ['plugin', 'test', MOD], 600_000)
     },
     typecheck: () => commandRow('tsc', 'tsc', ['-p', 'mods'], 120_000),
     'validate-plugin': () => {
-      if (!canUsePinned()) return { result: 'SKIP', note: 'not the pinned build' }
+      if (!canUsePinned()) return { result: 'SKIP', missing: true, note: 'not the pinned build' }
       const row = commandRow(`${bin} plugin validate`, bin, ['plugin', 'validate', '--strict', MOD], 120_000)
       validated = row.raw
       return row
     },
     'no-tool-check': () => {
-      if (!canUsePinned()) return { result: 'SKIP', note: 'not the pinned build' }
-      if (!validated || validated.error) return { result: 'SKIP', note: 'validate-plugin did not run' }
+      if (!canUsePinned()) return { result: 'SKIP', missing: true, note: 'not the pinned build' }
+      if (!validated || validated.error) return { result: 'SKIP', missing: true, note: 'validate-plugin did not run' }
       if (/tool.check/.test(`${validated.stdout}${validated.stderr}`)) {
         return { result: 'FAIL', note: 'register.ts registers a tool.check hook; the mod must never take part in the permission decision' }
       }
@@ -487,7 +502,7 @@ export async function main(argv, env = process.env, deps = {}) {
       return { result: 'PASS', note: '' }
     },
     'validate-marketplace': () => {
-      if (!canUsePinned()) return { result: 'SKIP', note: 'not the pinned build' }
+      if (!canUsePinned()) return { result: 'SKIP', missing: true, note: 'not the pinned build' }
       return commandRow(`${bin} plugin validate`, bin, ['plugin', 'validate', '--strict', '.'], 120_000)
     },
     sweep: () => ({ result: 'MANUAL', note: 'a rule, protected path, redaction or secrets-scan file changed: run the sweep against main by hand and note "lower than main: none" in the pull request (references/domain-gate-direction.md)' }),
@@ -522,7 +537,7 @@ export async function main(argv, env = process.env, deps = {}) {
   for (const r of rows) if (r.result === 'FAIL' && r.detail) write(`\n--- ${r.id}: output (last lines) ---\n${r.detail}\n`)
   const summary = summarize(rows)
   write(`\nverify: ${summary}\n`)
-  return rows.some((r) => r.result === 'FAIL') ? 1 : 0
+  return rows.some(isFailing) ? 1 : 0
 }
 
 function splitZ(text) {

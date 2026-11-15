@@ -14,7 +14,10 @@
 #   - sets git config core.hooksPath .githooks when it is unset;
 #   - warns once if `claude plugin list` names council-of-elrond: the mod must never be loaded
 #     into the session that develops it.
-# The install is bounded at 240 s; the settings entry gives the whole hook 300 s.
+# Time: the pinned install is bounded at 200 s, the typescript install at 60 s and the plugin-list
+# check at 10 s, 270 s in all; the settings entry gives the whole hook 300 s. COUNCIL_CLAUDE is
+# exported as soon as the pinned build is found or installed, before the optional typescript step,
+# so a slow or failed typescript install cannot cost the session the binary.
 
 set -u
 
@@ -30,7 +33,7 @@ within() { # within <seconds> <command...>: bounded when `timeout` exists
 }
 
 main() {
-  local root ci pin base cache bin have tsdir tsbin ctx
+  local root ci pin base cache bin have tsdir tsbin
   root=${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}
   ci="$root/.github/workflows/ci.yml"
   [ -f "$ci" ] || { say "no $ci; nothing to set up"; return 0; }
@@ -52,7 +55,7 @@ main() {
         bin=""
       else
         mkdir -p "$cache" 2>/dev/null
-        if ! within 240 npm install --prefix "$cache" "@anthropic-ai/claude-code@$pin" --no-audit --no-fund --loglevel=error >/dev/null 2>&1; then
+        if ! within 200 npm install --prefix "$cache" "@anthropic-ai/claude-code@$pin" --no-audit --no-fund --loglevel=error >/dev/null 2>&1; then
           say "installing @anthropic-ai/claude-code@$pin failed or timed out; install the pinned build by hand and set COUNCIL_CLAUDE"
           bin=""
         else
@@ -66,6 +69,14 @@ main() {
       ;;
   esac
 
+  # Make the binary available to the session now, before the optional typescript step.
+  if [ -n "$bin" ]; then
+    say "export COUNCIL_CLAUDE=$bin (Claude Code $pin, the build CI pins; scripts/verify.mjs reads it)"
+    if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+      printf 'export COUNCIL_CLAUDE=%q\n' "$bin" >> "$CLAUDE_ENV_FILE" 2>/dev/null
+    fi
+  fi
+
   # typescript, only when tsc is missing from PATH.
   tsbin=""
   if ! command -v tsc >/dev/null 2>&1; then
@@ -74,29 +85,19 @@ main() {
     if [ ! -x "$tsbin/tsc" ]; then
       if command -v npm >/dev/null 2>&1; then
         mkdir -p "$tsdir" 2>/dev/null
-        within 240 npm install --prefix "$tsdir" typescript --no-audit --no-fund --loglevel=error >/dev/null 2>&1 \
+        within 60 npm install --prefix "$tsdir" typescript --no-audit --no-fund --loglevel=error >/dev/null 2>&1 \
           || { say "installing typescript failed or timed out; tsc -p mods will not run"; tsbin=""; }
       else
         tsbin=""
       fi
     fi
   fi
-
-  # Make the binary available to the session.
-  ctx=""
-  if [ -n "$bin" ]; then
-    ctx="COUNCIL_CLAUDE=$bin (Claude Code $pin, the build CI pins; scripts/verify.mjs reads it)"
-    if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
-      printf 'export COUNCIL_CLAUDE=%q\n' "$bin" >> "$CLAUDE_ENV_FILE" 2>/dev/null
-    fi
-  fi
   if [ -n "$tsbin" ] && [ -x "$tsbin/tsc" ]; then
-    ctx="${ctx:+$ctx; }tsc is at $tsbin (add it to PATH)"
+    say "tsc is at $tsbin (add it to PATH)"
     if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
       printf 'export PATH=%q:"$PATH"\n' "$tsbin" >> "$CLAUDE_ENV_FILE" 2>/dev/null
     fi
   fi
-  [ -n "$ctx" ] && say "export $ctx"
 
   # Git hooks.
   if [ -d "$root/.githooks" ] && git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
@@ -107,7 +108,7 @@ main() {
 
   # The mod must never be loaded into the session that develops it.
   if command -v claude >/dev/null 2>&1; then
-    if within 20 claude plugin list 2>/dev/null | grep -q 'council-of-elrond'; then
+    if within 10 claude plugin list 2>/dev/null | grep -q 'council-of-elrond'; then
       say "WARNING: the council-of-elrond plugin is installed in this session; it must never be loaded into the session that develops it (R1)"
     fi
   fi

@@ -11,6 +11,7 @@ A rewrite of the former "Orchestration" section of `CLAUDE.md` for the current r
 | Reader | `.claude/agents/reader.md` | haiku | medium | Read, Grep, Glob | read-only work over more than three files: sweeps, greps, "find every place" |
 | Reviewer | `.claude/agents/reviewer.md` | inherits the session's | the session's own | Read, Grep, Glob, Bash | reviews the whole diff against the rules and the ask-first list; never edits |
 
+- Always name the agent explicitly when delegating: edits go to the writer, reads over more than three files to the reader, the whole-diff review to the reviewer. Never send edit work to `general-purpose`.
 - The writer edits only the files the brief names, runs the targeted checks the brief names, pastes their raw output, stops on ambiguity and never prints a secret value (it names the key or the file).
 - The reader is read-only and returns findings with file:line.
 - The reviewer uses Bash only for `git diff`, `git log`, `git show` and `node scripts/verify.mjs`.
@@ -52,6 +53,13 @@ Independent reads and edits run in parallel: several agent calls in one message,
 ## The review loop
 
 The orchestrator writes the brief; the writer runs it; the reviewer reads the whole diff and reports; the orchestrator reads the actual diff, runs `node scripts/verify.mjs` once at the end and decides. A subagent's summary, or the output it pasted, is never enough on its own.
+
+### What no check covers: the reviewer's checklist
+
+`node scripts/verify.mjs` checks four items of the diff mechanically (`references/qa-ci.md`). Read the diff by hand for these two:
+
+- a new string literal under `hooks/` outside `hooks/strings.ts` and `hooks/members/` (R4);
+- an `update($, session, ...)` whose updater is not a function imported from `./state.js` (R5).
 
 ## When a result is wrong
 

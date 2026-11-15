@@ -64,9 +64,26 @@ describe('selectChecks', () => {
   })
 
   test('the manifests select the marketplace validation', () => {
-    assert.deepEqual(v.selectChecks(['.claude-plugin/marketplace.json']), [...BASE, 'validate-marketplace'])
+    assert.deepEqual(v.selectChecks(['.claude-plugin/marketplace.json']), [...BASE, 'pinned-build', 'validate-marketplace'])
     assert.ok(v.selectChecks([`${MOD}/.claude-plugin/plugin.json`]).includes('validate-marketplace'))
     assert.ok(!v.selectChecks([`${MOD}/hooks/strings.ts`]).includes('validate-marketplace'))
+  })
+
+  test('every row that runs the Claude Code binary comes with the pinned-build row', () => {
+    for (const p of ['.claude-plugin/marketplace.json', `${MOD}/.claude-plugin/plugin.json`, `${MOD}/hooks/strings.ts`, `${MOD}/tests/a.test.ts`, '.github/workflows/ci.yml']) {
+      const sel = v.selectChecks([p])
+      if (['tests', 'validate-plugin', 'no-tool-check', 'validate-marketplace'].some((c) => sel.includes(c))) assert.ok(sel.includes('pinned-build'), p)
+    }
+    assert.ok(!v.selectChecks(['README.md']).includes('pinned-build'))
+  })
+
+  test('a change to a workflow selects every row that needs the pinned build, the pin may have moved', () => {
+    for (const p of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
+      const sel = v.selectChecks([p])
+      for (const c of [...GATES, 'validate-marketplace', 'scripts-tests']) assert.ok(sel.includes(c), `${p}: ${c}`)
+    }
+    const other = v.selectChecks(['.github/dependabot.yml', '.github/workflows/other.yml'])
+    assert.ok(!other.includes('tests') && !other.includes('pinned-build'))
   })
 
   test('safety-sensitive code selects the sweep row', () => {
@@ -254,6 +271,7 @@ describe('summarize', () => {
     assert.equal(v.summarize([row('PASS'), row('MANUAL'), row('MANUAL'), row('WARN')]), 'PASS (2 manual checks outstanding, 1 warning)')
     assert.equal(v.summarize([row('MANUAL')]), 'PASS (1 manual check outstanding)')
     assert.match(v.summarize([row('SKIP')]), /^PASS \(1 skipped\)$/)
+    assert.equal(v.summarize([row('SKIP', { missing: true, id: 'tests' })]), 'FAIL (tests)')
     assert.match(v.summarize([row('INFO', { attention: 3 })]), /^PASS \(3 changed files need the maintainer's eye\)$/)
   })
 
@@ -339,12 +357,12 @@ describe('main, with every command injected', () => {
     assert.match(s.text(), /^git\s+FAIL/m)
   })
 
-  test('a documents-only change runs hygiene and guidance and nothing else', async () => {
+  test('a documents-only change runs hygiene (and its python3 probe) and guidance and nothing else', async () => {
     const s = setup({ git: gitDefault(['README.md', `${MOD}/DESIGN.md`]), commands: { 'check-guidance': guidanceOk } })
     const code = await v.main([], env, s.deps)
     assert.equal(code, 0)
     const names = s.calls.filter((c) => !c.startsWith('git ')).map((c) => c.split(' ').slice(0, 2).join(' '))
-    assert.deepEqual(names, ['bash scripts/check-hygiene.sh', 'node scripts/check-guidance.mjs'])
+    assert.deepEqual(names, ['bash scripts/check-hygiene.sh', 'python3 --version', 'node scripts/check-guidance.mjs'])
     assert.match(s.text(), /verify: PASS\n/)
   })
 
@@ -376,6 +394,35 @@ describe('main, with every command injected', () => {
     for (const id of ['tests', 'validate-plugin', 'no-tool-check']) assert.match(text, new RegExp(`^${id}\\s+SKIP.*not the pinned build`, 'm'), id)
     assert.match(text, /^typecheck\s+PASS/m)
     assert.ok(!s.calls.some((c) => c.includes('plugin test')))
+  })
+
+  test('a marketplace-only change on an unpinned build fails: the skipped row is a missing prerequisite', async () => {
+    for (const commands of [{ '--version': ok('2.1.325 (Claude Code)\n') }, { '--version': { status: null, stdout: '', stderr: '', error: Object.assign(new Error('x'), { code: 'ENOENT' }) } }]) {
+      const s = setup({ git: gitDefault(['.claude-plugin/marketplace.json']), commands: { ...commands, 'check-guidance': guidanceOk } })
+      assert.equal(await v.main([], env, s.deps), 1)
+      const text = s.text()
+      assert.match(text, /^pinned-build\s+FAIL/m)
+      assert.match(text, /^validate-marketplace\s+SKIP.*not the pinned build/m)
+      assert.match(text, /verify: FAIL \(pinned-build, validate-marketplace\)/)
+      assert.ok(!s.calls.some((c) => c.includes('plugin validate')))
+    }
+  })
+
+  test('a workflow change on the pinned build runs the gates and the marketplace validation', async () => {
+    const s = setup({ git: gitDefault(['.github/workflows/ci.yml']), commands: { 'check-guidance': guidanceOk, 'plugin validate': ok('valid\n') } })
+    assert.equal(await v.main([], env, s.deps), 0)
+    for (const id of ['pinned-build', 'tests', 'typecheck', 'validate-plugin', 'no-tool-check', 'validate-marketplace', 'scripts-tests']) assert.match(s.text(), new RegExp(`^${id}\\s+PASS`, 'm'), id)
+  })
+
+  test('hygiene says so when python3 is missing: its link check is skipped without a word otherwise', async () => {
+    const py = { status: null, stdout: '', stderr: '', error: Object.assign(new Error('spawn python3 ENOENT'), { code: 'ENOENT' }) }
+    const s = setup({ git: gitDefault(['README.md']), commands: { 'python3 --version': py, 'check-guidance': guidanceOk } })
+    assert.equal(await v.main([], env, s.deps), 0)
+    assert.match(s.text(), /^hygiene\s+WARN.*link check skipped: python3 not found/m)
+    assert.match(s.text(), /verify: PASS \(1 warning\)/)
+    const t = setup({ git: gitDefault(['README.md']), commands: { 'check-guidance': guidanceOk } })
+    await v.main([], env, t.deps)
+    assert.match(t.text(), /^hygiene\s+PASS/m)
   })
 
   test('COUNCIL_ALLOW_UNPINNED=1 runs them and the pin row says so', async () => {

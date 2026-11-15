@@ -9,7 +9,9 @@
 // Every check is a pure function of a root directory, so the tests run it on fixture trees.
 //
 // Scope. G1, G2 and G9 read CLAUDE.md and the files under .claude/ only; the mod's own documents
-// name reviewer models as product facts and are exempt.
+// name reviewer models as product facts and are exempt. G1 and G2 also read CONTRIBUTING.md,
+// docs/DEVELOPMENT.md and docs/MAINTENANCE.md, which hold pointers to the skill, but only the
+// pointers under .claude/ and scripts/ in them: their ordinary prose is not checked.
 //
 // The pointer convention (G1, G2, G7, G8). A pointer is a backticked path in a guidance file. It
 // is looked up from the repository root, from mods/council-of-elrond/, from the development
@@ -101,6 +103,17 @@ export function guidanceFiles(root) {
 
 const guidanceMarkdown = (root) => guidanceFiles(root).filter((f) => f.endsWith('.md'))
 
+/** The documents outside .claude/ whose pointers to .claude/ and scripts/ G1 and G2 check. */
+export const POINTER_DOCS = ['CONTRIBUTING.md', 'docs/DEVELOPMENT.md', 'docs/MAINTENANCE.md']
+const AUTOMATION_PATH = /^(?:\.claude|scripts)\//
+
+/** Files G1 and G2 read: { file, only } where `only` keeps a pointer (null: every pointer counts). */
+function pointerSources(root) {
+  const out = guidanceMarkdown(root).map((file) => ({ file, only: null }))
+  for (const file of POINTER_DOCS) if (isFile(root, file)) out.push({ file, only: (p) => !p.pointer.selfAnchor && AUTOMATION_PATH.test(p.pointer.path) })
+  return out
+}
+
 // ---------------------------------------------------------------------------------------------
 // Markdown helpers
 
@@ -171,6 +184,21 @@ export function anchorsOf(text) {
   return set
 }
 
+/** The line of a code fence that is never closed, or null. An unclosed fence hides the rest of the file. */
+export function unclosedFenceLine(text) {
+  let fence = null
+  let at = 0
+  text.split('\n').forEach((line, i) => {
+    const m = /^\s*(```+|~~~+)/.exec(line)
+    if (!m) return
+    if (!fence) {
+      fence = m[1]
+      at = i + 1
+    } else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null
+  })
+  return fence ? at : null
+}
+
 /** Backticked spans outside fenced code: { token, line }. */
 export function backtickTokens(text) {
   const out = []
@@ -237,12 +265,24 @@ const finding = (id, file, line, message) => ({ id, file, line, message })
 // ---------------------------------------------------------------------------------------------
 // G1, G2: pointers resolve; anchors match
 
+/** The command skills of this repository: a backticked `/name` for one of them needs its SKILL.md. */
+export const COMMAND_SKILLS = ['verify-change', 'diff-review', 'checkpoint', 'live-check', 'upgrade-types', 'add-rule', 'teach-parser']
+
 export function checkG1(root) {
   const out = []
-  for (const file of guidanceMarkdown(root)) {
+  for (const { file, only } of pointerSources(root)) {
     const text = readText(root, file) ?? ''
+    const open = unclosedFenceLine(text)
+    if (open !== null) out.push(finding('G1', file, open, 'this code fence is never closed; it hides the rest of the file from the checks'))
+    for (const { token, line } of backtickTokens(text)) {
+      const m = /^\/([a-z][a-z0-9-]*)(?:\s.*)?$/.exec(token)
+      if (m && COMMAND_SKILLS.includes(m[1] ?? '') && !isFile(root, `.claude/skills/${m[1]}/SKILL.md`)) {
+        out.push(finding('G1', file, line, `command \`${token}\` has no .claude/skills/${m[1]}/SKILL.md`))
+      }
+    }
     for (const p of pointersIn(root, text)) {
       if (p.pointer.selfAnchor) continue
+      if (only && !only(p)) continue
       if (p.hits.length === 0) out.push(finding('G1', file, p.line, `pointer \`${p.token}\` does not resolve (looked in the root, ${MOD}/, the skill folder and its references/)`))
       else if (p.hits.length > 1) out.push(finding('G1', file, p.line, `pointer \`${p.token}\` is ambiguous: it resolves to ${p.hits.join(' and ')}; write the longer path`))
     }
@@ -252,11 +292,12 @@ export function checkG1(root) {
 
 export function checkG2(root) {
   const out = []
-  for (const file of guidanceMarkdown(root)) {
+  for (const { file, only } of pointerSources(root)) {
     const text = readText(root, file) ?? ''
     for (const p of pointersIn(root, text)) {
       const { pointer } = p
       if (pointer.anchor === null) continue
+      if (only && !only(p)) continue
       let target
       if (pointer.selfAnchor) target = file
       else if (p.hits.length === 1) target = p.hits[0]
@@ -659,22 +700,55 @@ export function checkG10(root) {
 // ---------------------------------------------------------------------------------------------
 // G11: wired in
 
-const live = (text) => text.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
+/** The lines of a text that are not comments (# or //). */
+const live = (text) => text.split('\n').filter((l) => !/^\s*(?:#|\/\/)/.test(l))
+
+/**
+ * Whether a workflow has a `run:` step whose command is exactly `command`: on the `run:` line itself
+ * or as a line of its block scalar. A comment or a step `name:` does not count.
+ */
+export function ciRuns(ciText, command) {
+  const lines = live(ciText)
+  const same = (s) => s.trim().replace(/^(['"])(.*)\1$/, '$2').trim() === command
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(\s*)(?:-\s+)?run:\s*(.*)$/.exec(lines[i] ?? '')
+    if (!m) continue
+    const rest = m[2] ?? ''
+    if (!/^[|>][-+]?\s*$/.test(rest)) {
+      if (same(rest)) return true
+      continue
+    }
+    const indent = (m[1] ?? '').length
+    for (let j = i + 1; j < lines.length; j++) {
+      const l = lines[j] ?? ''
+      if (l.trim() === '') continue
+      if ((/^\s*/.exec(l)?.[0].length ?? 0) <= indent) break
+      if (same(l)) return true
+    }
+  }
+  return false
+}
+
+/** Whether a shell script has a line that runs `command` (optionally after `exec`), not inside echo, printf or a string. */
+export function shellRuns(script, command) {
+  const esc = command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return live(script).some((l) => new RegExp(`^\\s*(?:exec\\s+)?${esc}(?:\\s*(?:;|&&|\\|\\|).*)?\\s*$`).test(l))
+}
 
 export function checkG11(root) {
   const out = []
   const ci = readText(root, '.github/workflows/ci.yml')
   if (ci === null) out.push(finding('G11', '.github/workflows/ci.yml', 1, 'missing'))
   else {
-    if (!/node scripts\/check-guidance\.mjs\b/.test(live(ci))) out.push(finding('G11', '.github/workflows/ci.yml', 1, 'does not run `node scripts/check-guidance.mjs`'))
-    if (!/node --test scripts\/tests\/?(?:\s|$)/.test(live(ci))) out.push(finding('G11', '.github/workflows/ci.yml', 1, 'does not run `node --test scripts/tests/`'))
+    if (!ciRuns(ci, 'node scripts/check-guidance.mjs')) out.push(finding('G11', '.github/workflows/ci.yml', 1, 'has no `run:` step whose command is `node scripts/check-guidance.mjs`'))
+    if (!ciRuns(ci, 'node --test scripts/tests/') && !ciRuns(ci, 'node --test scripts/tests')) out.push(finding('G11', '.github/workflows/ci.yml', 1, 'has no `run:` step whose command is `node --test scripts/tests/`'))
   }
   const hook = readText(root, '.githooks/pre-commit')
   if (hook === null) out.push(finding('G11', '.githooks/pre-commit', 1, 'missing'))
-  else if (!/scripts\/verify\.mjs/.test(live(hook))) out.push(finding('G11', '.githooks/pre-commit', 1, 'does not call scripts/verify.mjs, the way the pre-commit hook reaches the checker'))
+  else if (!shellRuns(hook, 'node scripts/verify.mjs --staged')) out.push(finding('G11', '.githooks/pre-commit', 1, 'has no line that runs `node scripts/verify.mjs --staged` (an echo or a comment does not count)'))
   const verify = readText(root, 'scripts/verify.mjs')
   if (verify === null) out.push(finding('G11', 'scripts/verify.mjs', 1, 'missing'))
-  else if (!/check-guidance\.mjs/.test(verify)) out.push(finding('G11', 'scripts/verify.mjs', 1, 'does not run scripts/check-guidance.mjs'))
+  else if (!live(verify).some((l) => /\brun\(\s*'node'\s*,\s*\[\s*'scripts\/check-guidance\.mjs'/.test(l))) out.push(finding('G11', 'scripts/verify.mjs', 1, "does not run scripts/check-guidance.mjs: expected a `run('node', ['scripts/check-guidance.mjs', ...])` call (an import or a mention does not count)"))
   return out
 }
 
