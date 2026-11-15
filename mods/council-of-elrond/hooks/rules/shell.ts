@@ -170,7 +170,8 @@ const WRAPPERS: ReadonlyMap<string, Spec> = new Map(Object.entries({
     chdir: ['-R', '--root', '-w', '--wd'],
     flags: ['-m', '-u', '-i', '-n', '-p', '-C', '-U', '-T', '-f', '-r', '-c', '--mount', '--uts', '--ipc', '--net', '--pid', '--cgroup', '--user', '--time', '--fork', '--kill-child', '--map-root-user', '--map-current-user', '--map-auto', '--keep-caps', '--mount-proc', '--help', '--version', '-h', '-V'],
   }),
-  // `-S` and `-G` take their value glued or after `=` only: a word after them is the command. `-W` takes one.
+  // `-S` and `-G` (and `--setuid`, `--setgid`) take a glued value or one after `=`; whether a separate word is
+  // also their value depends on the installed util-linux, so coreOf reads both ways (NSENTER_AMBIGUOUS). `-W` takes one.
   nsenter: specOf({
     values: ['-t', '-W', '--target', '--wdns'],
     optional: ['-S', '-G', '--setuid', '--setgid'],
@@ -227,6 +228,9 @@ const WRAPPERS: ReadonlyMap<string, Spec> = new Map(Object.entries({
   chpst: specOf({ values: ['-u', '-U', '-b', '-e', '-n', '-l', '-L', '-m', '-d', '-o', '-p', '-f', '-c'], chdir: ['-/', '-C'], flags: ['-P', '-0', '-1', '-2', '-v', '-V'] }),
   pkexec: specOf({ values: ['--user'], flags: ['--disable-internal-agent', '--keep-cwd', '--help', '--version'] }),
 }))
+
+/** The nsenter options whose separate next word may or may not be their value, by version. */
+const NSENTER_AMBIGUOUS: ReadonlySet<string> = new Set(['-S', '-G', '--setuid', '--setgid'])
 
 /** Other names a wrapper goes by, read with the table of the one it points to. */
 const WRAPPER_ALIASES: ReadonlyMap<string, string> = new Map([
@@ -791,6 +795,17 @@ function coreOf(input: readonly string[]): Core {
         const read = readOption(spec, words, k, false)
         if (read.isUnknown) markUnresolved(() => [name, ...words.slice(start + 1)])
         if (read.attached !== undefined) optionValues.push(...read.attached)
+        // nsenter's -S and -G: whether a separate word is the option's value depends on the installed util-linux,
+        // so neither reading is safe. The word is read as the program (below, as it stands), the part is also
+        // reviewed as one not read for sure, and the words after the word are read as the command too (here).
+        if (canonical === 'nsenter' && read.name !== undefined && NSENTER_AMBIGUOUS.has(read.name) && read.attached === undefined) {
+          const next = words[read.next]
+          if (next !== undefined && !next.startsWith('-')) {
+            markUnresolved(() => [name, ...words.slice(start + 1)])
+            const after = words.slice(read.next + 1)
+            if (after.length > 0) nestedScripts.push([name, ...after].map(quoted).join(' '))
+          }
+        }
         if (read.name !== undefined) {
           if (spec.chdir.has(read.name)) movesDir = true
           if (spec.scripts.has(read.name)) nestedScripts.push(read.value ?? '')

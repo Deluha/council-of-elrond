@@ -1,6 +1,6 @@
 # council-of-elrond: design
 
-Status: built through Stage 6 (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop), the final deliverables (SPEC §21–22, §12 below), the v1 hardening and cloud work (§13, §14), and the hardening after the November review (§15). Nothing is tagged yet: 0.5.0 is a changelog heading, and the work since is under "Unreleased".
+Status: built through Stage 6 (themed strings and plain mode; the debate pane, the council check, the wipe counter, the threat meter and the epic drop), the final deliverables (SPEC §21–22, §12 below), the v1 hardening and cloud work (§13, §14), and the hardening after the November reviews (§15, then §16 in three passes: round 2, round 3 and a last classifier correction). Nothing is tagged yet: 0.5.0 is a changelog heading, and the work since is under "Unreleased". §3 and §4 state how the mod works now; §5 onward is the decision log, and the indexes at the head of §15 and §16 say which items are current.
 What's next, and the decisions approved after the spec: [ROADMAP.md](./ROADMAP.md). The original spec: [SPEC.md](./SPEC.md).
 Targets Claude Code **2.1.322** (built on **2.1.289**, checked on **2.1.291** from Stage 5, **2.1.294** from
 Stage 6, and **2.1.296**, **2.1.299**, **2.1.304**, **2.1.308** and **2.1.322** after it). The generated API types are vendored at `mods/types/claude-code.d.ts` (now 2.1.322's) and
@@ -120,20 +120,31 @@ config load (session start, /council reload, after the mod's own write) ─► r
              │ unconfirmed ─► split (pure): ask, block and review rules (adding only, §16.10), protected lists,
              │                bigOperations apply; allow rules, disables, models, patterns, allowlist and
              │                project checks are held back, counted, told once per file (§15.22)
+             │ confirm ─► `/council trust` (a person) lists every setting, or says the file cannot be confirmed
+             │            from the session; `trust <code>` confirms only content listed in this session (§16.1, 28)
 tool.call ─► classify (pure, rules only; against each repository the call touches under a
              │             multi-repository root, the strictest wins: §14.5)
-             │ allow ─► high secret? refuse (audited) · else next(e)     (no state read or written)
+             │ allow ─► high secret, or a text too long to scan in full? refuse (audited) · else next(e)
+             │          (no state read or written)
              │ gated: fingerprint, operation key ───────────────────────── audit, count
              │ bypass ─► next(e)
              │ block ──► refuse (rule reason)                            failed attempt
              │ locked out (3 on the key / 5 on the verb) ─► refuse, "stop retrying"
              │ Gollum: high ─► refuse ("remove the secret")              failed attempt
              │         low ──► ask ─► allow once / allowlist (confirm, write, reload) ─► continue
+             │         partial scan (over 600,000 characters) ─► ask like a low finding, never remembered,
+             │                      no allow rule offered; nobody to ask: refuse (§16.16, 38)
+             │ ask (shipped ask rules: privileged, plugin-manage, claude-session, terminal-input,
+             │      force-push-unknown-branch; protected paths; a project ask rule on a call nothing else gates)
              │ ask ─────► escalate ─► allow once ──► notice, next(e) ─► ran? offer an allow rule (pure,
              │                     │                 checked by classify) ─► add: write, reload
              │                     └► keep blocked / dismissed (or Chat about this) / nobody ─► refuse  failed attempt
              │                     └► instruction ─► refuse, rounds reset; talk first ─► refuse
-             │ review ─► cached approve this prompt? ─► next(e)
+             │ review ─► cached approve this prompt, in the same folder? ─► next(e)
+             │           (never cached: a git part, a script or a project's runner, more than eight gated
+             │            parts, an ask rule after the review, the full council's approve: §16.2 to 4, 35)
+             │           more than eight gated parts ─► the person, no model request (nobody to ask: refuse;
+             │              never cached, §16.7)
              │           Galadriel preview (fixed table, read-only, 5 s each, ≤ 3)
              │           out of rounds (2) ─► escalate (shadow: pass)
              │           big operation? (pure; a git merge reads the current branch) ─► full council:
@@ -143,7 +154,8 @@ tool.call ─► classify (pure, rules only; against each repository the call to
              │              members: parallel (or one at a time) under one deadline (time left)
              │              combine (pure): strictest wins; no verdict = block; failed check = block
              │                 approve ─► cache, next(e) · revise/block ─► refuse, labelled
-             │                 approve with a cut shell command in any seat ─► the person (§15.11)
+             │                 approve with a cut shell command, script or SQL file in any seat ─► the person
+             │                    (§15.11, §16.6)
              │                 blocked only for want of verdicts ─► escalate (shadow: pass)
              │           route (pure): the rule's member and profile, else Gandalf
              │           nobody on / budget spent ─► escalate (shadow: pass)
@@ -152,8 +164,10 @@ tool.call ─► classify (pure, rules only; against each repository the call to
              │                  Aragorn database (command, SQL, production matches)
              │           review ($.model.complete, the member's own prompts, own deadline)
              │              approve ─► cache, next(e)
-             │              approve of a cut shell command ─► the person (nobody to ask: refuse), not
-             │                 cached, no round (§15.11)
+             │              approve of a cut shell command, script or SQL file ─► the person (nobody to ask:
+             │                 refuse), not cached, no round (§15.11, §16.6)
+             │              approve while an unconfirmed project ask rule matched ─► the person, with the rule's
+             │                 reason as the project's text; not cached; a revise or block stands (§16.10)
              │              revise / block ─► refuse (verdict, rounds left)  round, failed attempt
              │                              (shadow: logged, next(e))
              │              error / timeout / malformed ─► escalate (shadow: pass)
@@ -198,7 +212,8 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | A gated call whose text is too long for the secrets scan to read in full (over 600,000 characters; the middle is not read) | Put to the person with `escalate.secretPartial` after the high-confidence check; the answer is not remembered and no allow rule is offered; refused where nobody can be asked, a failed attempt. Shadow mode does not change it; bypass passes it with the rest of the gated path (§16 item 16). |
 | An allowed call whose text is too long for the secrets scan to read in full | Refused, audited with tier `allow` and member `gollum`; no rounds, no failed attempt, no state write; bypass does not change it (§16 item 16). |
 | A shell call with more than eight gated parts | No reviewer: the keys cover only the first eight, so a locked or spent part could be among the rest. It goes to the person (`escalate.tooManyParts`), or is refused where nobody can be asked, a failed attempt; never cached (§16 item 7). |
-| A script, `.sql` file or inline SQL the call runs was cut for its reviewer, and the verdict is an approve | The approve does not stand: the call goes to the person (`escalate.commandCut`), or is refused where nobody can be asked; never cached; the audit line keeps the approve and says why (§16 item 6). |
+| The shell command (over 200 lines or 12,000 characters; 40 and 4,000 for the push command a diff reviewer quotes), or a script, `.sql` file or inline SQL the call runs, was cut for its reviewer, and the verdict is an approve | The approve does not stand: the call goes to the person (`escalate.commandCut`), or is refused where nobody can be asked, a failed attempt; never cached, no round; the audit line keeps the approve and says why. A revise or a block stands. In the full council it applies when every seat approves and any one saw a cut (§15 item 11, §16 item 6). |
+| A call the approve cache may not serve, or may not be written to | The call is reviewed again each time: it has a git part (gated or not), runs a script or code (a shipped `script-*` rule matched any part), runs a project's runner or `make`-style program, has more than eight gated parts, was approved only after an unconfirmed project `ask` rule asked, or is too long or complex to split; the full council's approve is never written. The key is the call's text and the folder it runs in, so the same call elsewhere is reviewed again too (§16 items 2 to 4, 7, 10, 35). |
 | More than 200 distinct verb keys have failed | A new verb counts on one shared key (`shell:(other verbs)`), read for any verb with no entry of its own; it locks at the verb cap. Nothing stored is evicted (§16 item 7). |
 | A push follows another command of its call | The preview and range diff are kept and carry a trusted note that the commits were read before the earlier commands ran (§16 item 8). |
 | Nobody can be asked (no surface) | Refuse, naming the operation, the rule and the reviewers' names (never their reasons) and the way to let it run; a failed attempt (§13.5 e). |
@@ -206,7 +221,7 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | The status sync after a roster change fails (`session.attach`, `session.detach`) | Caught where it is made; the hook returns what `next(e)` gave. The status line keeps its last value until the next sync (§13.5 f). |
 | `$.ui.ask` dismissed / "Chat about this" | Refuse, a failed attempt (recorded as `dismissed`; the two cannot be told apart, §12.4). "Talk first" refuses without counting (recorded as `chat`). |
 | Overrides file is not JSON, not an object, or of another `schemaVersion` | Ignored whole; the shipped rules enforce; a transcript line lists the error, plus a toast, and where nothing draws one row through the relay with the error count (§16 item 21). `/council status` and `rules` say "ignored: not readable". Each repository's file under a multi-repository root is checked on its own and warns once (§14.5). |
-| Overrides file of this version with an invalid field (an unknown key, a bad rule, a regex over 1,000 characters, more than 200 rules or patterns) | Partly applied: the entries that validate on their own and that `FIELD_TRUST` and `TIER_TRUST` class as applying at once (protected paths and branches, valid production patterns and big operations, valid block, ask and review rules) still apply, read as an unconfirmed file's are (they only add to the shipped decision), whatever the file's trust and the option; everything else in it, and every invalid entry, is ignored. The line, the toast, the relayed row, `/council status` and `rules` say so, with the error count (§16 item 21). Its project checks are held back (next row). |
+| Overrides file of this version with an invalid field (an unknown key, a bad rule, a rule, pattern or check name over 64 characters or outside `[A-Za-z0-9._-]`, a regex over 1,000 characters, more than 200 rules or patterns) | Partly applied: the entries that validate on their own and that `FIELD_TRUST` and `TIER_TRUST` class as applying at once (protected paths and branches, valid production patterns and big operations, valid block, ask and review rules) still apply, read as an unconfirmed file's are (they only add to the shipped decision), whatever the file's trust and the option; everything else in it, and every invalid entry, is ignored. The line, the toast, the relayed row, `/council status` and `rules` say so, with the error count (§16 item 21). Its project checks are held back (next row). |
 | The trust record cannot be read (`$.store.get` rejects, or the stored value is not the expected shape) | Nothing is trusted by it: a rules file with settings that wait for confirmation is held back, exactly as with no record. The tightening part of the file still applies. `/council trust <code>` then confirms nothing and says the record could not be read or saved (§15 item 22). With `trustProjectRules` at `always` the store is never read. |
 | A rules file that cannot be listed in full or safely read (more than 40 settings waiting, a value over 400 characters after cleaning, a value `redact()` would change, a value that held a control, invisible or direction-changing character, or more than 20 files waiting) | Listed as far as it can be, each such value named and marked, with the line "This file cannot be confirmed from the session because …" in place of a code. Its hash is never noted as listed, so `/council trust <code>` for it confirms nothing and says the same (§16 item 1). The way out is to fix the file, or the option at `always`. |
 | `/council trust <code>` for content that was not listed in this session (before any listing, or a file edited after its listing), or whose listing a confirmation already used up | Confirms nothing; says to run `/council trust` first and read what it lists (`trust.notListed`), or, when the code fits no file now, that none has it (`trust.noMatch`). |
@@ -231,7 +246,11 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | A project check fails, times out or can't start | A block, with its last 20 lines (redacted) for Claude; none of its output in the audit log. |
 | A project check ignores being ended | The council stops waiting at its timeout and calls `return()` on the stream, which kills the child (verified live). |
 | The current branch can't be read for a `git merge` | The merge counts as one into a protected branch (full council). |
-| The current branch can't be read for a force push of it (`git push -f`, `-f origin HEAD`, `origin +HEAD`: git fails or times out, a detached HEAD, git pointed elsewhere, a folder outside the project or past the third) | The push is the ask tier, rule `force-push-unknown-branch`: the user is asked, or the call is refused where nobody can be asked. Never allowed and never hangs: the lookup has the previews' 5 s timeout and their git protections (§15.17). |
+| The branch a force push overwrites is unknown or may have moved (`git push -f`, `-f origin HEAD`, `origin +HEAD`: git fails or times out, a detached HEAD, git pointed elsewhere, a folder outside the project or past the third; a destination or remote computed at run time; an earlier part of the same call that may switch the branch) | The push is the ask tier, rule `force-push-unknown-branch`: the user is asked, or the call is refused where nobody can be asked. A protected branch read before the call still blocks. Never allowed and never hangs: the lookup has the previews' 5 s timeout and their git protections (§15.17, §16 item 12). |
+| A shell option the tables cannot place: one a wrapper or runner does not list, a separate word after `nsenter -S` or `-G` whose role depends on the installed util-linux, or more than eight `env -S` strings in one command | Reviewed (`shell-runner-unresolved`) and evaluated also from `/`. The words are classified as they stand; for `nsenter -S`/`-G` both readings are classified (the word as the option's value, and as the program), and the strictest tier wins, so a block in either still blocks. Past the eighth `env -S` string the rest is read alone, not spliced (§15 item 3, §16 items 9, 34 and 40). |
+| Typing into another terminal (`tmux send-keys`, `screen -X stuff`, `xdotool type` and the like), or starting a nested Claude Code session (`claude -p`, `--bare`, `--settings`, `--plugin-dir`, a permission bypass, `claude mcp add`) | The ask tier (`terminal-input`, `claude-session`): the user is asked, or the call is refused where nobody can be asked. What is typed is still classified, so a block still blocks. A key sequence, command file or tmux option the mod cannot read is reviewed (`command-unreadable`) (§16 items 12 and 32). |
+| A failed command whose own output reads like Claude Code's automatic denial | A deny-rule wording ("Permission to use|edit|read … has been denied") counts only at the start of the text. Some other automatic-denial wordings are still read from their phrase alone, so such a failure may be recorded as a denial and not counted as a failed attempt. A known limit; ROADMAP M1.9 and open decision OD2 (§16 item 24). |
+| `/council trust`, `trust <code>` or `reload` typed by something that is not a person (a plugin, another session, a schedule, `claude -p`, the SDK) | Refused with one line; nothing is read or changed. `untrust` runs from any origin, as it only tightens (§16 item 23, §14.3). |
 | A range a push would send can't be named (a source or destination that is no plain ref name, no remote that is a plain name) or can't be read (git fails, times out), or the push names more than three refspecs | That refspec has no commit list and no diff. The preview says so, and every reviewer's prompt carries a trusted `Note:` line outside the data blocks, so the checked-out branch's commits are never read as the push's (§15.18). A diff reviewer with no readable range sits out (`council.noRange`). |
 | The range a push or merge would change can't be read (a bad ref; a new branch with no remote named, or a remote with no `<remote>/HEAD`) | For a push that names a remote, the table's fallback against `<remote>/HEAD` is tried once (§13.1). If that can't be read either, the diff reviewer sits out of that council; the others decide. |
 | Esc during a review or a council | The model requests abort and the check processes are killed with the dispatch (and `convene` ends its own checks on the dispatch's signal too). The mod then refuses plainly, whatever the partial answers were (§10.9): no dialog opens on the abandoned dispatch, no round and no failed attempt is counted, no tokens or verdict counts are added, the debate is closed `aborted`, and the call is audited as `refused` with verdict `aborted` and no decision. |
@@ -245,6 +264,8 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 | Module fails to load, mod disabled, `disableAllHooks`, `--safe-mode`, `--bare` | **No gate at all.** Outside the mod's reach. |
 
 ## 5. Decisions the spec did not cover (Stage 1)
+
+§3 and §4 state how the mod works now. §5 onward is the decision log: text that a later decision superseded is flagged in place, and the indexes at the head of §15 and §16 say what is current.
 
 1. **Precedence of project rules.** Per command part, a matching project rule decides before shipped rules (overrides win). Shipped block rules and protected paths are a floor no project rule lowers, and block rules can't be disabled. Lists (protected paths, branches, production patterns) only add to the shipped ones.
 2. **The overrides file is protected** (`.claude/council-of-elrond/**`), as are `.claude/settings*.json` and `.git/**`. Claude can't loosen the gate or change the models without your approval.
@@ -267,12 +288,12 @@ finish() ─► ran, full council approved, push or merge, themed ─► epicUnt
 6. **Operation keys** (`elrond/operations.ts`). Shell keys use each gated part's verb (program plus subcommand for git, npm, docker, kubectl and similar) and its sorted targets. Arguments of path programs (`rm`, `mv`, `chmod`, …) and redirect targets are resolved lexically under the root; shell symbolic links are not resolved, as in the classifier. File tools share the `file:` family on the real path. The verb key drops the targets.
 7. **Rounds are counted, not flagged.** "Out of rounds" is `rounds ≥ 2` on the key, so no separate `awaitingUser` flag exists. "Keep blocked" leaves the rounds used up, so the next attempt asks you again; a typed instruction resets them.
 8. **What counts as a failed attempt.** It counts: a block-tier refusal, a high secret, a reviewer's revise or block, keep blocked, dismissed, nobody to ask, and a cancelled allowlist confirm. A gated call that ran and errored also counts (`toolErrorsAreWipes`). It doesn't count: a lockout refusal, "Talk first" (the dialog's own option; the engine's "Chat about this" is a dismissal and counts), a typed instruction. A successful run (approved, allowed once, cached or bypassed) clears its own key. The per-verb counter clears only on a new prompt.
-9. **The cache lives until your next prompt** (keyed on the prompt epoch, not `turn.start`'s `turnId`, which subagent turns would complicate). A config reload clears it too.
+9. **The cache lives until your next prompt** (keyed on the prompt epoch, not `turn.start`'s `turnId`, which subagent turns would complicate). A config reload clears it too. *Amended by §16 items 2 to 5, 7, 10 and 35: the key holds the folder the call runs in; the full council's approve, a call with a git part, a script or a project's runner, one with more than eight gated parts and one asked about after its review are never cached; the cache test is read afresh. §3 and §4 list the conditions as they stand.*
 10. **Shadow mode** shadows the second opinion only. Verdicts are logged with `shadow: true` and use no rounds or failed attempts; a reviewer failure, a switched-off reviewer or a spent budget passes (logged). Rules, protected paths, the ask tier, the secrets scan and lockouts still enforce. The session switch wins over the `/config` setting.
 11. **`/council model`.** A one-request probe (16 tokens) checks the model first. `--save` writes only the `gandalf` row (the only `/config` model row so far) and only picker values; anything else stays session-only and says so.
 12. **`/council` output** is drawn in a pane (`$.ui.open` from the command, so it seats at any width) where a surface draws, else as `ui.log` lines. Verified live: a plain `claude -p "/council …"` prints nothing, and in stream-json the lines arrive as `system/ui_log` messages; the command's result carries no text.
 13. **The mode label** is added to `SessionMode` (terminal and desktop). `$.ui.status` carries it only when a surface without that site (VS Code, mobile) is attached, so the terminal doesn't show it twice.
-14. **Permission-check outcomes, told apart by wording** (ROADMAP decision 12). Your refusal at Claude Code's own prompt ("The user doesn't want to proceed with this tool use…", "…take this action right now", read from the 2.1.289 binary) is `refused-by-user` and counts as a failed attempt, whatever `toolErrorsAreWipes` says. An automatic denial ("… needs approval …", verified live in `-p`; deny-rule wording ("Permission to use|edit|read … has been denied", the edit and read forms read from the 2.1.296 binary); and "This command requires approval", seen on 2.1.294 for a `git push` in `-p`, §12.1 item 4) is `denied-by-permission` and never counts. Text matching neither is an ordinary tool error. The user-refusal wording is checked first.
+14. **Permission-check outcomes, told apart by wording** (approved decision 12). Your refusal at Claude Code's own prompt ("The user doesn't want to proceed with this tool use…", "…take this action right now", read from the 2.1.289 binary) is `refused-by-user` and counts as a failed attempt, whatever `toolErrorsAreWipes` says. An automatic denial ("… needs approval …", verified live in `-p`; deny-rule wording ("Permission to use|edit|read … has been denied", the edit and read forms read from the 2.1.296 binary); and "This command requires approval", seen on 2.1.294 for a `git push` in `-p`, §12.1 item 4) is `denied-by-permission` and never counts. Text matching neither is an ordinary tool error. The user-refusal wording is checked first.
 15. **Redaction fixes.** The assignment pattern now matches JSON-escaped quotes (`\"hunter2\"`), which Stage 1 missed in file-tool call text, and leaves an already-redacted value alone, so redacting twice is stable (a test in `tests/gollum.test.ts` redacts every shipped pattern's sample twice).
 16. **Identifiers stay as written.** Plain-mode output names member ids where you type them (`/council model gandalf …`, `[gandalf]` in the status), since they are config keys. The string table itself holds no theme text (tested).
 
@@ -613,9 +634,9 @@ around a string was read where the string alone did not settle the question.
   was NOT written to the file)." (151 characters), as a dismissal's does, so the 120 characters
   left would be the same for both. Even if the feedback reached the mod uncut, it holds
   "clarify", not "chat". Either way `interpretRejection` returns `dismissed` for "Chat about this",
-  which counts as a failed attempt, against ROADMAP decision 4 ("not a wipe"). The tests pass
+  which counts as a failed attempt, against approved decision 4 ("not a wipe"). The tests pass
   because the fixture fakes the rejection as "The user chose to chat about this instead", text the
-  engine never sends. Decided 2026-10-13 (ROADMAP decision 4, amended): the dialog has its own
+  engine never sends. Decided 2026-10-13 (approved decision 4, amended): the dialog has its own
   "Talk first" option, which is a real answer and not a failed attempt; the engine's "Chat about
   this" counts as a dismissal.
 
@@ -1116,6 +1137,35 @@ protected path named as the value of a wrapper or runner option passed where it 
 item 9 found and corrected.* They are recorded here as
 decided; the live list of what still passes is the README's "Known gaps in shell parsing".
 
+**Index.** Direction is against the state before the item. "Current" means the item still describes
+the mod; where a later item amended it, the item is named, and the amended sentence carries an italic note
+in place.
+
+| Item | Topic | Direction | Amends | Status |
+| :- | :- | :- | :- | :- |
+| 1 | Unquoted heredoc bodies scanned for substitutions | tightens | none | current |
+| 2 | Wrappers with a positional or a split string (`chrt`, `taskset`, `setarch`, `exec -a`, `env -S`) | tightens | none | arities corrected by §16 items 9, 33, 40 |
+| 3 | Multi-call binaries and runners; unknown options reviewed | tightens | none | amended by §16 items 9, 33, 34, 40 |
+| 4 | A program name computed at run time; `$IFS` | tightens | none | widened by §16 item 9 |
+| 5 | Interpreters fed code without a flag (`script-stdin`) | tightens | none | widened by §16 item 12 |
+| 6 | Attached and clustered inline-code flags | tightens | none | current |
+| 7 | The mod protects itself (`plugin-manage`, plugin folders) | tightens | none | amended by §16 item 11 (writes only), widened by item 12 |
+| 8 | Commands are hashed exactly | tightens | §10 item 6 | the key also holds the folder, §16 item 2 |
+| 9 | Cut input keeps both ends | tightens | none | current |
+| 10 | Reviewers are told what a cut means | tightens | none | current |
+| 11 | A cut shell command is never approved by a model alone | tightens | none | widened by §16 item 6 |
+| 12 | Redact before cutting | tightens | none | current |
+| 13 | Context left out is said so | tightens | none | current |
+| 14 | The dialog renders call text behind a gutter | tightens | none | amended by §16 items 19, 28, 39 |
+| 15 | A malformed verdict echoes less | tightens | none | current |
+| 16 | More secrets are redacted | tightens | none | narrowed by §16 items 18, 36, 37; seam of long text by item 38 |
+| 17 | A force push of the current branch meets the protected-branch block | tightens | none | widened by §16 item 12 |
+| 18 | A push's preview and range diff show what is pushed | tightens | §13 item 1 | extended by §16 item 8 |
+| 19 | One reading of push arguments | tightens | none | current |
+| 20 | The retry brake follows each part of a compound command | tightens | none | amended by §16 item 7 |
+| 21 | A push of every branch or tag says so | tightens | none | current |
+| 22 | A project's rules file is trusted only after a person confirmed it | tightens | none | amended by §16 items 1, 10, 21, 28 |
+
 1. **Unquoted heredoc bodies are scanned for substitutions.** A heredoc whose delimiter has no
    quote or backslash (`<<EOF`, `<<-EOF`) is expanded by the shell, so `$(...)` and backticks in the
    body run. `takeHeredocs` (`rules/shell.ts`) now records, per heredoc, whether the delimiter was
@@ -1154,7 +1204,10 @@ decided; the live list of what still passes is the README's "Known gaps in shell
      a part, and the review rule `shell-runner-unresolved` matches it. The inner command keeps its
      own tier when that is stricter (a block still blocks). This is the "cannot reliably find the
      inner command: review" decision; the cost is a review for a rare valued option the tables lack,
-     and the fix is to add it to the table.
+     and the fix is to add it to the table. *Amended by §16 item 9 (every wrapper and runner has a
+     table read by getopt rules, and an unlisted option makes the part unresolved), item 33 (three
+     tables corrected), item 34 (`env -S` splicing is bounded) and item 40 (`nsenter -S` and `-G`
+     followed by a separate word are read both ways).*
    - The rule's pattern repeats the runner names in `rules/shell.ts`; the two are kept in step by
      hand, and the rule's comment says so.
 4. **A program name computed at run time.** After assignments and wrappers are stripped, a first
@@ -1275,6 +1328,9 @@ decided; the live list of what still passes is the README's "Known gaps in shell
       not block, as the branch may be a feature branch; a project rule can still decide a call, but
       cannot lower the block, and `disableRules` can switch the ask rule off like any shipped ask rule;
     - the branch is known and not protected: unchanged (review).
+    *Amended by §16 item 12: a force push whose destination or remote is computed asks, and so does
+    one that follows a part of the same call that may have switched the branch; a protected branch
+    read before the call still blocks.*
     A destination-only delete, a refspec naming a protected branch (`+HEAD:refs/heads/main`), `--all`
     and `--mirror` keep their handling. `git push.default` and other config are not read.
     - **Who reads the branch.** `register.ts` (`pushBranchOf`), before the call is classified, and
@@ -1534,15 +1590,70 @@ decided; the live list of what still passes is the README's "Known gaps in shell
 
 ## 16. Hardening, round 2
 
-An adversarial review of the confirmation in §15 item 22 found that a person could be led to confirm
-settings they had not been shown. Every decision below is a **tightening**: nothing can be confirmed that
-could not be before, `trust` still needs a person, and `trustProjectRules=always` behaves as it did. They
-are recorded as decided. The exceptions are item 11, which loosens one thing against the commit before
-it (reads of the plugin folders), item 18, which undoes redaction noise the commits before it
-added (§15 item 16), and item 31, which restores two of the reads item 11 had made ask (`[[ ]]` and
-`git -C <path> <read>`), all as the maintainer approved; each goes nowhere below `origin/main`, except
-the lines item 18 names and the commands item 33 reads right. Items 28 to 39 are the third review's:
-items 28 and 29 correct defects the previous round introduced (items 10 and 11), and 36 one of item 18.
+This section is the hardening after §15, in three passes. **Round 2 (items 1 to 27)** began with an
+adversarial review of the confirmation in §15 item 22, which found that a person could be led to confirm
+settings they had not been shown, and went on to the decision path (approvals, the cache, the retry brake),
+protected paths, redaction and the dialog. **Round 3 (items 28 to 39)** is the third review's: items 28, 29
+and 36 correct defects the previous round introduced (items 10, 11 and 18), items 30 and 31 finish the plugin
+folder reads of item 11, items 32 to 35 close classifier gaps, a stall and a cache hole, and items 37 to 39
+are redaction, the seam of a long scan and the dialog. **The last pass (item 40)** corrects one reading of
+item 33. They are recorded as decided.
+
+Most items are tightenings: nothing can be confirmed that could not be before, `trust` still needs a person,
+and `trustProjectRules=always` behaves as it did. The ones that are not, by number: **item 11** loosens one
+thing against the commit before it (reads of the plugin folders); **item 18** undoes redaction noise the
+commits before it added (§15 item 16); **item 31** restores two of the reads item 11 had made ask (`[[ ]]`
+and `git -C <path> <read>`); all three as the maintainer approved. **Item 33** reads three option tables
+right, which lowers some commands the old reading misread (item 40 takes back the `nsenter -S` and `-G`
+part of that). **Items 20, 25 and 27** change wording or logging only. Each loosening goes nowhere below
+`origin/main`, except the lines item 18 names (narrowed by item 36) and the commands item 33 reads right.
+
+**Index.** Direction is against the state before the item ("restores" puts back what an earlier item of the
+same work took away). "Amends" names what the item changes in an earlier decision. A status other than
+"current" names the item that amended it; the amended sentence carries an italic note in place.
+
+| Item | Topic | Direction | Amends | Status |
+| :- | :- | :- | :- | :- |
+| 1 | Confirming a rules file confirms only what was listed in full in this session; derived code; short names; the project's reason as the project's text | tightens | §15 item 22 | listing and what the mod's own write records amended by item 28 |
+| 2 | An approval is bound to the folder the call runs in | tightens | §15 item 8, §14.5 keys | current |
+| 3 | The full council's approve is never cached | tightens | §6 item 9 | current |
+| 4 | A call with a git part is never served from the cache | tightens | §6 item 9 | widened by item 35 |
+| 5 | The cache test and the out-of-rounds check read the session afresh | tightens | §13.4 (f) | current |
+| 6 | A cut script or SQL file is not approved by a model alone | tightens | §15 item 11 | current |
+| 7 | The retry brake with many parts and its counters | tightens | §15 item 20 | current |
+| 8 | A push preview that may be stale says so | tightens | §15 item 18 | current |
+| 9 | Protected paths on every word; wrapper and runner options read in full | tightens | the opening of §15 | tables corrected by items 33, 40 |
+| 10 | A rules file nobody has confirmed adds protection and never replaces a shipped decision | tightens | §15 item 22 | wording done by item 20; listing and the mod's own write amended by item 28 |
+| 11 | The plugin folders ask for a write, not a read | loosens (against the previous commit; never below `origin/main`) | §15 item 7 | amended by items 20, 29, 30, 31 |
+| 12 | More classifier gaps closed (block rules, pushes, interpreters, command lines handed to other programs, self-protection) | tightens | none | amended by items 32 to 34 |
+| 13 | The allow rule offered after "allow once" is narrower | tightens | §10 item 7 | current |
+| 14 | A project's own patterns are applied wherever the mod redacts | tightens | none | current |
+| 15 | The scan reads what a call carries, whatever the tool | tightens | §13.2 | seam of a long text by item 38 |
+| 16 | A text too long to scan in full is not passed silently | tightens | none | amended by item 38 |
+| 17 | `/council rules` shows no character of an allowlisted secret | tightens | §13.5 (c) | current |
+| 18 | Redaction noise this release added is undone | loosens (against §15 item 16 as first made) | §15 item 16 | amended by items 36 and 37 |
+| 19 | The dialog: invisible characters, wrapped rows, the size cap | tightens | §15 item 14 | amended by items 28 and 39 |
+| 20 | Wording | neutral | the follow-up remark of item 10, the "Not done" of item 11 | extended by item 28 |
+| 21 | A rules file with errors keeps what can only tighten | tightens | none | current |
+| 22 | Validation caps | tightens | none | current |
+| 23 | `/council reload` needs a person | tightens | §13.4 (a) | current |
+| 24 | A command that ran and failed is not read as a permission denial | tightens | §6 item 14 | current; a class of wordings is open (ROADMAP M1.9, OD2) |
+| 25 | The audit log says when it fails | neutral | none | current |
+| 26 | The names a call supplies sit inside the fence | tightens | none | current |
+| 27 | Strings, dead code, documents | neutral | none | current |
+| 28 | Confirming covers everything it switches on; the mod's own write records trust only for what the person confirmed | tightens | items 1 and 10 | current |
+| 29 | A `cd` through `$HOME`, or into a folder the text names, is followed | tightens | item 11 | current |
+| 30 | A reader's output is followed through a pipe; `yq -s` is no reader | tightens | item 11 | current |
+| 31 | `[[ ]]` and `git -C <path> <read>` are readers again | restores (never below `origin/main`) | item 11 | current |
+| 32 | Typing into another terminal asks | tightens | item 12 | current |
+| 33 | Option arities found wrong | tightens in intent; lowers some misread commands | item 9, item 12 | `nsenter -S` and `-G` amended by item 40 |
+| 34 | A stall on crafted input (`env -S` splicing bounded) | tightens | none | current |
+| 35 | A call that runs a script or a project's runner is never served from the cache | tightens | item 4 | current |
+| 36 | `PWD=` and `OLDPWD=` are exempt from redaction only for a directory | tightens | item 18 (b) | current |
+| 37 | A word dressed as a call is a secret again | tightens | item 18 (c) | current |
+| 38 | The scan no longer misses a token at the seam of a long text | tightens | item 16 | current |
+| 39 | The question's size cap and row width (72 display columns) | tightens | item 19 | current |
+| 40 | `nsenter -S` and `-G` followed by a separate word are read both ways | tightens | item 33 | current |
 
 1. **Confirming a rules file confirms only what was listed in full in this session** (a tightening;
    brief of the second review round). What was wrong:
@@ -1558,7 +1669,8 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
 
    Decided, in order:
    - **The listing is complete, or the file cannot be confirmed by code.** `/council trust` lists every
-     held-back setting, no cap per kind. The summary (`TrustSummary`) now holds each item whole (a
+     held-back setting, no cap per kind. *(Amended by item 28: it lists every setting of the file, in two
+     groups, not only the held-back ones.)* The summary (`TrustSummary`) now holds each item whole (a
      rule, a check and a pattern as the schema validated them), and `trustListing` (`elrond/commands.ts`)
      prints one line per field by iterating the schema's own key lists (`RULE_KEYS`,
      `GIMLI_COMMAND_KEYS`, `GOLLUM_PATTERN_KEYS`, now exported), so a field added to the schema is listed
@@ -1570,11 +1682,14 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
    - **What the listing shows of a value** (`inspectValue`, `config/trust.ts`): the value cleaned, whole,
      neither cut nor redacted. Cleaning replaces C0, DEL, C1 (U+0085 too), U+2028 and U+2029 with a
      space and removes bidi and zero-width characters: U+200B to U+200F, U+202A to U+202E, U+2066 to
-     U+2069, U+FEFF (the brief's set), and, decided as a tightening, U+061C, U+2060 to U+2064. The file's
+     U+2069, U+FEFF (the brief's set), and, decided as a tightening, U+061C, U+2060 to U+2064 *(item 28
+     removes more: soft hyphen, fillers, invisible operators, variation selectors, tag characters and
+     every Unicode space but the plain one)*. The file's
      folder, which is the person's own path and not a setting, is cleaned, redacted and cut to 300
      as before.
    - **Limits that make a file unconfirmable in the session** instead of hiding anything: more than 40
-     held-back items in total (`MAX_ITEMS`; the first 40 are printed); a value longer than 400
+     held-back items in total (`MAX_ITEMS`; the first 40 are printed; *item 28: the 40 count the items
+     of both groups*); a value longer than 400
      characters after cleaning (`MAX_VALUE_CHARS`; the first 400 are printed, marked with the length);
      a value that `redact()` with the shipped patterns, or with the patterns now in force, would change
      (shown as "[not shown: looks like a secret]"); a value that held a character the cleaning removed
@@ -1624,6 +1739,8 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
 
    Not covered. The dialog's own one-line cleaner (`escalation.ts`) strips controls but not bidi or
    zero-width characters; the project's reason there is shown after the gutter on one line, as before.
+   *(Done by item 19: `oneLine` uses `cleanText`, which item 28 widened, so invisible and
+   direction-changing characters are gone from the dialog too.)*
    `/council rules` and `/council test` print a project rule's reason as before (relayed to Claude only in
    a redacted data block where nothing draws). A person who confirms without reading is out of
    reach of any listing; the limits only make what cannot be read in full unconfirmable.
@@ -1676,7 +1793,9 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
 3. **The full council's approve is never cached** (a tightening). A big operation convenes the council
    and runs the project's checks, and a cached approve skipped both for the identical call later in the
    prompt. `holdCouncil`'s approve path no longer writes the cache, so a repeated big operation sits
-   again and runs the checks again. The single reviewer's approve is cached as before. Tests:
+   again and runs the checks again. The single reviewer's approve is cached as before *(amended by items
+   4, 7, 10 and 35: not for a call with a git part, a script or a project's runner, more than eight gated
+   parts, or an ask rule after the review)*. Tests:
    `approvals.test.ts` ("the same big operation again convenes the council again, and runs the checks
    again", with a check and `npx prisma migrate deploy`, which has no git part; "a second identical push in
    one prompt …", asserting model requests and spawns); `council.test.ts` and `debate.test.ts` changed
@@ -1693,6 +1812,8 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
    missed; the parse is repeated instead, as `targetsOf` already does. A command too long or too complex
    to split is read as text (`\bgit\b`), the careful side. `register.ts` computes `isCacheable` once; it
    guards the cache test and the single reviewer's cache write (the council writes none, item 3).
+   *(Amended by item 35: `isCacheable` is also false for a call that runs a script or a project's runner,
+   for more than eight gated parts and for an ask rule after the review.)*
    Tests: `approvals.test.ts` ("an approved git reset --hard is reviewed again on repeat, and its approve is not
    written to the cache", "even a cache that holds its key does not serve it" (seeded through a read),
    "a git part that is not itself gated counts too", and "an identical ordinary review call in the same
@@ -1789,7 +1910,8 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
      options before a runner's subcommand (`pnpm -r exec`, `npm -s exec`, `yarn workspace web exec`,
      `uv -q run`). An option the tables do not list makes the part unresolved (`shell-runner-unresolved`,
      review), and an unresolved part is also evaluated at `/`. `uv run -m` and `poetry run -v` were wrongly
-     unknown and no longer cause a review.
+     unknown and no longer cause a review. *(Three tables were found wrong by item 33; item 40 reads
+     `nsenter -S` and `-G` both ways.)*
    - **A wrapper that changes the directory or the root** (`env -C`, `sudo -D`/`-R`, `chroot`, `nsenter`,
      `mise -C`, `npm --prefix`, `pnpm --dir`, `uv --directory`) is evaluated additionally at `/`, never
      instead of the folder that is followed.
@@ -1840,7 +1962,7 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
       `askUser`, with the project rule's cleaned reason shown as the project's text; where nobody can
       be asked the call is refused (`nobodyToAsk`), a failed attempt. The wording is the existing
       `escalate.askTier` ("A rule sends this call straight to you."); a string that says "after its
-      review" would be better and is left to the maintainer. A revise or a block stands and the person
+      review" would be better and is left to the maintainer. *(Done by item 20: `escalate.askProject`.)* A revise or a block stands and the person
       is not asked on top. A review that gave no verdict, or an unavailable one, goes to the person
       as before (one question). Never cached: `isCacheable` is false for such a call, and the
       approve is not written, so a repeat is reviewed and asked again. In shadow mode the verdict is
@@ -1854,13 +1976,16 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
     - **The audit line** keeps the shipped `ruleId`. No field recorded a rule that matched without
       deciding, so `alsoRuleIds` (the ids, once each, present only when there are some) is added to
       `AuditRecord`.
-    - **The listings.** `/council trust` lists what waits, so review rules are no longer in it; the
+    - **The listings.** `/council trust` lists what waits, so review rules are no longer in it *(item 28:
+      it lists every tier again, in two groups)*; the
       status and notice lines count only allow rules there. The words of `trust.count.rules` ("allow or
       review"), `notice.rulesUntrusted` and `trust.state.untrusted` ("its block and ask rules … apply")
-      were not changed in this pass and still name the old split: a follow-up for `strings.ts`.
+      were not changed in this pass and still name the old split: a follow-up for `strings.ts`. *(Done by
+      item 20.)*
     - **Not changed**: a person's own "Add the rule" or allowlist answer still records the file's new
       content as trusted (§15 item 22), so for a file with nothing waiting it confirms the file's
-      other rules too.
+      other rules too. *(Narrowed by item 28: the write records trust only for a file that was not there,
+      whose previous content was confirmed, or that holds no setting at all.)*
     Tests: `trust.test.ts` (the tier table; the marks; an ask rule on a let-through call, on a review,
     on an ask and on a pipe whose one part the shipped rules allow; block; review, raising an allow
     and leaving `sudo ls` an ask; the confirmed ordering; for every sample call the tier is never
@@ -1917,7 +2042,8 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
       for any path (`origin/main` read the `ls` as `-d`'s value and reviewed the path as a program), and
       the only commands below the previous commit are reads and runs under a plugin folder.
     - **Not done**: `/council rules` lists `protectedPaths`; the plugin folders are no longer in that line
-      and have none of their own (it needs a string).
+      and have none of their own (it needs a string). *(Done by item 20: `/council rules` has a line,
+      "Protected against writes". Which reads and runs pass was amended by items 29 to 31.)*
     Tests: `rules.test.ts` (the reads and runs of the brief, with their rule ids; a list of asks; every
     file tool; a protected path proper unchanged; the list is not a schema field and not emptied by a
     project), `config.test.ts`. Mutations, each confirmed to fail the suite and reverted: every shell
@@ -2008,10 +2134,12 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
     other tool, whatever its name (a fetch's URL, an agent's prompt, a search pattern, a read's
     path), its whole input as canonical JSON (`canonical`, `audit.ts`, keys sorted). An Edit's old
     text is still not read. The cost is the scan's own: `scanText` caps what it reads at 500,000
-    characters from the start and 100,000 from the end whatever the tool, and every allowed call is
+    characters from the start and 100,000 from the end whatever the tool *(item 38 moves the seams: a text
+    up to 600,000 characters is read whole)*, and every allowed call is
     now scanned, but the input of most is a few hundred characters.
 16. **A text too long to scan in full is not passed silently** (a tightening). `GollumScan.partial`
-    was set when the middle of a text over 600,000 characters went unread, and nothing used it. Now,
+    was set when the middle of a text over 600,000 characters went unread *(item 38: a text up to 600,000
+    is read whole, and a longer one is read 512 characters past each seam)*, and nothing used it. Now,
     on a gated call, it puts the call to the person after the high-confidence check, like a low
     finding (`escalate.secretPartial`, or `escalate.secretLowPartial` when a low finding is also
     there): the person's answer is not remembered, no allow rule is offered for the call
@@ -2043,14 +2171,16 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
     - **(a) The minimum depends on the value.** 4 characters only when the value holds a digit or
       any character outside letters, `_` and `.`; a plain word of those needs 6, as on `origin/main`.
     - **(b) Paths, substitutions and the shell's own variables.** A name that is exactly `PWD` or
-      `OLDPWD` (capitals; `pwd` stays a keyword in any other name) is not a secret keyword. An
+      `OLDPWD` (capitals; `pwd` stays a keyword in any other name) is not a secret keyword *(amended by
+      item 36: only when its value is a directory; any other value after `PWD` is redacted)*. An
       absolute or home-relative path, a backtick substitution or the cut start of a subscript
       (`ENV[` of `ENV["TOKEN"]`) is no secret **only when it is under 6 characters** (`/tmp`,
       `~/x`, `` `pwd` ``): the shortest value `origin/main` read, so a longer path (`pwd=/work/x`)
       is redacted exactly as it was there. Exempting every path would have gone below
       `origin/main` for a password that happens to start with `/`; one constant (`SHORT_VALUE`) is
       the whole difference. A whole `$(...)` was already a reference.
-    - **(c) Code expressions are whole references.** A call expression `name(.name)*(...)`, with
+    - **(c) Code expressions are whole references** *(narrowed by item 37: a word dressed as a call is a
+      secret again)*. A call expression `name(.name)*(...)`, with
       `await` or `new` in front and any chain of `.name`, `.name(...)` and `[...]` after it, is one
       when its arguments hold no quoted string and no run of 8 or more letters, digits, `_` and `-`
       holding both a letter and a digit (`z.string().min(8)`, `crypto.randomBytes(32)`, `uuid4()`,
@@ -2065,7 +2195,8 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
     - **(d) Kept.** `$ecret123!`, `Sup3r(Secret)9`, `<realkey12345>`, `(hunter2xyz)`,
       `PASSWORD=abc12`, quoted passphrases with spaces, `curl -u user:pass1234`, `--password=VALUE`
       and the header forms are still redacted and flagged.
-    - **Below `origin/main`, by this item's own rules (four lines of the 231 compared):** `PWD=` or
+    - **Below `origin/main`, by this item's own rules (four lines of the 231 compared; *item 36 narrows
+      the first*):** `PWD=` or
       `OLDPWD=` followed by a path of 6 characters or more (b: the name), and the scan's flag, not
       the redaction, of `token = tokens[0]` and `const token = data.items[0]` (c: `origin/main`
       flagged any subscript, and redaction already left it readable). Everything else that
@@ -2082,9 +2213,10 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
     space each, not one for the run. (b) A call line of a few hundred characters was one long line
     whose wrapped rows had no gutter. The excerpt budget (12 lines, 600 characters; 15 and 900
     for the preview) is applied first, then every gutter-prefixed line is hard-wrapped so that a row,
-    gutter included, is at most 100 characters, each continuation row with the gutter too. A project
+    gutter included, is at most 100 characters *(item 39: 72 display columns)*, each continuation row with the gutter too. A project
     rule's reason wraps the same way. (c) The total cap was a slice of the whole question, which
-    cut the closing lines and the last reviewers. Now, over 2,500 characters: lines go from the
+    cut the closing lines and the last reviewers. Now, over 2,500 characters *(item 39 changed the order
+    of the cuts)*: lines go from the
     end of the call excerpt first (its first line always stays), then from the end of the
     preview's, each said by one marker line (joined to the one already there); then each reviewer's
     reason and failure, then each secret's snippet, is cut to its share of what is left in
@@ -2098,7 +2230,8 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
     asks has its own text (`escalate.askProject`, "The project's rules file asks you about this call
     too, after its review.") instead of `escalate.askTier`; `/council rules` lists the paths protected
     against writes (`cmd.list.writeProtected`, "Protected against writes") apart from the protected
-    paths.
+    paths. *(Extended by item 28: `notice.rulesUnconfirmed`, `trust.state.unconfirmed` and
+    `relay.rulesUnconfirmed` say the same for a file of rules alone.)*
 
 21. **A rules file with errors keeps what can only tighten** (a tightening). Before, a file with any
     validation error was ignored whole: its own block and ask rules and protected paths vanished with
@@ -2147,25 +2280,22 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
     `scheduled-trigger` and `task-notification` it is refused with `cmd.needsPerson`; `composer` and
     `bridge` run it (`HUMAN_ORIGINS`, §14.3).
 24. **A command that ran and failed is not read as a permission denial** (a tightening; amends §6
-    item 14, ROADMAP decision 12). `outcomeOf` matched the automatic-denial wordings anywhere in a
+    item 14, approved decision 12). `outcomeOf` matched the automatic-denial wordings anywhere in a
     failed call's text, so a shell command that ran and failed with such a wording in its own output
     was recorded as `denied-by-permission`, which is not a failed attempt, and escaped the retry
     count. A denial is the engine's whole message, so its words open the text, while a command's own
     output follows an exit-code line or its earlier output. The wording is now anchored at the start
     of the text (whitespace allowed) where the recorded wording is documented as opening it: the
     deny-rule wording "Permission to use|edit|read … has been denied" (§6.14, §12.4).
-    **Kept as they were, anywhere in the text:** the wordings recorded with something before the
-    phrase, so no start can be named for them (§12.5, §12.7, §14.2): "<subject> needs approval"
-    ("rm in '<path>' needs approval", "Bash needs approval (asked by plugin …)", "… needs approval in
-    this session …"), "This command requires approval" and "The <name> connector requires
-    approval …", "Permission for this tool use was denied. It requires approval …", "<who> requested
-    permissions to … but you haven't granted it yet". Those are still read from their phrase alone, so
-    a failed command that prints one of them is still recorded as a denial; narrowing them needs a
-    decision on how much of the text may come before the phrase, which is open (reported at the
-    checkpoint). The user-refusal patterns are untouched (narrowing them would count fewer attempts
-    in one configuration). §12.7 records "… has been denied" wordings from 2.1.322 that name a
-    command, a clamp or a listing scope without saying how they open; they are matched by the
-    deny-rule pattern, which is now anchored, and a wording of that family that does not open with
+    **Left open, as a class.** The other automatic-denial wordings, which the engine words with a
+    subject before the phrase (the approval and connector wordings recorded in §12.5, §12.7 and §14.2),
+    are still read from their phrase alone, anywhere in the text, so no start can be named for them.
+    A failed command whose own output resembles one of them may still be recorded as a denial and so
+    escape the retry count. Narrowing them needs a decision on how much of the text may come before the
+    phrase and a probe of how each wording opens; both are open: ROADMAP brief M1.9 and open decision
+    OD2. The user-refusal patterns are untouched (narrowing them would count fewer attempts in one
+    configuration). §12.7 records deny-rule wordings from 2.1.322 that do not say how they open; they
+    are matched by the anchored deny-rule pattern, so a wording of that family that does not open with
     "Permission to" would read as an error (counted) until it is recorded.
 25. **The audit log says when it fails** (neutral). Two things were silent: the folder's `.gitignore`
     was marked as looked at before it was written, so a failed write was never tried again, and a
@@ -2208,12 +2338,13 @@ items 28 and 29 correct defects the previous round introduced (items 10 and 11),
     - **Only ever an addition.** `cwdTracker` takes the matchers and follows both readings, the old one (an unknown target is `/`, a `$HOME` target too) and the new one, and a part is judged in the union of the folders (the strictest wins), so `cd $HOME/project && npm test` and `cd $DIR && npm test` are unchanged by construction, and a call is never judged more leniently than before. `cwdAfter` (scope selection under a multi-repository root) and `forcePushPlaces` keep the old reading.
     Tests: `rules.test.ts` (the `$HOME`, `${HOME}`, quoted and `pushd` forms with `cp`, `touch`, `npm install`, `git pull`; subshells; targets with expansions that name a place; the unchanged calls; a context whose home is itself inside a protected place, which only the expansion sees). Mutations: leaving `$HOME` unexpanded (1); dropping the literal-text place (1).
 30. **A reader's output is followed through a pipe, and `yq -s` is not a reader** (a tightening). `ls ~/.claude/plugins | xargs rm -rf` and `find ~/.claude/plugins -type f | xargs sed -i …` were allowed or only reviewed as a script: the reader names the folder and reads it, and the program it feeds names nothing. A shell part that is a read of a write-protected path (`readOrRun` now says `read` or `run`; a run is a script the path names) asks when the parts that follow it through consecutive pipes include one that is not a reader (`pipesIntoNonReader`, the same `READERS` and writing options as the read test). `sed`, `awk`, `tr` and `xargs` are not readers, so `cat ~/.claude/plugins/x/a | sed …` asks; that friction is the brief's. `yq -s` and `--split-exp` write one file per result: `WRITING_OPTIONS.yq` matches them (clusters holding `s`, and `--sp…`). Tests: `rules.test.ts` (the two pipe forms, a chain through `sort`, `| sh`, `| tee`, `git -C … | xargs`; readers piped into readers; the `yq` forms). Mutations: letting a reader piped to `xargs` pass (1); `yq -s` a reader (1).
-31. **`[[ ]]` and `git -C <path> <read>` are readers again** (**restores reads**; a loosening against the previous round, never below `origin/main`, as item 11). The previous round made both ask for a plugin path: `[[` was not in `READERS`, and `git -C` was not read at all (the words before the command made `isReadOrRun` give up). `[[` joins `READERS`. `git -C <path>` followed by `status`, `log`, `diff`, `show`, `rev-parse`, `ls-files`, `branch` (no argument, or only `--show-current`, `-a`, `-r`, `-v`), `remote` (none, or `-v`), `describe`, `blame` or `cat-file` is a read (`isGitRead`). Decided as tightenings inside it: a `-C` is required (a bare `git status` after a `cd` is judged as any program is; found by the sweep, where it lowered below the previous round and was outside the brief); no global option other than `-C <path>`, `--no-pager` and `--no-optional-locks` (`-c` can run a program); `branch` and `remote` only with the listed options; no long option that is a unique prefix (three characters at least) of `--output`, `--ext-diff`, `--textconv`, `--filters`, `--open-files-in-pager`, `--exec`, and no `-O…`; no redirect that names the path; a wrapper before `git` is not read. Sweeps, against `origin/main` and the previous round (about 4,200 commands built for this brief, and the earlier lists of 3,000, 5,000, 10,000, 84,000 and 437,000): none below `origin/main` except the commands the earlier rounds already lowered (`watch -d ls <path>`, the runner and wrapper parses of §16 items 9 and 12) and the ones item 33 changes by reading an option right; below the previous round, only `[[` and `git -C <read>` of a plugin path, alone or piped on into readers, and the item 33 commands. Tests: `rules.test.ts` (every read allowed; every write, program and other subcommand still asking).
+31. **`[[ ]]` and `git -C <path> <read>` are readers again** (**restores reads**; a loosening against the previous round, never below `origin/main`, as item 11). The previous round made both ask for a plugin path: `[[` was not in `READERS`, and `git -C` was not read at all (the words before the command made `isReadOrRun` give up). `[[` joins `READERS`. `git -C <path>` followed by `status`, `log`, `diff`, `show`, `rev-parse`, `ls-files`, `branch` (no argument, or only `--show-current`, `-a`, `-r`, `-v`), `remote` (none, or `-v`), `describe`, `blame` or `cat-file` is a read (`isGitRead`). Decided as tightenings inside it: a `-C` is required (a bare `git status` after a `cd` is judged as any program is; found by the sweep, where it lowered below the previous round and was outside the brief); no global option other than `-C <path>`, `--no-pager` and `--no-optional-locks` (`-c` can run a program); `branch` and `remote` only with the listed options; no long option that is a unique prefix (three characters at least) of `--output`, `--ext-diff`, `--textconv`, `--filters`, `--open-files-in-pager`, `--exec`, and no `-O…`; no redirect that names the path; a wrapper before `git` is not read. Sweeps, against `origin/main` and the previous round (about 4,200 commands built for this brief, and the earlier lists of 3,000, 5,000, 10,000, 84,000 and 437,000): none below `origin/main` except the commands the earlier rounds already lowered (`watch -d ls <path>`, the runner and wrapper parses of §16 items 9 and 12) and the ones item 33 changes by reading an option right *(item 40 takes back the `nsenter -S` and `-G` part)*; below the previous round, only `[[` and `git -C <read>` of a plugin path, alone or piped on into readers, and the item 33 commands. Tests: `rules.test.ts` (every read allowed; every write, program and other subcommand still asking).
 32. **Typing into another terminal asks** (a tightening; the one test it changes: `tmux send-keys 'ls' Enter` was pinned as `allow`, and is now `ask`). A new shipped ask rule `terminal-input` (`config/defaults.ts`, check `terminal-input`, `ShellPart.isTerminalInput`, set where `inlineOf` reads the command, through wrappers and `sh -c` as any rule): `tmux` `send-keys`/`send` (every form, `-X` and `-H` too), `paste-buffer`, `pipe-pane -I`, `command-prompt`, any unique command-name prefix, and `load-buffer` or `set-buffer` in a tmux command line that also pastes or sends (in a separate part, the paste part asks by itself); `screen -X stuff|paste|readbuf|process`; `zellij action write|write-chars`; `kitty @`/`kitten @` `send-text|send-key`; `wezterm cli send-text`; `xdotool type|key|keydown`; `ydotool type|key`; `wtype`; `osascript` with `keystroke` or `key code`. The inner command of a send is classified as before, so a block still blocks; an ambiguous tmux prefix keeps its review. The tmux forms that run a command line nobody can read are reviewed through `command-unreadable`: `set`/`set-option`/`set-window-option` of `default-command`, `default-shell`, `lock-command` (also by a unique prefix of four characters or more, `status` itself excepted), `status-left` and `status-right`, or of any option whose value holds `#(`; `-f <file>` on the tmux command line; `detach-client -E` (its command is also classified); `display-message` with `#(`; `choose-*` with a command template (which is also read as the tmux command it is); `lock-server` and `lock-session` in a line that sets `lock-command`. **Decided where the brief left a choice (the safer one):** `status-left` and `status-right` are reviewed whatever their value (the brief's wording could be read as "when the value holds `#(`"); `command-prompt`'s template is read as a tmux command; `tmux -C` (control mode, commands on standard input) is **not** covered and is named in the README's known gaps. Unchanged: `tmux new -d 'npm run dev'`, `ls`, `capture-pane -p`, `kill-session -t x`, `attach`, `set -g mouse on`. Tests (`rules.test.ts`): every form, through wrappers and `bash -c`, the blocks kept, the near misses, the reviewed forms; the tests that pinned `send-keys` and `screen -X stuff` as allow, `zellij action write` and `send-keys -H` as review, changed to ask. Mutation: the rule set to `allow` (6 tests).
-33. **Option arities found wrong** (a tightening in intent: each hid a command from the rules; **a consequence below `origin/main` for commands the old reading misread**). `systemd-run --expand-environment` takes a value (`=v` or a separate word); `nsenter -S`/`--setuid` and `-G`/`--setgid` take only a glued or `=` value (`optional` in the table, so a following word is the command); `nsenter -W`/`--wdns` takes a value; `pnpm -c`/`--shell-mode`, as a global option or after `exec` or `dlx` (also in a cluster of pnpm's flag letters), makes the words that follow one shell string, classified as `sh -c` is. Acceptance: `systemd-run --user --expand-environment no rm -rf /home/me` and `nsenter -t 1 -a -S rm -rf /home/me` and `nsenter -t 1 -W /x rm -rf /home/me` block; `pnpm exec -c 'cat .env'` and `pnpm -c exec 'echo x > .git/hooks/pre-commit'` ask. **Stated plainly, because the sweep shows it:** reading these options right also lowers commands that were read wrongly in the other direction: `nsenter -S x rm -rf /` was a block (`x` read as the option's value) and is now an allow, since it runs a program named `x` with arguments, which is what nsenter does; `nsenter -t 1 -W /x ls` was a review (`/x` read as the program) and is now `ls`; `systemd-run --expand-environment rm -rf /` reads `rm` as the value. Tests: `rules.test.ts`. Mutations: reverting each (1 test each for the `systemd-run` and the `nsenter` table (the same test) and for the `pnpm` shell string).
+33. **Option arities found wrong** (a tightening in intent: each hid a command from the rules; **a consequence below `origin/main` for commands the old reading misread**). `systemd-run --expand-environment` takes a value (`=v` or a separate word); `nsenter -S`/`--setuid` and `-G`/`--setgid` take only a glued or `=` value (`optional` in the table, so a following word is the command; *amended by item 40: whether a separate word is their value depends on the installed util-linux, so both readings are classified and the part is reviewed*); `nsenter -W`/`--wdns` takes a value; `pnpm -c`/`--shell-mode`, as a global option or after `exec` or `dlx` (also in a cluster of pnpm's flag letters), makes the words that follow one shell string, classified as `sh -c` is. Acceptance: `systemd-run --user --expand-environment no rm -rf /home/me` and `nsenter -t 1 -a -S rm -rf /home/me` and `nsenter -t 1 -W /x rm -rf /home/me` block; `pnpm exec -c 'cat .env'` and `pnpm -c exec 'echo x > .git/hooks/pre-commit'` ask. **Stated plainly, because the sweep shows it:** reading these options right also lowers commands that were read wrongly in the other direction: `nsenter -S x rm -rf /` was a block (`x` read as the option's value) and is now an allow, since it runs a program named `x` with arguments, which is what nsenter does *(wrong for some util-linux versions: item 40 makes it a block again, with the part reviewed)*; `nsenter -t 1 -W /x ls` was a review (`/x` read as the program) and is now `ls`; `systemd-run --expand-environment rm -rf /` reads `rm` as the value. Tests: `rules.test.ts`. Mutations: reverting each (1 test each for the `systemd-run` and the `nsenter` table (the same test) and for the `pnpm` shell string).
 34. **A stall on crafted input** (a tightening). `env ` + `-Senv ` × 3,000 + `ls` (18,006 characters) took about 38 seconds to classify: every `env -S` splice copies the words after it, and every splice made a nested script of them, each classified again. Decided: more than eight `-S` splices in one command (`MAX_ENV_SPLICES`, counted per command, nested scripts count anew) are not spliced; each such string is classified alone as a nested script, so a block in it still blocks, and the part is marked unresolved (`shell-runner-unresolved`, review). The words of an unresolved copy are made only the first time (`markUnresolved` takes a function), which also removes a second quadratic (`sudo ` + `--pr ` × 4,000 took 270 ms and is 25 ms). The same input classifies in about 130 ms. **Re-timed at 20,000 characters** (about 60 shapes of the earlier rounds plus the new ones: tmux lists and `set`, `cd` chains, pipe chains of readers, `git -C` runs): the worst is the 3,000-splice input at about 130 ms, every other shape under 100 ms; a chain of `pnpm -c exec` took 20 s until its shell string was read once and not stripped of wrappers again. `rules.test.ts` gains a timing test (ceiling 3 s, because the suite runs beside other work; the failure it exists for is 38 s). Mutation: removing the bound (3 tests, two of them the timing tests, which then take two minutes and more).
 35. **A call that runs a script or a project's runner is never served from the cache** (a tightening; amends item 4). The cache key is the call's text and folder, so an approved `bash deploy.sh`, edited, was served again unreviewed in the same prompt. `isCacheable` (`elrond/operations.ts`, pure, beside `hasGitPart`) is false for: a git part (item 4), more than eight gated parts, an ask rule after the review (item 10), any call whose classification says a part matched a shipped `script-*` rule (`Classification.isScript`, set from every matching rule, not only the deciding one: `./deploy.sh > out.log` is decided by the redirect rule, which ties and wins on order), a part whose program or wrapper is a project runner or `make`-style program (`PROJECT_RUNNERS`: `make`, `just`, `npm`, `yarn`, `pnpm`, `bun`, `cargo`, `go`, `gradle`, `mvn`, `npx`, `uv`, `poetry`, `mise`, `bundle`, `deno` and the like), gated or not, and a command too long or too complex to split. The brief's "simplest correct form" (every gated part decided outside the script family) misses the tie and the ungated runner (`make deploy && curl -X POST …`), so both are covered. Tests: `operations.test.ts` (the helper), `approvals.test.ts` (nine calls reviewed again on repeat, nothing written to the cache, a held key not served, an ordinary call still cached once); `omission.test.ts` "a script within the limit … is remembered" changed to "is not remembered". Mutations: caching a script-running call (9 tests); caching a runner call (5 tests).
 36. **`PWD=` and `OLDPWD=` are exempt from redaction only for a directory** (a tightening; amends item 18 b; **corrects a defect of the previous round**, below `origin/main`). Any value after those names was exempt, but `PWD` is also the password keyword of ODBC-style connection strings (`Server=x;PWD=hunter2xyz`). Now the exemption needs a value that starts with `/`, `~` or `$`, is `.` or `..` or starts with `./` or `../`, or is a whole backtick substitution, and holds no `;`. Residual, as a class: a bare value that starts with `/` and ends at a `;` stays exempt (the pattern cuts a bare value at `;`). Tests in `secrets.test.ts`, written with the change.
 37. **A word dressed as a call is a secret again** (a tightening; amends item 18 c). A value written like a call whose callee starts with a capital letter, is not a known type name and has a digit in its name or a digit-led first argument (`Winter(2024)`, `Passw0rd()`, `Monkey(1)`) is a literal; lower-case calls, known type names (`String(128)`, `Numeric(10)`, `Uint8Array(32)`, `VARCHAR(64)`) and constructors with a name argument (`Token(options)`, `Config()`) stay code. Tests in `secrets.test.ts`.
 38. **The scan no longer misses a token at the seam of a long text** (a tightening; amends item 16). A token straddling the 500,000-character mark was cut in two by the head and the tail joined with a line break, and missed while the scan reported it had read everything. A text up to 600,000 characters is scanned whole; a longer one is read from its start, 512 characters past the 500,000 mark, and from its end, 512 characters before the last 100,000, so a token at either seam is whole. The middle past that is still unread and still sends the call to the person. Tests in `gollum.test.ts`.
 39. **The question's size cap and row width** (a tightening for what the person sees; amends item 19). Rows wrap at 72 display columns, gutter included (it was 100 characters): a wide character counts 2, a combining mark 0, and a character that does not fit goes to the next row. Over 2,500 characters the order of cuts changed: each reviewer's reason is cut first (at most 240 characters, from a shared budget of 1,200), then the preview to its first and last line, then the middle of the call, whose first 4 and last 4 lines always stay (the old order cut the end of the call first and could take its last lines), and only then what is still over comes out of the reasons and each secret's snippet. A line says what was cut each time. The title, why it came, the rule line, every verdict line and the closing line are never cut. `galadriel.test.ts` "more than three refspecs" now asserts a fragment that fits one row. Tests in `terminal.test.ts`, written with the change.
+40. **`nsenter -S` and `-G` followed by a separate word are read both ways** (a tightening; amends item 33; the last pass of the hardening). Item 33 read `-S`/`--setuid` and `-G`/`--setgid` as taking only a glued or `=` value, so `nsenter -S x rm -rf /home/me` read `x` as the program and the call fell from a block (on `origin/main`, where `x` was the option's value) to an allow. Whether a separate word is the option's value depends on the installed util-linux version, so neither reading is safe. Decided: when `-S` or `-G` (or `--setuid`, `--setgid`, by any unique prefix) is followed by a separate word that does not start with `-` and has no glued or `=` value, `coreOf` (`rules/shell.ts`, `NSENTER_AMBIGUOUS`) (a) marks the part unresolved, so `shell-runner-unresolved` (review) fires and the part is also evaluated from `/`, and (b) classifies both readings: the word as the program (the part as it stands) and the word as the option's value, the words after it being run as nsenter's command (a nested script made of `nsenter` and those words, which is read like any other, with the nesting depth bound of every nested script). The strictest tier wins. With an attached value (`-S0`), an `=` value (`--setuid=0`), no word after the option or an option after it (`-S -a`), there is nothing to read two ways and the part is read as before. Acceptance: `nsenter -S x rm -rf /home/me` and `nsenter -t 1 -a -S 0 rm -rf /home/me` block (`rm-recursive-outside-repo`); `nsenter -t 1 -S 0 ls` is a review (`shell-runner-unresolved`), never an allow; `nsenter --setuid=0 -t 1 ls` is an allow, as the unambiguous wrapped `ls`. Tests: `rules.test.ts` ("nsenter -S and -G followed by a separate word: both readings are classified, and the part is reviewed"). Mutations, each confirmed to fail the suite and reverted: classifying only the as-written reading (the nested script left out) fails that test (1); leaving out the unresolved mark fails it (1). The reading where the word is the value only is item 33's earlier reading of `-S rm -rf`, still covered by the same table of cases. Sweeps of about 550,000 commands from the earlier lists and 1,729 `nsenter` forms built for this item (every `-S`, `-G`, `--setuid` and `--setgid` form before a list of dangerous and ordinary commands): nothing is below `origin/main` that DESIGN does not already record (the `watch -d` and plugin-folder reads, and the commands whose option an earlier item reads right: `sudo`, runner and `nsenter -W`/`--wdns`/`--target` prefixes, item 33); nothing with `nsenter -S`, `-G`, `--setuid` or `--setgid` is below `origin/main`, and the commands that item 33 had lowered are back at or above it.

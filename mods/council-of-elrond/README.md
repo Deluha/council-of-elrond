@@ -8,16 +8,18 @@ Calls that need a second opinion go to a model reviewer, and anything uncertain 
 > security product (see [What it does not protect against](#what-it-does-not-protect-against)).
 
 Status: **built through Stage 6, with the final deliverables (SPEC §21–22), the v1 hardening and
-cloud work, and the hardening after the November review (DESIGN.md §15). Nothing is tagged yet:**
-0.5.0 is a changelog heading, and the work since then is under "Unreleased". Available now: the rules; three model reviewers (destructive operations, diffs, and
+cloud work, and the hardening after the November reviews (DESIGN.md §15 and §16). Nothing is tagged yet:**
+0.5.0 is a changelog heading, and the work since it is under "Unreleased" in
+[CHANGELOG.md](../../CHANGELOG.md), which opens with what changes for someone upgrading from 0.5.0. Available now: the rules; three model reviewers (destructive operations, diffs, and
 git and databases) with routing between them; the full council with your project's own checks for
 big operations; the secrets scan, read-only previews, review rounds and lockout, the approve cache,
 escalation to you, allow rules offered after "allow once", `/council` and `/council report`, shadow
 mode and bypass, fail-closed handling and the audit log, the theme (with a plain mode), and the
 debate pane, the council check band, the wipe counter, the threat meter and the epic drop. The
 hardening after the Stage 5 review ([docs/REVIEW-2026-10.md](../../docs/REVIEW-2026-10.md)) and the
-November review ([docs/REVIEW-2026-11.md](../../docs/REVIEW-2026-11.md)) closed the rules-tier and
-pipeline findings. Headless live checks ran on Claude Code
+November review ([docs/REVIEW-2026-11.md](../../docs/REVIEW-2026-11.md)) closed most of the rules-tier and
+pipeline findings. Some are still open: [ROADMAP.md](./ROADMAP.md) lists them under "Open decisions", and
+the gaps in shell parsing that remain are under "Known gaps in shell parsing" below. Headless live checks ran on Claude Code
 2.1.294; the interactive screens (the dialogs, the pane, the band, the mode label) still await a
 check in a terminal.
 See [ROADMAP.md](./ROADMAP.md) for what's left, [SPEC.md](./SPEC.md) for the original spec and

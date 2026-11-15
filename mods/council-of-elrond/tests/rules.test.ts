@@ -2921,6 +2921,38 @@ describe('option arities, shell strings and a bound on env -S (DESIGN §16 items
     ])
   })
 
+  test('nsenter -S and -G followed by a separate word: both readings are classified, and the part is reviewed (DESIGN §16 item 40)', () => {
+    expectCases([
+      // The word is the program, or it is the option's value and the next word is: the strictest tier wins.
+      ['nsenter -S x rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 -a -S 0 rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 -aS 0 rm -rf /home/me', 'block', RM],
+      ['nsenter -G x rm -rf /home/me', 'block', RM],
+      ['nsenter --setuid 0 rm -rf /home/me', 'block', RM],
+      ['nsenter --setgid 0 rm -rf /home/me', 'block', RM],
+      ['nsenter --setu 0 rm -rf /home/me', 'block', RM],
+      ['nsenter -S 0 -t 1 rm -rf /home/me', 'block', RM],
+      ['nsenter -S 0 -G 0 rm -rf /home/me', 'block', RM],
+      // A command that is only a program the reader cannot tell for sure is never allowed.
+      ['nsenter -t 1 -S 0 ls', 'review', 'shell-runner-unresolved'],
+      ['nsenter -t 1 -G 0 ls', 'review', 'shell-runner-unresolved'],
+      ['nsenter --setuid 0 ls', 'review', 'shell-runner-unresolved'],
+      ['nsenter --setgid 0 ls', 'review', 'shell-runner-unresolved'],
+      ['nsenter -t 1 -S 0', 'review', 'shell-runner-unresolved'],
+      // With an attached or `=` value, or no word after the option, there is nothing to read two ways.
+      ['nsenter --setuid=0 -t 1 ls', 'allow'],
+      ['nsenter -t 1 -S0 ls', 'allow'],
+      ['nsenter -t 1 --setgid=0 ls', 'allow'],
+      ['nsenter -t 1 -S -a ls', 'allow'],
+      ['nsenter --setuid=0 -t 1 rm -rf /home/me', 'block', RM],
+    ])
+    // The ambiguous option is the reason the part is flagged, not a side effect of some other word.
+    const flagged = (command: string) => splitShell(command).parts.some(part => part.isUnresolved === true)
+    expect(flagged('nsenter -t 1 -S 0 ls')).toBe(true)
+    expect(flagged('nsenter -t 1 -S0 ls')).toBe(false)
+    expect(flagged('nsenter -t 1 --setuid=0 ls')).toBe(false)
+  })
+
   test('pnpm -c / --shell-mode makes the command a shell string, in either place', () => {
     expectCases([
       ["pnpm exec -c 'cat .env'", 'ask', 'protected-path'],
