@@ -1,0 +1,42 @@
+# Review routing. With branch protection's "require review from code owners" on,
+# a pull request touching these paths needs the owner's approval.
+
+# Everything, by default.
+*                                                        @owner
+
+# The safety boundary: the files whose changes are security-sensitive. This is
+# the one list; CONTRIBUTING.md and the pull request template point here.
+# A checker compares the path-gated group with the "ask" list in
+# .claude/settings.json and the "Edits prompt" lines in CLAUDE.md: keep the
+# order and the spelling the same in all three.
+
+# Path-gated: an edit prompts in .claude/settings.json.
+/mods/council-of-elrond/hooks/rules/**                   @owner
+/mods/council-of-elrond/hooks/config/defaults.ts         @owner
+/mods/council-of-elrond/hooks/config/trust.ts            @owner
+/mods/council-of-elrond/hooks/config/schema.ts           @owner
+/mods/council-of-elrond/hooks/redact.ts                  @owner
+/mods/council-of-elrond/hooks/members/gollum.ts          @owner
+/mods/council-of-elrond/.claude-plugin/plugin.json       @owner
+/.claude-plugin/marketplace.json                         @owner
+/.github/**                                              @owner
+/.githooks/**                                            @owner
+/scripts/**                                              @owner
+/SECURITY.md                                             @owner
+/LICENSE                                                 @owner
+/.claude/settings.json                                   @owner
+
+# Behaviour-gated: not path-gated in .claude/settings.json; CLAUDE.md says to
+# stop and ask.
+/mods/council-of-elrond/hooks/register.ts                @owner
+/mods/council-of-elrond/hooks/state.ts                   @owner
+/mods/council-of-elrond/hooks/audit.ts                   @owner
+/mods/council-of-elrond/hooks/elrond/operations.ts       @owner
+/mods/council-of-elrond/hooks/elrond/commands.ts         @owner
+/mods/council-of-elrond/hooks/elrond/suggest.ts          @owner
+/mods/council-of-elrond/hooks/elrond/chat.ts             @owner
+/mods/council-of-elrond/hooks/elrond/escalation.ts       @owner
+/mods/council-of-elrond/hooks/elrond/refusal.ts          @owner
+/mods/council-of-elrond/hooks/members/shared.ts          @owner
+/mods/council-of-elrond/hooks/members/brief.ts           @owner
+/mods/council-of-elrond/hooks/members/galadriel.ts       @owner

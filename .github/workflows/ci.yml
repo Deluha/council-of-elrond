@@ -19,10 +19,22 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       # No generated files, no plugin-root CLAUDE.md, no session links or local paths,
       # markdown links resolve. The same script runs in the pre-commit hook.
       - name: Hygiene checks
         run: bash scripts/check-hygiene.sh
+
+      # The guidance (CLAUDE.md and .claude/) is checked like code, and so are the scripts that check it.
+      - name: Guidance checks
+        run: node scripts/check-guidance.mjs
+
+      - name: Script tests
+        run: node --test scripts/tests/
 
   checks:
     name: Test, typecheck, validate
