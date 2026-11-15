@@ -1382,7 +1382,7 @@ in place.
       sits out as before. Decided: a push with no readable range shows no commit list and no
       checked-out branch's commits in its place.
     - **Several ranges, one cap.** A push lists up to three commit lists beside the branch and the
-      remote, so the plan's cap (3, DEVELOPMENT.md) rises by one per extra list (at most 5 for a
+      remote, so the plan's cap (3, `.claude/skills/council-of-elrond-development/references/workflows/change-reviewer.md`) rises by one per extra list (at most 5 for a
       push); every other kind of preview keeps 3. The council's diff of several ranges shares the
       diff limits (each range gets an equal share, then each sits under `# <range>` in one diff).
     - **Labels.** `commits it would send (<range>)` and the fallback's label name the range actually

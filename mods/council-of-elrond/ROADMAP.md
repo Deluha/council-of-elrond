@@ -38,7 +38,7 @@ that takes the project to 1.0.0.
 
 | Milestone | Goal | State |
 | :- | :- | :- |
-| P0 | A development process for this repository: lean guidance, one skill, one verify command | Phase 1 in progress; Phase 2 waits for the maintainer |
+| P0 | A development process for this repository: lean guidance, one skill, one verify command | Phase 1 approved (MA10); Phase 2 built on the hardening branch (commits grouped A to H); verify before relying on it. Once it is merged, section 3's pointer is the protocol's home |
 | M0 | Green, current, probed: the pinned build, the types, a scripted probe suite, the canary | In progress (M0.3 done) |
 | M1 | Tightenings and the first release, 0.6.0, installable with one line | In progress (M1.3 done; M1.4 started) |
 | M2 | Measure the reviewers and write down the policy | Not started |
@@ -78,26 +78,7 @@ that takes the project to 1.0.0.
 
 ## 3. How a dev session works
 
-This is the protocol as it stands today. Once brief P0 lands, its detail moves to the development
-skill and this section becomes a pointer to it, so that every fact lives in one file.
-
-**Step 0. Set up and look before changing anything.**
-
-1. Read `CLAUDE.md`, then sections 1 to 6 of this file, then the header of DESIGN.md and the
-   index of its §15 and §16 (or, where no index exists yet, their numbered item titles).
-2. Check the mod is not loaded into this session: `claude plugin list` must not name
-   `council-of-elrond`. If it does, stop and tell the maintainer (MA1): the mod would gate the
-   session's own tool calls.
-3. Get the pinned build. The gates run on the Claude Code build CI pins, not on whatever is
-   installed; a newer installed build is expected and is not a reason to upgrade.
-   ```
-   . scripts/pinned-claude.sh && PIN=$(pinned_version)      # reads .github/workflows/ci.yml
-   npm install --prefix <a scratch folder outside the repository> @anthropic-ai/claude-code@$PIN
-   export COUNCIL_CLAUDE=<that folder>/node_modules/.bin/claude
-   ```
-4. Run the **standard verify** once and see it green: the three gates on the pinned build and
-   `scripts/check-hygiene.sh` (after P0: the single verify command). The commands are in section
-   8. If it is red on a clean checkout, stop and report; do not fix forward inside another brief.
+The protocol for one session (set up and look first, run the brief, stop conditions, hand over) is in the development skill: [session-protocol.md](../../.claude/skills/council-of-elrond-development/references/session-protocol.md). The rules that keep sessions safe are R1 to R15 in [conventions.md](../../.claude/skills/council-of-elrond-development/references/conventions.md), among them the tightening and loosening rule (R8), the sweep (R9) and the list of what a session must never do. What stays here is what belongs to this board: how to choose a brief.
 
 **Step 1. Choose the brief.**
 
@@ -114,59 +95,6 @@ skill and this section becomes a pointer to it, so that every fact lives in one 
 - **P0 comes first.** Every other brief depends on it, so until its pull request has merged no
   other brief starts, unless the maintainer says in the session to go on without it. A session
   that finds P0 still waiting for the maintainer (MA10) says so and stops.
-
-**Step 2. Run it.**
-
-- One brief, one branch, one pull request. The stated exceptions are in the briefs themselves
-  (M0.1 lands with M0.2).
-- The brief in section 5 gives the goal, the files, the decided behaviour, the acceptance and the
-  mutation checks. The orchestrator turns it into a delegation brief (CLAUDE.md, "Orchestration"):
-  `implementer` runs it, `reader` pre-checks the diff, and the orchestrator reads the diff and
-  runs the standard verify itself. Where a brief says "the session decides", the safer option is
-  picked and recorded.
-- A change to a path that decides whether a call runs needs its mutation check: break the code on
-  purpose and see the test fail.
-- A headless live check (`/live-check`) where the brief asks for one. Name a small model and a
-  budget explicitly: a child run otherwise inherits the session's model, plugins and permission
-  mode, and costs real money (section 8).
-
-**Step 3. The rules that keep sessions safe.**
-
-- **Tightening and loosening** (CLAUDE.md). A brief marked **loosens** is approved for exactly
-  what it says. Anything else that loosens goes to the maintainer before it is committed, even as
-  a side effect. Anything that tightens is decided on the safer side, recorded in DESIGN.md and
-  reported.
-- **Sweep before you finish.** Every change to the classifier (`hooks/rules/`,
-  `hooks/config/defaults.ts`) or to redaction (`hooks/redact.ts`, `hooks/members/gollum.ts`) ends
-  with a before-and-after comparison against `main`: the policy table once M2.1 exists; until
-  then, generated command sets as the brief names them. The pull request states "lower than
-  `main`: none", or lists each line with the decision that approves it. Two of the three review
-  rounds found a loosening that its author had described as a tightening; this rule exists
-  because of that.
-- **Never stash, reset or check out over a tree another agent is editing.** Test in a separate
-  copy (`git worktree` or `git archive` into scratch space).
-- **Stop conditions.** Stop and report, without working round it, when: a loosening is needed that
-  no brief approved; a brief's stated precondition fails; a maintainer action is needed; the
-  standard verify is red on a clean checkout; or the brief turns out to need a decision listed in
-  section 6.
-
-**Step 4. Hand over, then stop.**
-
-- Tick the brief on the board and in its section; update the milestone's state in section 2 when
-  it is the milestone's last.
-- Record decisions in DESIGN.md (the section for the current milestone or hardening pass), and
-  user-visible changes in the manual and `CHANGELOG.md` ("Unreleased").
-- Anything found and not done goes to "Later" or to "Open decisions" with the brief id that found
-  it.
-- The pull request description follows the template and says what was verified live and what was
-  not.
-- One brief per session unless the maintainer said otherwise. At the end of a milestone, the
-  checkpoint summary (`/checkpoint`), then wait.
-
-**A session must never:** load the mod into itself; push to `main` or merge a pull request; change
-a decision recorded in sections 6, 7 or 9 without the maintainer; weaken a test or a guard to get
-green; quote an input that gets past the rules tier in a commit message, a pull request or a
-public issue (`SECURITY.md`).
 
 ## 4. Maintainer actions
 
@@ -189,7 +117,7 @@ says so.
 
 ## 5. The board
 
-Every open brief from here to 1.0.0, in the order sessions take them. Sizes: S is one implementer
+Every open brief from here to 1.0.0, in the order sessions take them. Sizes: S is one writer
 pass, M is two to four, L is a planned sequence. "Gate" says which way the brief moves the gate.
 "Parallel-safe with" names briefs whose files are disjoint from this one's; an empty cell means
 run it alone. Nearly every behaviour brief edits `hooks/register.ts`, `hooks/strings.ts`,
@@ -197,7 +125,7 @@ run it alone. Nearly every behaviour brief edits `hooks/register.ts`, `hooks/str
 
 | # | Id | Brief | Size | Gate | Depends on | Needs | Parallel-safe with | State |
 | -: | :- | :- | :- | :- | :- | :- | :- | :- |
-| 1 | P0 | Development process | L | neutral | the hardening pull request merged | MA10 | none: it lands alone, before any other brief | Phase 1 in progress |
+| 1 | P0 | Development process | L | neutral | the hardening pull request merged | MA10 | none: it lands alone, before any other brief | Phase 2 built on the hardening branch (commits grouped A to H); verify before relying on it. Once it is merged, section 3's pointer is the protocol's home |
 | 2 | M0.4 | The scripted probe suite | M | neutral | P0 | | M1.2, M0.7 | open |
 | 3 | M0.7 | The audit line carries the prompt epoch and the lock | S | neutral | P0 | | M0.4, M1.2 | open |
 | 4 | M1.2 | The threat model | S | neutral | P0 | | M0.4, M0.7 | open |
@@ -273,6 +201,8 @@ edit the file that now holds it.
       budget, one routing row per reference file, each rule id has one home, rules and command
       skills are pointer-only), each check tested;
     - (H) an evals file of about ten prompts and a "lessons" line in the pull request template.
+  - **Status.** Phase 2 built on the hardening branch (commits grouped A to H); verify before relying
+    on it. Once it is merged, section 3's pointer is the protocol's home.
   - **Every fact lives in exactly one file.** Section 3 of this file, "Resuming" (section 8),
     `docs/DEVELOPMENT.md`, `CONTRIBUTING.md` and the three existing skills are the sources to move
     from; what moves leaves a pointer behind.
@@ -335,7 +265,7 @@ without a commit, and the facts about the host are checked by a script, not by h
   - **Mutation checks.** Flip the expected string of probe 2 and of one case of probe 5: the
     script reports a fail and exits 1.
   - **Record.** The results go into DESIGN §12 (a new subsection) and the version marks into
-    section 8 here; if another brief is editing DESIGN, they ride in the next sequential brief.
+    `.claude/skills/council-of-elrond-development/references/host-api-facts.md` (section 8 here is now a pointer); if another brief is editing DESIGN, they ride in the next sequential brief.
     Probe 10's answer may make a brief: if the store's file is not caught, add a tightening brief
     to M1 and say so in the hand-over (do not describe the path in a public issue before it is
     fixed).
@@ -382,7 +312,7 @@ without a commit, and the facts about the host are checked by a script, not by h
   - **Decided behaviour.** Read both components' docs in the types first. A row while a full
     council sits; no row of the mod's when idle; the survey case as today's test states it; when
     `isCollapsed`, at most one line. Never weaken an assertion: if the engine's own row now
-    always shows, the tests say so, and the implementer stops and reports.
+    always shows, the tests say so, and the writer stops and reports.
   - **Acceptance.** All tests pass on the newly pinned build and DESIGN §11 records the behaviour.
 - [x] **M0.3 Pin Claude Code in CI** (S, neutral; finding R3, decision D10). Done: both workflows
   install the pinned version; `/upgrade-types` moves the pin and re-checks whether `$.fs` has
@@ -470,7 +400,7 @@ P1, S3.
     any shell mention, asks, as every protected path does. The settings files and the plugin
     folders are already covered.
   - **Acceptance.** One test per path for Write, Edit and a shell write; an unrelated
-    `docs/CLAUDE-notes.md` is unchanged. The sweep of section 3.
+    `docs/CLAUDE-notes.md` is unchanged. The sweep (R9, `references/conventions.md#r9`).
   - **Mutation.** Removing each entry fails its test.
   - **Consequence to report.** A shell read of these files asks (the alternative is the
     write-protected list: OD9). Developing this repository with the mod loaded would ask on every
@@ -496,7 +426,7 @@ P1, S3.
   input holds a `command` string and that is not one of the shell tools the classifier parses
   gets a shipped review rule; the PowerShell tool is the known one and the test. Files:
   `hooks/config/defaults.ts`, `hooks/rules/classify.ts`, `tests/rules.test.ts`, the manual,
-  DESIGN.md, `CHANGELOG.md`. The sweep of section 3.
+  DESIGN.md, `CHANGELOG.md`. The sweep (R9, `references/conventions.md#r9`).
 - [ ] **M1.11 `PATH` assignments are reviewed** (S, **tightens**). Extend the shipped
   `dangerous-env-assignment` rule to a `PATH` assignment that prefixes a command, to
   `export PATH=` and to `env PATH=`: it makes a reviewed program name mean another program.
@@ -570,7 +500,7 @@ policy and must not be done blind. Findings T1, T3.
     plugin folder) lived in scratch space and are gone. The brief writes
     `scripts/generate-policy-corpus.mjs`, which rebuilds them from the tables in
     `hooks/rules/shell.ts`, and commits a reviewed sample as the table; the full generated set
-    runs as the sweep of section 3.
+    runs as the sweep (R9, `references/conventions.md#r9`).
   - `scripts/check-policy-diff.mjs` classifies the table on the base and the head of a pull
     request; every row whose tier changed must be declared in one line of the description
     (`policy: expect-different=<ids>`), and a row that got looser also needs the decision that
@@ -869,7 +799,7 @@ never decides one of these; it applies the default.
 | OD14 | Do the 1.0.0 criteria include the reducer (L14) and a conventions checker (L3) | No | Not required | M7 | before 1.0 |
 | OD15 | Where the compatibility policy lives | A section of `docs/INSTALL.md` | That | M1.7 | before 0.6.0 |
 | OD16 | What follows the probe of an ask-only `tool.check` (L17): keep the chat approval route, replace it with the engine's dialog, or both | Decide after the probe | The chat route stays | L17 | any time |
-| OD17 | Pull M2.1 (the policy table) forward, ahead of the classifier briefs of M1 | Yes: two review rounds found a loosening only by sweeping, and M1.1b, M1.11 and M1.1c change the classifier again | Board order (M2.1 after the release); the sweep of section 3 stands in | M2.1's place | before 0.6.0 |
+| OD17 | Pull M2.1 (the policy table) forward, ahead of the classifier briefs of M1 | Yes: two review rounds found a loosening only by sweeping, and M1.1b, M1.11 and M1.1c change the classifier again | Board order (M2.1 after the release); the sweep (R9) stands in | M2.1's place | before 0.6.0 |
 | OD18 | Should a confirmed file's project rules be able to lower a shipped decision at all (a confirmed review rule can replace a shipped ask), or only add, as an unconfirmed file's do | Only add, for every file: it loosens nothing and removes the need for the listing's warning | Today: a confirmed file's rules decide first, and the trust listing says so | nothing | before 1.0 |
 | OD19 | `/council off` and the secrets scan on an allowed call | Keep: an allowed call holding a high-confidence secret is refused even under bypass | Kept | nothing | any time |
 | OD20 | Redaction noise that remains (a templated variable reference; an unquoted command substitution cut at a space), and `/council rules` and `/council test` showing a project reason unmarked | Fix in one small brief after 0.6.0 | As is | nothing | any time |
@@ -984,109 +914,12 @@ section's index.
 
 ## 8. Resuming: what to know first
 
-### Commands
+The facts live in the development skill, each in one file; this section only points.
 
-Run from the repository root, in this order. This is the standard verify.
-
-```
-"${COUNCIL_CLAUDE:-claude}" plugin test mods/council-of-elrond                # all tests
-tsc -p mods                                                                   # strict typecheck against mods/types/claude-code.d.ts
-"${COUNCIL_CLAUDE:-claude}" plugin validate --strict mods/council-of-elrond   # copy its hooks:/calls: lines into DESIGN.md §2
-scripts/check-hygiene.sh                                                      # generated files, personal data, links, the two pins agree
-```
-
-- **One rule for the Claude Code version.** The gates run on the build CI pins (section 3, step
-  0). CI and the pre-commit hook read one pin, from `.github/workflows/ci.yml`
-  ([docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md#the-pinned-build)). Upgrades are scheduled
-  (decision D10) and run through `/upgrade-types`, which points `COUNCIL_CLAUDE` at the new build
-  and sets `COUNCIL_ALLOW_UNPINNED=1` for that brief only.
-- **Keep the mod out of the session building it.** Not through the plugin-authoring skill's
-  hot-reload folder, not with `--plugin-dir` on the session you work in.
-- **Live checks run headless,** in a throwaway repository, on a copy of the mod, with a small
-  model and a budget named on the command line (`/live-check`; after M0.4, the probe suite).
-  `/council` output only shows with `--output-format stream-json --verbose` (as `system/ui_log`).
-
-### What the hardening sessions established (2026-11)
-
-Each is to be re-probed by M0.4; until then treat the ones marked as read, not probed.
-
-- **A headless child run works from a cloud session** (probed on 2.1.322). Earlier notes assumed
-  it did not.
-- **A child run inherits the session's model, plugins and permission mode** unless flags say
-  otherwise, and costs real money: single runs in the hardening sessions cost from about 0.2 to
-  0.7 USD on the session's own model. Name `--model`, `--permission-mode` and a budget.
-- **`$.session.cwd()` follows a `cd` between shell calls** (DESIGN §14.5, probed on 2.1.304).
-  Approvals are keyed by it.
-- **`$.store` exists and persists across sessions** (the types). Where its file lives, and
-  whether a write to it is caught, is not known: M0.4 probe 10.
-- **The shape of denial texts, read from the 2.1.322 binary and not yet probed live:** where
-  nobody can be asked, an ask is wrapped in one message that opens with a fixed sentence and ends
-  with what required approval; a second wrapper exists for sessions with no prompts; a deny rule
-  opens with its own sentence; a failed shell command's text is assembled as an exit-code line,
-  then its error output, then its output. M1.9 rests on this and M0.4 probe 5 checks it.
-- **The mod's own refusal reaches the model inside an error wrapper** (seen in the stream of
-  headless runs on 2.1.322). Whether the host's denials reach the hook wrapped the same way is
-  not known: probe 5.
-- **The test kit records what the mod hands the question dialog, not its paint.** Wrapping,
-  markup and what a narrow window does are only seen in a terminal
-  ([docs/TERMINAL-CHECK.md](../../docs/TERMINAL-CHECK.md)).
-- **A sweep finds what a review does not.** Classifying a generated set of commands before and
-  after a change, against `main`, found a loosening in two of three rounds (section 3, step 3).
-
-### Hard-won API facts (verified by probes; details in DESIGN.md)
-
-Each fact carries the version it was last verified on in DESIGN §12; M0.4 re-probes them all and
-writes the version beside each.
-
-1. **Only `hooks/register.ts` may touch `$`.** *(M0.4 probe 1 re-probes this: finding A1 found it no longer holds at validation time. Until then the rule stands.)*
-   - Passing `$` to an imported function fails validation.
-   - `$`-taking helpers must be **top-level functions in register.ts**, not closures inside a hook.
-   - All decisions live in pure sibling modules.
-2. **A hook that overruns its 10 s own-time budget is cut off from 2.1.299** (DESIGN §12.5): its `.catch` is asked with `kind` `timeout` and `called` false, and a later `next(e)` is refused. The test kit does not cut a hook off, so the guard below stays.
-   - Every pass-through goes through `proceed()` in register.ts, which refuses when `next.budget.remainingMs < 1000`.
-   - Keep the hook's own (non-`$`) work small and bounded.
-   - A hook that blocks the hooks worker for 5 s without yielding has the worker replaced and its `.catch` asked (`kind` `throw`): keep a `.catch` on the gating hook.
-3. **`$` calls don't count against the budget; `$.clock.sleep/after/every` do.**
-   - Bound model calls with `timeoutMs` and processes with `timeoutMs`.
-   - Build a shared deadline by passing *remaining* time into each call's `timeoutMs`, never with a clock timer.
-4. **In `.catch`:** if `next.called`, then `next(e)` replays the real result without re-running the call. Otherwise refuse.
-5. **`$.ui.ask` is an `AskUserQuestion` tool call** that skips the calling hook but **not the plugin's other `tool.call` hooks**.
-   - Keep exactly one `tool.call` hook.
-   - It rejects on dismiss, on "Chat about this", and in `-p`. In `-p` on 2.1.299 the rejection says the session has no `AskUserQuestion` tool. Dismiss and "Chat about this" reject with the same text (the call's result, cut to 120 characters), so the mod cannot tell them apart (DESIGN §12.4).
-   - Guard it with `$.session.surfaces()` (empty means nobody can be asked: refuse).
-   - In a cloud session in Auto mode, the host answered it with the first option and the person saw nothing (DESIGN §14.1): an answer is not proof that a person chose it. Never ask where `$.session.surfaces()` is empty.
-   - The engine's own alternative is a `tool.check` hook's ask (`decider: 'person'` on 2.1.304; from 2.1.308 every hook's ask is a person's and `decider` is gone, DESIGN §14.2). On 2.1.304 no classifier, PermissionRequest hook, allow rule or `bypassPermissions` settled it (2.1.308's types name a PermissionRequest hook among what may answer it, not yet probed), and in `-p` it is a deny. But a host program's allow does settle it: in a hosted session, the host is told only to suppress an "always allow" rule (DESIGN §14.2).
-6. **Command output reaches Claude.** A command's `{ text }` is read by Claude (approved decision 1: don't put council internals there). *(Amended by C2: where nothing draws, a person's `/council` status, report, rules and test also go to Claude as the result's `context`, redacted and fenced; DESIGN §13.5.)*
-7. **`$.state` needs a contract.**
-   - Every key must be declared in `types/index.d.ts` (`PluginState`).
-   - Refs must be literals.
-   - Writes are refused while drawing.
-   - It survives reloads; `/clear`, `/resume` and `/branch` reset it.
-8. **`userConfig` is flat:** string, number or boolean, `options` for a picker, `multiple` for string lists. Lists and structures go in `rules.json`.
-9. **Tests:**
-   - Stub every `$` noun the code touches with the test's `on(...)`; an unstubbed bottom throws.
-   - The fixtures in `tests/fixtures.ts` already answer files, model, user, surfaces, logs and the tool itself.
-   - `$.tool.call` input types drop `agentId`, but it arrives at runtime (cast `as never`). From 2.1.308 the test kit's `$.tool.call` takes `agentId`; the existing casts still compile.
-   - Registering the same event twice in one test fails the load; use fixture switches instead.
-10. **`--plugin-dir` writes generated files into the mod folder.** It writes `.claude-plugin/types/` and `tsconfig.json`, both gitignored.
-11. **Drawing from register.ts without JSX:** call the global `h(Element, props, ...children)` with elements from `$.ui.resolve(e)` and cast the result to `RenderElement`; the file stays `.ts`.
-12. **Test kit specifics (stage 2):** a `tool.call` bottom answer must carry `result` (an error is `{ result, isError: true, text }`); `$.session.start` needs `{ cwd, surface, isInteractive }` and a bottom hook returning `{ cwd }`; a `ui.render` hook that calls `next(e)` (SessionMode) needs a bottom `ui.render` hook in the test; `$.command.run` resolves `{ text: undefined, ref: undefined }` for a hook's `{}`.
-13. **Claude Code's own denial wording.** Automatic (verified in `-p`): "`rm in '<path>' needs approval. … Claude Code asks before a shell command creates, changes or removes files there.`" The person refusing at the prompt (from the binary): "The user doesn't want to proceed with this tool use. …", optionally ending "To tell you how to proceed, the user said: …", or "The user doesn't want to take this action right now. …". All come back from `next(e)` as `isError: true`.
-14. **`$.process.spawn` has no timeout** (stage 4, probed live in 2.1.289). End the loop with `stream.return()` from a `$.clock.after` timer.
-    - Doing so kills the child, with no orphan.
-    - A pending `after` cost the hook about 3 ms of budget while a spawn pull was in flight for 12 s: it does not burn the budget the way an awaited `$.clock.sleep` does.
-    - After `return()`, `stream.result` settles `undefined`, so track "ended by us" in a flag.
-    - In the test kit, a `process.spawn` bottom hook is an async generator returning `{ value: { code, signal } }` (or `{ deny }` for "can't start"). A generator stuck in an `await` never sees the consumer's `return()`, so a hanging stub must keep yielding.
-    - `mock.clock(on)` answers `clock.now/after/sleep`; the fixtures take `isClockMocked: true` (and `w.modelDelays`) instead of their default real-time `clock.now`.
-
-### Conventions in this codebase
-
-- **Imports:** pure modules import siblings with `.js` suffixes (`./schema.js`); types come from `claude-code`.
-- **No text in logic:** every user-facing string lives in `hooks/strings.ts` (plain now, themed in stage 6).
-- **One state value:** session state is the single `$.state` value `council-of-elrond.session` (`CouncilSession` in `types/index.d.ts`), changed only through pure functions in `hooks/state.ts`. `resetForPrompt` is the one per-prompt reset; extend it rather than adding resets elsewhere.
-- **Refusals:** every refusal is built by `refusalText` (`hooks/elrond/refusal.ts`), and every escalation by `questionText` (`hooks/elrond/escalation.ts`).
-- **Audit:** each gated call writes exactly one audit line, via `finish()` in register.ts.
-- **Comments:** short, saying why, never what.
+- **The commands (the standard verify), the pinned build and the one rule for the Claude Code version:** [qa-ci.md](../../.claude/skills/council-of-elrond-development/references/qa-ci.md).
+- **What the hardening sessions established (2026-11), and the hard-won API facts** (verified by probes; details in DESIGN.md): [host-api-facts.md](../../.claude/skills/council-of-elrond-development/references/host-api-facts.md). Brief M0.4 re-probes them and writes the version beside each in that file.
+- **Keeping the mod out of the session building it, and headless live checks** (a small model, a permission mode and a budget named on the command line): R1 and R13 in [conventions.md](../../.claude/skills/council-of-elrond-development/references/conventions.md#r1), and [live-check.md](../../.claude/skills/council-of-elrond-development/references/workflows/live-check.md).
+- **Conventions in this codebase:** [style.md](../../.claude/skills/council-of-elrond-development/references/style.md).
 
 ---
 

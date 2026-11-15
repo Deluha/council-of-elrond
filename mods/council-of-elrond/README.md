@@ -943,8 +943,8 @@ substitutions in an unquoted heredoc body. The gaps that remain:
 The council is three model reviewers (destructive operations, diffs, git and databases) and three
 code members (the secrets scan, the read-only preview, the project checks). The spec caps the
 model members at three, so adding one means replacing one, or adding a code member. The steps,
-file by file, are in the developer guide:
-[docs/DEVELOPMENT.md, "Add a member"](../../docs/DEVELOPMENT.md#add-a-member). In short: a member
+file by file, are in the development workflow:
+[change-reviewer.md](../../.claude/skills/council-of-elrond-development/references/workflows/change-reviewer.md). In short: a member
 supplies only its checklist (`system(nonce)`) and its prompt (`prompt(context, nonce)`); the
 request, the deadline, token accounting and the strict verdict parse are shared, and every piece
 of session content it sees is wrapped as untrusted data.
@@ -985,5 +985,5 @@ claude plugin validate ./mods/council-of-elrond
 tsc -p ./mods
 ```
 
-Contributor setup, conventions and recipes: [docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md).
+Contributor index: [docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md), which points into the development skill.
 Installing, configuring and removing: [docs/INSTALL.md](../../docs/INSTALL.md).

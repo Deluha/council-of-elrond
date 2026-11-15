@@ -14,65 +14,11 @@ The mod sits on three things that move without it:
 
 ## When Claude Code updates
 
-Run this monthly and before each release (ROADMAP decision D10), not at every new build: CI is
-pinned to the version at the top of DESIGN.md, and a scheduled job on the latest build reports
-drift. The `/upgrade-types` skill in this repository walks through it.
-
-1. **Regenerate the types.** Load the `plugin-authoring` skill in a Claude Code session; it writes
-   `types/claude-code.d.ts` under the skill's folder and prints the path. Do not point it at a mod
-   folder (it would offer to hot-reload the mod into your session). Copy the file over
-   `mods/types/claude-code.d.ts`.
-2. **Diff the drift.** `git diff --stat` and a read of the hunks that touch anything in DESIGN.md
-   §2's `calls:` line. Classify the drift: additive (nothing the mod calls changed), changed
-   signature, or removed method.
-3. **Typecheck and test.** `tsc -p mods`, `claude plugin test mods/council-of-elrond`,
-   `claude plugin validate --strict mods/council-of-elrond`, on the build you are upgrading to
-   (point `COUNCIL_CLAUDE` at the new build; the pre-commit hook needs `COUNCIL_ALLOW_UNPINNED=1`
-   for this brief only; see
-   [DEVELOPMENT.md](DEVELOPMENT.md#the-pinned-build)).
-4. **Re-verify the binary-derived wording.** Search the installed binary for the strings in
-   DESIGN.md §6.14 and ROADMAP API fact 13:
-   ```sh
-   BIN=$(readlink -f "$(command -v claude)")
-   grep -a -o "The user doesn't want to [a-z ]*" "$BIN" | sort -u
-   grep -a -o -E "[a-z ]*(needs|requires) approval[^\"]{0,80}" "$BIN" | sort -u | head
-   grep -a -o -E "requested permissions? to (use|write|edit|read|run)[^\"]{0,80}|haven't granted it yet[^\"]{0,40}|Permission to (use|edit|read) [^\"]{0,60} has been denied|Permission for this tool use was denied[^\"]{0,60}" "$BIN" | sort -u | head
-   ```
-   If the wording changed, update `hooks/elrond/operations.ts` (`outcomeOf`) and its tests.
-5. **Re-probe what the tests can't.** The behaviours established by live probes (DESIGN.md §1,
-   §4): the own-time budget cutting a hook off (from 2.1.299 the hook is cut off, its `.catch` is
-   asked with `kind` `timeout`, and a later `next(e)` is refused, so the call is refused),
-   `$.ui.ask` rejecting in `-p`, `$.process.spawn` ending on `return()`, `ui_log` lines in
-   stream-json. One headless run per behaviour, in a throwaway repo; ROADMAP M0.4 turns this into
-   a script.
-6. **Record it.** The version line at the top of DESIGN.md, the drift in one sentence, and any
-   changed decision. Mention the version in CHANGELOG.
-7. **Move the pin.** Both `.github/workflows/ci.yml` and `.github/workflows/release.yml` install a
-   pinned `@anthropic-ai/claude-code`. Move the pin in both to the new version, the same one the
-   types are from (ROADMAP decision D10). A newer release that breaks the vendored types before
-   you have time to upgrade changes nothing for CI, which stays on the pin; open an issue.
+The procedure (compare versions, regenerate the types, measure the drift, re-verify the binary's wording, re-probe, record, move the pin) is a workflow: `.claude/skills/council-of-elrond-development/references/workflows/upgrade-types.md`. Run it monthly and before each release, not at every new build.
 
 ## Releasing
 
-Versions are the `version` field in `mods/council-of-elrond/.claude-plugin/plugin.json`. Before
-1.0.0, a minor bump may change shipped rules or defaults; a patch bump never does.
-
-1. Move CHANGELOG's "Unreleased" under the new version with the date. Credit security reporters.
-2. Bump `version` in `plugin.json`. The marketplace manifest reads it from there.
-3. Update the README's status line and the token-cost figures if a milestone changed them.
-4. Run [TERMINAL-CHECK.md](TERMINAL-CHECK.md) on the build to be released, in a terminal, and put
-   its record in the release notes (ROADMAP maintainer action MA3).
-5. Run the three checks, commit, then tag with Claude Code's own tool, which checks that
-   `plugin.json` and the marketplace entry agree:
-   ```sh
-   claude plugin tag mods/council-of-elrond --dry-run
-   claude plugin tag mods/council-of-elrond -m "council-of-elrond %s" --push
-   ```
-   It creates a `council-of-elrond--v0.6.0` tag. Pushing it runs `.github/workflows/release.yml`,
-   which checks the tag against `plugin.json` and `CHANGELOG.md`, re-runs the gates and publishes
-   the GitHub release with that version's changelog section as its body. Nothing is built.
-6. Users on the marketplace get it with `claude plugin marketplace update` and
-   `claude plugin update`.
+The procedure: `.claude/skills/council-of-elrond-development/references/workflows/release.md`. A session never pushes a tag; the maintainer does.
 
 **When is it 1.0.0?** When every condition in ROADMAP M7 holds: among them the eval results
 against the thresholds written before they were measured (M2), the support matrix (M5), the canary
@@ -88,11 +34,8 @@ Beyond the template's checklist, read for these:
   classifier's fast allow path is a security change: look for the near miss the test doesn't cover.
 - **A new `$` call** in register.ts shows up in `claude plugin validate`'s `calls:` line. Ask why
   it is needed and whether its failure refuses or passes.
-- **A new process.** Only Galadriel's table and `gimli.commands` may start one. Anything else is
-  a design change for the roadmap.
-- **A new reviewer input.** Everything that reaches a model is session content; it must go through
-  `untrusted(...)` and redaction, and the limits in the member's `LIMITS`.
-- **Text.** New strings in `strings.ts`, plain variant free of theme words.
+- **A new process or a new reviewer input.** `.claude/skills/council-of-elrond-development/references/domain-reviewers.md` ("Review points").
+- **Text.** New strings in `hooks/strings.ts`, plain variant free of theme words.
 - **The audit line.** New fields are fine; contents, diffs, output or secrets are not.
 - **Decisions.** If the pull request picked between options the spec leaves open, DESIGN.md has
   the decision and the reason.
@@ -108,17 +51,7 @@ Beyond the template's checklist, read for these:
 
 ## Data the mod keeps
 
-Two things are kept. The trust record is the plugin's own store (under the Claude Code
-configuration folder, never in a repository): for each rules file a person confirmed with
-`/council trust`, its real path and the SHA-256 of its content, at most 200 entries. `/council
-untrust` removes the entries for the files in scope; uninstalling the plugin's data removes the
-rest. It holds no file content.
-
-The audit log is the only data the mod accumulates besides that. It holds hashes, tiers, rule ids, verdicts
-and reasons (redacted), tokens and timings, your decisions, and for a full council each voice and
-each check's status. It never holds file contents, diffs, check output or secrets. Three files of
-1 MiB by default, rotated, gitignored by a file the mod writes. Users can delete the folder at any
-time. If a contributor adds a field, check it against this list.
+What the trust record and the audit log hold, and what they never hold: `.claude/skills/council-of-elrond-development/references/domain-state-and-trust.md`.
 
 ## Supported hosts
 
