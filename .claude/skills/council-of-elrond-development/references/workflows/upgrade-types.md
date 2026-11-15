@@ -18,6 +18,8 @@ If they match, stop: nothing to do. If the installed build is newer and no upgra
 monthly, not before a release), stop too: a newer build is expected and is not a reason to upgrade
 mid-brief.
 
+Replacing `mods/types/claude-code.d.ts` is refused today by the deny rule in `.claude/settings.json` (probed on 2.1.322: the rule also refuses a shell copy). This step needs the maintainer: ask before starting, and never remove or edit the rule yourself. The maintainer's decision on whether the rule becomes an ask rule is recorded as an open decision in the roadmap (OD25).
+
 ## Steps
 
 ### Regenerate
@@ -27,7 +29,7 @@ types/claude-code.d.ts under the skill's own folder and prints the path. **Do no
 `mods/council-of-elrond`**: writing into a mod folder makes it offer to hot-reload that mod into
 this session, which would gate your own tool calls.
 
-Copy the generated file over `mods/types/claude-code.d.ts`. Probed on 2.1.322: a `deny` rule on a path also refuses a shell command that writes it, so while `.claude/settings.json` denies `Edit(/mods/types/claude-code.d.ts)` this copy may be refused. If it is refused, the session stops and asks the maintainer; it never removes or edits the rule itself. Re-check this on each upgrade.
+Copy the generated file over `mods/types/claude-code.d.ts` once the maintainer has agreed (see Preconditions: the deny rule refuses the copy today). Re-check that probe on each upgrade.
 
 ### Measure the drift
 
@@ -106,7 +108,7 @@ The gates above pass on the new build (`tsc -p mods`, the tests, `claude plugin 
 
 ## Ask first
 
-- **The vendored types** (`mods/types/claude-code.d.ts`): a hand edit is denied; replace the file by a copy of the generated one, never an edit (R2). If the copy is refused, stop and ask the maintainer.
+- **The vendored types** (`mods/types/claude-code.d.ts`): a hand edit is denied; replace the file by a copy of the generated one, never an edit (R2). The copy is refused today too: stop and ask the maintainer (Preconditions).
 - **The CI pin and the workflows** (`.github/`): path-gated, the edit prompts; the pin moves only in an upgrade brief. Confirm the maintainer action about pushing workflow files first (MA9).
 - **The denial wordings** (`hooks/elrond/operations.ts`), if the binary's text changed: stop and ask.
 - **The release heading and the version**: not at an upgrade.

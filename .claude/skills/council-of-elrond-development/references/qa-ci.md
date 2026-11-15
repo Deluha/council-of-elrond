@@ -8,11 +8,11 @@ What runs, on which build, and what each result means.
 
 - no flag: the current change (the merge base with `main`, plus staged, unstaged and untracked files);
 - `--staged`: the staged files, as the pre-commit hook runs it;
-- `--all`: everything. Run it once at the start of a cloud session and see it green before changing anything.
+- `--all`: everything. Run it once at the start of a cloud session and see it green before changing anything. Its green is `PASS (2 manual checks outstanding)`: `--all` selects the two MANUAL rows whether or not anything changed.
 
 Results: `PASS`, `FAIL`, `WARN` (counted, never fails: a conventions warning, the pinned-build row under `COUNCIL_ALLOW_UNPINNED=1`, hygiene when `python3` is missing because its link check is then skipped), `SKIP` (with its reason), `MANUAL` and `INFO` (the ask-first report). A MANUAL row is a check with no command: do it by hand and say so in the summary. The summary line reads `PASS (2 manual checks outstanding)` or `PASS (1 warning, 2 changed files need the maintainer's eye)`, never a bare PASS with anything outstanding, and `FAIL (names)` with a failure.
 
-A SKIP is acceptable only for a reason that is not a missing prerequisite. A row that cannot run because the pinned build or a binary is missing is a SKIP marked as missing and fails the run (summary FAIL, exit 1). The pinned-build row is selected with every row that runs the Claude Code binary, so it is red then too.
+A SKIP is acceptable only for a reason that is not a missing prerequisite. A missing prerequisite of a gate (the pinned build, or the binary a gate runs) is a SKIP marked as missing and fails the run (summary FAIL, exit 1); the pinned-build row is selected with every row that runs the Claude Code binary, so it is red then too. Hygiene's link check is the one optional part: without `python3` the hygiene row is a WARN, and CI always runs the check.
 
 If git fails (no merge base, not a repository, git missing), the table gets a `git` row marked `FAIL`, every check is selected and the exit code is non-zero. A build that is not the pinned one fails the pinned-build row unless `COUNCIL_ALLOW_UNPINNED=1`.
 
@@ -23,7 +23,7 @@ If git fails (no merge base, not a repository, git missing), the table gets a `g
 | Anything | hygiene (`scripts/check-hygiene.sh`); the guidance checker (`scripts/check-guidance.mjs`); the ask-first report |
 | `mods/council-of-elrond/hooks/`, `mods/council-of-elrond/tests/`, `mods/council-of-elrond/types/` or `mods/council-of-elrond/.claude-plugin/`; `mods/tsconfig.json`; `mods/types/` | the pinned-build check; the tests; the typecheck; validate the plugin; no `tool.check` hook; the conventions check |
 | `.claude-plugin/marketplace.json` or `mods/council-of-elrond/.claude-plugin/plugin.json` | validate the marketplace, and the pinned-build check |
-| the CI or release workflow in `.github/workflows/` (the pin may have moved) | every row that needs the pinned build, and validate the marketplace |
+| the CI or release workflow in `.github/workflows/` (the pin may have moved) | the pinned-build check, the tests, the typecheck, validate the plugin, no `tool.check` hook, the conventions check and validate the marketplace; also `node --test scripts/tests/`, since the path is under `.github/` |
 | `hooks/rules/`, `hooks/config/defaults.ts`, `hooks/redact.ts`, `hooks/members/gollum.ts` | the sweep row (MANUAL: R9) |
 | `hooks/register.ts` hunks that touch `next(`, `.catch(`, `proceed(` or `deny:`; `hooks/rules/classify.ts`; `hooks/elrond/operations.ts` | the mutation-check row (MANUAL: R7) |
 | `scripts/`, `.githooks/`, `.claude/`, `.github/` | `node --test scripts/tests/` |
@@ -74,22 +74,7 @@ CI (`.github/workflows/ci.yml`) has two jobs. `hygiene` runs `scripts/check-hygi
 - **The mutation check** (R7): MANUAL. How: `references/testing.md`.
 - **The terminal check**, `docs/TERMINAL-CHECK.md`: the maintainer's, in a terminal, for releases and dialog changes (interactive UI cannot be checked headless).
 
-## The ask rules and the two hooks
+## The ask rules, the hooks and the guidance checker
 
-- **The `ask` and `deny` rules in `.claude/settings.json` are Claude Code permission rules on the developing session.** They are not the mod, which is never loaded there (R1). Probed on 2.1.322: an `ask` rule on a path prompts for the Edit and Write tools, but a shell write (`sed -i`, `cp`) to that path is not prompted, so every ask-first item has a second gate: a workflow step, the verify report and the reviewer. A `deny` rule on a path also refuses a shell command that writes it. The allow list holds exact commands (a prefix only for `node scripts/verify.mjs` and `node scripts/check-guidance.mjs`, which reject or only read their arguments) and never `claude -p`, so a headless child run prompts (R13).
-- **The post-edit hook**, `scripts/hooks/lint-edited.mjs`, runs after every Edit or Write and checks syntax, the `.editorconfig` rules and a single-file typecheck, reported as context; it never fails the edit. The whole-project typecheck stays in the verify command.
-- **The session-start hook**, `scripts/hooks/session-start.sh`, runs only in cloud sessions. It installs the pinned build into a cache folder outside the repository (and `typescript` if `tsc` is missing), exports `COUNCIL_CLAUDE` as soon as the pinned build is found or installed (before the optional `typescript` install), sets `core.hooksPath` to `.githooks` when it is unset, warns if `claude plugin list` names `council-of-elrond` (R1), and never fails the session start. Its steps are bounded at 200 s (pinned install), 60 s (`typescript`) and 10 s (plugin list), inside the hook's 300 s. `COUNCIL_SKIP_SESSION_SETUP=1` turns it off (set it where an unattended session clones this repository).
-
-## The guidance checker
-
-`node scripts/check-guidance.mjs` runs in the verify command, in pre-commit (through it) and in CI's `hygiene` job. It checks that:
-
-- a backticked path in a guidance file resolves from the repository root, else from `mods/council-of-elrond/`, else from the skill folder or its `references/`, and an anchor after a path matches a heading of that file;
-- `CLAUDE.md` is within its line and byte budget, and no file under `references/` is over 10 KB;
-- the routing table has one row for every reference file and names only existing files;
-- each rule id is defined once, in `references/conventions.md`, and every id used elsewhere exists;
-- rule files and command skills only point;
-- model tier names appear only in agent frontmatter and the one table of `references/recipes-orchestration.md`;
-- the ask paths in `.claude/settings.json`, the ask-first list in `CLAUDE.md` and the safety-boundary block of `.github/CODEOWNERS` agree;
-- pointers to `.claude/` and `scripts/` in `CONTRIBUTING.md`, `docs/DEVELOPMENT.md` and `docs/MAINTENANCE.md` resolve (their other prose is not read); a backticked `/name` of a command skill of this repository has its `SKILL.md`; no code fence is unclosed;
-- the wiring is real: CI has `run:` steps for the checker and for `node --test scripts/tests/` (a comment or a step name does not count), pre-commit has a line that runs `node scripts/verify.mjs --staged` (an `echo` does not), and verify runs the checker (an import does not).
+- The `ask` and `deny` rules of the developing session, the post-edit hook and the session-start hook: `references/guidance-machinery.md`.
+- What `node scripts/check-guidance.mjs` checks, and what it does not prove: `references/guidance-machinery.md`.

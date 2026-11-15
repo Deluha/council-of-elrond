@@ -3,13 +3,13 @@
 // Run: node --test scripts/tests/
 
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import * as v from '../verify.mjs'
+import { cleanEnv, fixtureGit, spawnClean } from './helpers.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = join(here, '..', '..')
@@ -130,7 +130,7 @@ describe('selectChecks', () => {
 
 describe('the pin', () => {
   const shellPin = (cwd) => {
-    const r = spawnSync('bash', ['-c', `. "${repo}/scripts/pinned-claude.sh" && pinned_version`], { cwd, encoding: 'utf8' })
+    const r = spawnClean('bash', ['-c', `. "${repo}/scripts/pinned-claude.sh" && pinned_version`], { cwd, encoding: 'utf8' })
     return r.stdout.trim()
   }
 
@@ -160,7 +160,7 @@ describe('the pin', () => {
       const stub = join(dir, 'claude-stub')
       writeFileSync(stub, `#!/bin/sh\necho '${version}'\n`)
       chmodSync(stub, 0o755)
-      const r = spawnSync('bash', ['-c', `. "${repo}/scripts/pinned-claude.sh" && check_pinned_claude >/dev/null`], { cwd: dir, env: { ...process.env, COUNCIL_CLAUDE: stub } })
+      const r = spawnClean('bash', ['-c', `. "${repo}/scripts/pinned-claude.sh" && check_pinned_claude >/dev/null`], { cwd: dir, env: cleanEnv({ COUNCIL_CLAUDE: stub }) })
       assert.equal(v.isPinned(version, '2.1.322'), r.status === 0, `version ${JSON.stringify(version)}`)
     }
     assert.equal(v.isPinned('2.1.322', ''), false)
@@ -470,6 +470,48 @@ describe('main, with every command injected', () => {
     assert.match(s.text(), /verify: PASS \(2 manual checks outstanding, /)
   })
 
+  test('the MANUAL rows say why they were selected: --all does not claim a file changed', async () => {
+    const all = setup({ git: () => bad('no git'), commands: { 'check-guidance': guidanceOk } })
+    await v.main(['--all'], env, all.deps)
+    for (const id of ['sweep', 'mutation']) {
+      assert.match(all.text(), new RegExp(`^${id}\\s+MANUAL\\s+\\S+\\s+selected by --all: nothing to do unless .* changed`, 'm'), id)
+    }
+    assert.match(all.text(), /verify: PASS \(2 manual checks outstanding/, 'the expected green for --all')
+    const changed = setup({ git: gitDefault([`${MOD}/hooks/rules/classify.ts`, `${MOD}/tests/a.test.ts`]), commands: { 'check-guidance': guidanceOk } })
+    await v.main([], env, changed.deps)
+    assert.match(changed.text(), /^sweep\s+MANUAL.*a rule, protected path, redaction or secrets-scan file changed: run the sweep/m)
+    assert.match(changed.text(), /^mutation\s+MANUAL.*a path that decides whether a call runs changed: break it/m)
+    assert.doesNotMatch(changed.text(), /selected by --all/)
+    const failed = setup({ git: () => bad('fatal: nope'), commands: { 'check-guidance': guidanceOk } })
+    await v.main([], env, failed.deps)
+    assert.match(failed.text(), /^sweep\s+MANUAL.*the change set is unknown \(git failed\): if a rule/m)
+  })
+
+  test('the children that run tests get no GIT_* variable; git and the other children keep the hook\'s', async () => {
+    const hookEnv = { COUNCIL_CLAUDE: 'fake-claude', PATH: '/bin', GIT_DIR: '/real/.git', GIT_INDEX_FILE: '/real/.git/index', GIT_WORK_TREE: '/real' }
+    const s = setup({ git: (line, args) => (args[0] === 'rev-parse' ? ok('true\n') : args.includes('--name-only') ? ok(`scripts/x.sh\0${MOD}/hooks/strings.ts\0${MOD}/tests/a.test.ts\0CHANGELOG.md\0`) : ok('')), commands: { 'check-guidance': guidanceOk } })
+    const seen = []
+    const run = (cmd, args, opts) => {
+      seen.push({ line: [cmd, ...args].join(' '), env: opts?.env })
+      return s.deps.run(cmd, args)
+    }
+    assert.equal(await v.main(['--staged'], hookEnv, { ...s.deps, run }), 0, s.text())
+    const at = (prefix) => seen.filter((c) => c.line.startsWith(prefix))
+    for (const prefix of ['node --test scripts/tests/', 'fake-claude plugin test']) {
+      const [call] = at(prefix)
+      assert.ok(call, `${prefix} ran`)
+      assert.deepEqual(Object.keys(call.env).filter((k) => k.startsWith('GIT_')), [], prefix)
+      assert.equal(call.env.COUNCIL_CLAUDE, 'fake-claude', `${prefix} keeps the rest of the environment`)
+      assert.equal(call.env.PATH, '/bin')
+    }
+    const gitCalls = at('git ')
+    assert.ok(gitCalls.some((c) => c.line.startsWith('git diff --cached')))
+    for (const c of gitCalls) assert.equal(c.env.GIT_INDEX_FILE, '/real/.git/index', c.line)
+    assert.equal(at('bash scripts/check-hygiene.sh')[0]?.env.GIT_INDEX_FILE, '/real/.git/index', 'hygiene reads the staged files')
+    assert.deepEqual(v.withoutGitEnv({ GIT_DIR: 'x', GIT_CONFIG_GLOBAL: 'y', GITHUB_TOKEN: 'z', PATH: 'p' }), { GITHUB_TOKEN: 'z', PATH: 'p' })
+    assert.deepEqual(v.withoutGitEnv(undefined), {})
+  })
+
   test('the guidance findings fail the row, with the first one in the note', async () => {
     const findings = [{ id: 'G1', file: 'CLAUDE.md', line: 3, message: 'pointer `x.md` does not resolve' }]
     const s = setup({ git: gitDefault(['README.md']), commands: { 'check-guidance': { status: 1, stdout: JSON.stringify({ findings }), stderr: '' } } })
@@ -525,13 +567,13 @@ describe('main, with every command injected', () => {
 
 describe('main against a real git repository', () => {
   const git = (cwd, ...args) => {
-    const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'me', GIT_AUTHOR_EMAIL: 'me@example.com', GIT_COMMITTER_NAME: 'me', GIT_COMMITTER_EMAIL: 'me@example.com', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } })
+    const r = fixtureGit(cwd, ...args)
     assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`)
     return r.stdout
   }
 
   test('the change set is the merge base diff plus staged, unstaged and untracked files', async (t) => {
-    if (spawnSync('git', ['--version']).status !== 0) return t.skip('git is not installed')
+    if (spawnClean('git', ['--version']).status !== 0) return t.skip('git is not installed')
     const root = tmp('real-')
     put(root, '.github/workflows/ci.yml', 'run: npm i @anthropic-ai/claude-code@2.1.322\n')
     put(root, 'README.md', 'one\n')
@@ -547,7 +589,7 @@ describe('main against a real git repository', () => {
     put(root, 'scripts/untracked.sh', 'echo hi\n')
     const seen = []
     const run = (cmd, args, opts) => {
-      if (cmd === 'git') return v.runCommand(cmd, args, { ...opts, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' } })
+      if (cmd === 'git') return v.runCommand(cmd, args, { ...opts, env: cleanEnv({ GIT_CONFIG_GLOBAL: '/dev/null' }) })
       seen.push([cmd, ...args].join(' '))
       return args[0] === '--version' ? { status: 0, stdout: '2.1.322 (Claude Code)\n', stderr: '' } : { status: 0, stdout: JSON.stringify({ findings: [] }), stderr: '' }
     }
@@ -567,7 +609,7 @@ describe('main against a real git repository', () => {
     const out = []
     const run = (cmd, args, opts) =>
       cmd === 'git'
-        ? v.runCommand(cmd, args, { ...opts, env: { ...process.env, GIT_CEILING_DIRECTORIES: dirname(root) } })
+        ? v.runCommand(cmd, args, { ...opts, env: cleanEnv({ GIT_CEILING_DIRECTORIES: dirname(root) }) })
         : args[0] === '--version'
           ? { status: 0, stdout: '2.1.322\n', stderr: '' }
           : { status: 0, stdout: JSON.stringify({ findings: [] }), stderr: '' }

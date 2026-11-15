@@ -92,11 +92,10 @@ The protocol for one session (set up and look first, run the brief, stop conditi
   is marked parallel-safe with it (their file sets are disjoint). Two sessions never run briefs
   that are not marked parallel-safe with each other.
 - Claim yours the same way: open the draft pull request first.
-- **P0 comes first.** Every other brief depends on it. If `scripts/verify.mjs` and
-  `.claude/skills/council-of-elrond-development/SKILL.md` exist on `main`, P0 is done (tick it) and
-  the first brief is the next open one on the board. If they do not, no other brief starts, unless
-  the maintainer says in the session to go on without it; a session that finds P0 still waiting for
-  the maintainer (MA10) says so and stops.
+- **P0 comes first.** Every other brief depends on it. Its done-test is in the P0 brief
+  (section 5, "Status"). If P0 is done, the first brief is the next open one on the board. If not,
+  no other brief starts, unless the maintainer says in the session to go on without it: the
+  hardening pull request is not merged yet, which is the maintainer's action MA8. Say so and stop.
 
 ## 4. Maintainer actions
 
@@ -114,7 +113,7 @@ says so.
 | MA7 | Live checks on desktop, mobile and VS Code | M5.2 (a matrix cell may say "untested") |
 | MA8 | Land the hardening pull request: run the terminal check on its head, tag the head `archive/hardening-2026-11` so the per-brief history stays reachable, then squash-merge (the repository is squash-only) | Everything below; `main` is what installed users follow, so the merge is a release for them |
 | MA9 | Confirm that the dev environment can push changes to workflow files, or agree to make the two one-line pin edits by hand when M0.1 asks | M0.1, M0.5 |
-| MA10 | Approve the development-process proposal (Phase 1 of P0) | P0 Phase 2 |
+| MA10 | Approve the development-process proposal (Phase 1 of P0). **Done 2026-11-15: proposal approved** | P0 Phase 2 (built) |
 | MA11 | Answer the open decisions of section 6, the ones marked "before 0.6.0" first | The briefs each one names |
 
 ## 5. The board
@@ -127,11 +126,11 @@ run it alone. Nearly every behaviour brief edits `hooks/register.ts`, `hooks/str
 
 | # | Id | Brief | Size | Gate | Depends on | Needs | Parallel-safe with | State |
 | -: | :- | :- | :- | :- | :- | :- | :- | :- |
-| 1 | P0 | Development process | L | neutral | the hardening pull request merged | MA10 | none: it lands alone, before any other brief | See the P0 brief ("Status") |
+| 1 | P0 | Development process | L | neutral | the hardening pull request merged | MA8 | none: it comes before any other brief | done when merged (see the brief) |
 | 2 | M0.4 | The scripted probe suite | M | neutral | P0 | | M1.2, M0.7 | open |
 | 3 | M0.7 | The audit line carries the prompt epoch and the lock | S | neutral | P0 | | M0.4, M1.2 | open |
 | 4 | M1.2 | The threat model | S | neutral | P0 | | M0.4, M0.7 | open |
-| 5 | M0.1 + M0.2 | Types to the current build, and the band on the new contract | S + S | neutral | M0.4 | MA9 (or its fallback) | | open |
+| 5 | M0.1 + M0.2 | Types to the current build, and the band on the new contract | S + S | neutral | M0.4 | MA9 (or its fallback), OD25 (default applies) | | open |
 | 6 | M1.10 | Claim a round before the review | S | tightens | M0.1 | | | open |
 | 7 | M1.1a | Agent-control files are protected paths | S | tightens | M0.1 | OD9 (default applies if unanswered) | | open |
 | 8 | M1.9 | Denial wordings count on the first line only | S | tightens | M0.4 (probe 5), M0.1 | | | open |
@@ -180,8 +179,8 @@ edit the file that now holds it.
   on 2026-11-15, in two phases with their approval between.
   - **Phase 1**: a read-only survey of the repository's guidance, checks and workflows, and a
     proposal. It changed no file.
-  - **Phase 2** waits for MA10, then lands as **one** pull request of its own, before any other
-    brief, with one commit per group:
+  - **Phase 2** was approved (MA10) and is built in the hardening pull request, with one commit per
+    group:
     - (A) `CLAUDE.md` of at most 80 lines: a one-line description, the operating principles, the
       hard rules in short binding form with a pointer each, and the ask-first list;
     - (B) one development skill, `.claude/skills/council-of-elrond-development/`, whose `SKILL.md`
@@ -203,10 +202,13 @@ edit the file that now holds it.
       budget, one routing row per reference file, each rule id has one home, rules and command
       skills are pointer-only), each check tested;
     - (H) an evals file of about ten prompts and a "lessons" line in the pull request template.
-  - **Status.** P0: Phase 1 (survey and proposal) done and approved 2026-11-15; Phase 2 (groups A to
-    H) built in the hardening pull request. If `scripts/verify.mjs` and
-    `.claude/skills/council-of-elrond-development/SKILL.md` exist on `main`, P0 is done: tick it. The
-    first brief a session takes is then the next open one on the board.
+  - **Status.** Phase 1 (survey and proposal) done and approved 2026-11-15; Phase 2 (groups A to H)
+    built in the hardening pull request. **P0 is done when `scripts/verify.mjs` and
+    `.claude/skills/council-of-elrond-development/SKILL.md` exist on `origin/main`**
+    (`git fetch origin main && git cat-file -e origin/main:scripts/verify.mjs`). Nobody ticks it;
+    the board row says so. Until the maintainer has run the terminal check and merged that pull
+    request (MA8), no brief starts. The first brief a session takes after that is the next open one
+    on the board.
   - **Every fact lives in exactly one file.** Section 3 of this file, "Resuming" (section 8),
     `docs/DEVELOPMENT.md`, `CONTRIBUTING.md` and the three existing skills are the sources to move
     from; what moves leaves a pointer behind.
@@ -811,6 +813,7 @@ never decides one of these; it applies the default.
 | OD22 | The scope of "typing into another terminal": is reading another pane's screen in scope, and are terminal emulators' remote-control commands | Reading is out of scope for 0.6.0; remote control joins M4.1 | Sending keys asks; reading is allowed | M4.1 in part | before 1.0 |
 | OD23 | AM3's numbers | Keep | As written; they may change only before M2's data is read | M2.4 | before M2.2 runs |
 | OD24 | A static check for runaway regexes (L30), and claiming a round for tools keyed by name before OD5 is decided (M1.10 does it) | Never for the first; accept the second | No static check; M1.10 as written | nothing | any time |
+| OD25 | The deny rule on `mods/types/claude-code.d.ts`: keep it a deny rule, or make it an ask rule (the upgrade replaces the file by a copy, and a deny rule also refuses the shell copy; probed on 2.1.322) | Ask: a hand edit still prompts, and the upgrade's replacement becomes a deliberate approved step | Deny stays; the upgrade brief M0.1 needs the maintainer for the replacement | M0.1 | before M0.1 |
 
 ## 7. Decisions
 

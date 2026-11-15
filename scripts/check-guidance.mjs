@@ -10,8 +10,9 @@
 //
 // Scope. G1, G2 and G9 read CLAUDE.md and the files under .claude/ only; the mod's own documents
 // name reviewer models as product facts and are exempt. G1 and G2 also read CONTRIBUTING.md,
-// docs/DEVELOPMENT.md and docs/MAINTENANCE.md, which hold pointers to the skill, but only the
-// pointers under .claude/ and scripts/ in them: their ordinary prose is not checked.
+// docs/DEVELOPMENT.md, docs/MAINTENANCE.md and docs/GITHUB.md, which hold pointers to the skill and
+// the scripts, but only the pointers under .claude/ and scripts/ in them: their ordinary prose is
+// not checked.
 //
 // The pointer convention (G1, G2, G7, G8). A pointer is a backticked path in a guidance file. It
 // is looked up from the repository root, from mods/council-of-elrond/, from the development
@@ -32,6 +33,20 @@
 // (md, json, ts, tsx, mjs, js, sh, yml, yaml), or ends in "/", or starts with the name of a
 // folder that exists under one of the lookup bases. Everything else (opus/sonnet, Read/Grep,
 // tool.check, R1) is not a path and is skipped. Fenced code blocks are not read for pointers.
+// Two more forms are read as pointers, in every file G1 and G2 read: a token that starts with
+// "./scripts/" or "./.claude/" (the "./" is dropped; it means the repository root there), and the
+// FIRST argument of a backticked command of the form `node <path>`, `bash <path>` or `sh <path>`
+// (a first argument that is a flag, such as `node --test scripts/tests/`, is not a path).
+//
+// G11 (wired in) is a line-based check, not a proof. It does not prove that the wired line is
+// reachable: dead code (a line after an earlier `exit`, inside a never-true `if`, or in a function
+// nobody calls) and a command that only appears in a here-document or a string that a script later
+// runs or ignores still count. For the workflow it reads only `if:` and `continue-on-error:` keys
+// of the same step or job, at their exact indentation; an expression such as
+// `if: ${{ github.event_name == 'x' }}`, a flow-style mapping, a YAML anchor or a matrix does not
+// switch a step off here. In verify.mjs a call is ignored on a `//`, `/*` or ` *` line only, not on
+// a line inside a block comment that has no leading `*`. It shows that the wiring is written, not
+// that it runs.
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -104,7 +119,7 @@ export function guidanceFiles(root) {
 const guidanceMarkdown = (root) => guidanceFiles(root).filter((f) => f.endsWith('.md'))
 
 /** The documents outside .claude/ whose pointers to .claude/ and scripts/ G1 and G2 check. */
-export const POINTER_DOCS = ['CONTRIBUTING.md', 'docs/DEVELOPMENT.md', 'docs/MAINTENANCE.md']
+export const POINTER_DOCS = ['CONTRIBUTING.md', 'docs/DEVELOPMENT.md', 'docs/MAINTENANCE.md', 'docs/GITHUB.md']
 const AUTOMATION_PATH = /^(?:\.claude|scripts)\//
 
 /** Files G1 and G2 read: { file, only } where `only` keeps a pointer (null: every pointer counts). */
@@ -250,11 +265,20 @@ export function resolvePointer(root, path, anchored = false) {
   return hits
 }
 
+/**
+ * The text of a backticked token that is read as a path: the token itself, or the first argument of a
+ * `node`, `bash` or `sh` command; a leading "./" before scripts/ or .claude/ is dropped (it means the root).
+ */
+function pathSubject(token) {
+  const cmd = /^(?:node|bash|sh)\s+(\S+)/.exec(token.trim())
+  return (cmd ? (cmd[1] ?? '') : token).replace(/^\.\/(?=(?:scripts|\.claude)\/)/, '')
+}
+
 /** Pointers in a markdown text with what each resolves to: { token, line, pointer, hits }. */
 export function pointersIn(root, text) {
   const out = []
   for (const { token, line } of backtickTokens(text)) {
-    const pointer = parsePointer(root, token)
+    const pointer = parsePointer(root, pathSubject(token))
     if (pointer) out.push({ token, line, pointer, hits: pointer.selfAnchor ? [] : resolvePointer(root, pointer.path, pointer.anchored) })
   }
   return out
@@ -265,18 +289,33 @@ const finding = (id, file, line, message) => ({ id, file, line, message })
 // ---------------------------------------------------------------------------------------------
 // G1, G2: pointers resolve; anchors match
 
-/** The command skills of this repository: a backticked `/name` for one of them needs its SKILL.md. */
-export const COMMAND_SKILLS = ['verify-change', 'diff-review', 'checkpoint', 'live-check', 'upgrade-types', 'add-rule', 'teach-parser']
+/**
+ * The command skills of this repository: every folder under .claude/skills/ except the development
+ * skill. A backticked `/name` for one of them needs its SKILL.md. A folder counts with or without a
+ * SKILL.md (a folder that lost its SKILL.md is what the check is for); a name with no folder is
+ * not a command of this repository and is skipped.
+ */
+export function commandSkills(root) {
+  try {
+    return readdirSync(join(root, '.claude/skills'), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name !== 'council-of-elrond-development')
+      .map((e) => e.name)
+      .sort()
+  } catch {
+    return []
+  }
+}
 
 export function checkG1(root) {
   const out = []
+  const commands = commandSkills(root)
   for (const { file, only } of pointerSources(root)) {
     const text = readText(root, file) ?? ''
     const open = unclosedFenceLine(text)
     if (open !== null) out.push(finding('G1', file, open, 'this code fence is never closed; it hides the rest of the file from the checks'))
     for (const { token, line } of backtickTokens(text)) {
       const m = /^\/([a-z][a-z0-9-]*)(?:\s.*)?$/.exec(token)
-      if (m && COMMAND_SKILLS.includes(m[1] ?? '') && !isFile(root, `.claude/skills/${m[1]}/SKILL.md`)) {
+      if (m && commands.includes(m[1] ?? '') && !isFile(root, `.claude/skills/${m[1]}/SKILL.md`)) {
         out.push(finding('G1', file, line, `command \`${token}\` has no .claude/skills/${m[1]}/SKILL.md`))
       }
     }
@@ -703,9 +742,69 @@ export function checkG10(root) {
 /** The lines of a text that are not comments (# or //). */
 const live = (text) => text.split('\n').filter((l) => !/^\s*(?:#|\/\/)/.test(l))
 
+/** The lines of a JavaScript text that are not comments: not a `//` line, a `/*` line or a ` *` JSDoc line. */
+const liveJs = (text) => text.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l))
+
+const indentOf = (l) => /^\s*/.exec(l)?.[0].length ?? 0
+const OFF_IF = /^if:\s*(?:\$\{\{\s*false\s*\}\}|(['"]?)false\1)\s*(?:#.*)?$/
+const OFF_CONTINUE = /^continue-on-error:\s*(['"]?)true\1\s*(?:#.*)?$/
+const switchedOff = (text) => OFF_IF.test(text) || OFF_CONTINUE.test(text)
+
+/**
+ * Whether the step that holds the `run:` line at `at`, or the job that holds that step, is switched
+ * off: a key `if: false` or `continue-on-error: true` of the step, or of the job, at its own
+ * indentation. Line-based: the step runs from its `- ` line to the next line indented less than its
+ * keys; the job from its key under `jobs:` to the next line indented as little. Expressions,
+ * flow-style mappings and anchors are not evaluated.
+ */
+function switchedOffAround(lines, at) {
+  const line = lines[at] ?? ''
+  const keyCol = line.search(/\brun:/)
+  // The step.
+  for (let j = at; j >= 0; j--) {
+    const l = lines[j] ?? ''
+    if (l.trim() === '') continue
+    if (indentOf(l) < keyCol - 2) break
+    const dash = /^(\s*)-(\s+)\S/.exec(l)
+    if (!dash || (dash[1] ?? '').length + 1 + (dash[2] ?? '').length !== keyCol) continue
+    for (let k = j; k < lines.length; k++) {
+      const m = lines[k] ?? ''
+      if (m.trim() === '') continue
+      if (k > j && indentOf(m) < keyCol) break
+      if (k === j ? switchedOff(m.slice(keyCol)) : indentOf(m) === keyCol && switchedOff(m.trim())) return true
+    }
+    break
+  }
+  // The job.
+  const jobs = lines.slice(0, at).map((l, i) => [l, i]).reverse().find(([l]) => /^jobs:\s*$/.test(l))?.[1]
+  if (jobs === undefined) return false
+  const first = lines.findIndex((l, i) => i > jobs && l.trim() !== '')
+  if (first < 0) return false
+  const jobIndent = indentOf(lines[first] ?? '')
+  let head = -1
+  for (let j = at; j > jobs; j--) {
+    if (lines[j]?.trim() !== '' && indentOf(lines[j] ?? '') === jobIndent) {
+      head = j
+      break
+    }
+  }
+  if (head < 0) return false
+  const childAt = lines.findIndex((l, i) => i > head && l.trim() !== '')
+  const childIndent = indentOf(lines[childAt] ?? '')
+  for (let k = head + 1; k < lines.length; k++) {
+    const m = lines[k] ?? ''
+    if (m.trim() === '') continue
+    if (indentOf(m) <= jobIndent) break
+    if (indentOf(m) === childIndent && switchedOff(m.trim())) return true
+  }
+  return false
+}
+
 /**
  * Whether a workflow has a `run:` step whose command is exactly `command`: on the `run:` line itself
- * or as a line of its block scalar. A comment or a step `name:` does not count.
+ * or as a line of its block scalar. A comment or a step `name:` does not count, and neither does a
+ * step (or a step in a job) carrying `if: false` or `continue-on-error: true`; see switchedOffAround
+ * for how far that reads.
  */
 export function ciRuns(ciText, command) {
   const lines = live(ciText)
@@ -714,25 +813,34 @@ export function ciRuns(ciText, command) {
     const m = /^(\s*)(?:-\s+)?run:\s*(.*)$/.exec(lines[i] ?? '')
     if (!m) continue
     const rest = m[2] ?? ''
-    if (!/^[|>][-+]?\s*$/.test(rest)) {
-      if (same(rest)) return true
-      continue
+    let matched = false
+    if (!/^[|>][-+]?\s*$/.test(rest)) matched = same(rest)
+    else {
+      const indent = (m[1] ?? '').length
+      for (let j = i + 1; j < lines.length; j++) {
+        const l = lines[j] ?? ''
+        if (l.trim() === '') continue
+        if (indentOf(l) <= indent) break
+        if (same(l)) {
+          matched = true
+          break
+        }
+      }
     }
-    const indent = (m[1] ?? '').length
-    for (let j = i + 1; j < lines.length; j++) {
-      const l = lines[j] ?? ''
-      if (l.trim() === '') continue
-      if ((/^\s*/.exec(l)?.[0].length ?? 0) <= indent) break
-      if (same(l)) return true
-    }
+    if (matched && !switchedOffAround(lines, i)) return true
   }
   return false
 }
 
-/** Whether a shell script has a line that runs `command` (optionally after `exec`), not inside echo, printf or a string. */
+/**
+ * Whether a shell script has a line that is exactly `command`, optionally after `exec` and leading
+ * whitespace, with nothing after it but an optional `# comment`; never a line that also says
+ * `exit 0` or `|| true`. Not inside echo, printf or a string; not with any other tail.
+ */
 export function shellRuns(script, command) {
   const esc = command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return live(script).some((l) => new RegExp(`^\\s*(?:exec\\s+)?${esc}(?:\\s*(?:;|&&|\\|\\|).*)?\\s*$`).test(l))
+  const re = new RegExp(`^\\s*(?:exec\\s+)?${esc}(?:\\s+#.*)?\\s*$`)
+  return live(script).some((l) => re.test(l) && !/\bexit\s+0\b|\|\|\s*true\b/.test(l))
 }
 
 export function checkG11(root) {
@@ -745,10 +853,10 @@ export function checkG11(root) {
   }
   const hook = readText(root, '.githooks/pre-commit')
   if (hook === null) out.push(finding('G11', '.githooks/pre-commit', 1, 'missing'))
-  else if (!shellRuns(hook, 'node scripts/verify.mjs --staged')) out.push(finding('G11', '.githooks/pre-commit', 1, 'has no line that runs `node scripts/verify.mjs --staged` (an echo or a comment does not count)'))
+  else if (!shellRuns(hook, 'node scripts/verify.mjs --staged')) out.push(finding('G11', '.githooks/pre-commit', 1, 'has no line that is exactly `node scripts/verify.mjs --staged` (optionally after exec, optionally with a comment; an echo, a comment, a tail such as `|| true` or `; exit 0` does not count)'))
   const verify = readText(root, 'scripts/verify.mjs')
   if (verify === null) out.push(finding('G11', 'scripts/verify.mjs', 1, 'missing'))
-  else if (!live(verify).some((l) => /\brun\(\s*'node'\s*,\s*\[\s*'scripts\/check-guidance\.mjs'/.test(l))) out.push(finding('G11', 'scripts/verify.mjs', 1, "does not run scripts/check-guidance.mjs: expected a `run('node', ['scripts/check-guidance.mjs', ...])` call (an import or a mention does not count)"))
+  else if (!liveJs(verify).some((l) => /\brun\(\s*'node'\s*,\s*\[\s*'scripts\/check-guidance\.mjs'/.test(l))) out.push(finding('G11', 'scripts/verify.mjs', 1, "does not run scripts/check-guidance.mjs: expected a `run('node', ['scripts/check-guidance.mjs', ...])` call (an import or a mention does not count)"))
   return out
 }
 

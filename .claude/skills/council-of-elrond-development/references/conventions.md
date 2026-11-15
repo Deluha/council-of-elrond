@@ -5,7 +5,7 @@ The fifteen hard rules, each in full under its id. `CLAUDE.md` carries the short
 ## R1
 
 Never load the mod into the session that is developing it. Test with `claude plugin test`, and
-run live checks headless in a throwaway repository with `claude -p --plugin-dir` (`/live-check`).
+run live checks headless in a throwaway repository, from a copy of the mod, with `claude -p --plugin-dir` (`/live-check`).
 It would gate your own tool calls.
 Keep the mod out of the session building it. Not through the plugin-authoring skill's
 hot-reload folder, not with `--plugin-dir` on the session you work in.

@@ -10,11 +10,19 @@
 // Prints one table (check, result, time, note) and one summary line. Exit 0 only when no row is FAIL.
 // Results: PASS, FAIL, WARN (counted, never fails), SKIP (with the reason), MANUAL (a check no
 // tool does yet; the row says what to do), INFO. A SKIP is acceptable only for a reason that is not
-// a missing prerequisite; a row that cannot run because the pinned build or a binary is missing is
-// a SKIP marked `missing`, and the run then fails: the summary says FAIL and the exit status is 1.
+// a missing prerequisite. A missing prerequisite of a GATE (the pinned build, or the binary a gate
+// runs) is a SKIP marked `missing`, and the run then fails: the summary says FAIL and the exit status
+// is 1. The one optional part is hygiene's link check, which needs python3: without it the hygiene
+// row is a WARN (a contributor need not have python3; CI always runs the link check).
 //
 // Environment: COUNCIL_CLAUDE (the Claude Code binary, default "claude"); COUNCIL_ALLOW_UNPINNED=1
 // (run on a build other than CI's pin; the pinned-build row then says WARN).
+//
+// Git variables. Git exports GIT_DIR, GIT_INDEX_FILE and GIT_WORK_TREE to the pre-commit hook. verify
+// keeps them for its own git calls (`git diff --cached` must read the index being committed) and for
+// hygiene, which reads the staged files; it strips every GIT_* variable from the child processes
+// that run tests (`node --test scripts/tests/` and the plugin test run), which build their own
+// repositories and must not act on the real one.
 //
 // A git failure is red: if the change set cannot be computed, the table gets a `git` row marked
 // FAIL, every check is selected and the exit status is non-zero whatever the checks say.
@@ -248,6 +256,11 @@ export function askFirstMatches(changed, patterns) {
 // ---------------------------------------------------------------------------------------------
 // Summary and table
 
+/** A copy of an environment without any GIT_* variable (see "Git variables" at the top). */
+export function withoutGitEnv(env) {
+  return Object.fromEntries(Object.entries(env ?? {}).filter(([key]) => !key.startsWith('GIT_')))
+}
+
 /** A row that fails the run: FAIL, or a SKIP that is a missing prerequisite (the pinned build, a binary). */
 export const isFailing = (row) => row.result === 'FAIL' || (row.result === 'SKIP' && row.missing === true)
 
@@ -423,10 +436,18 @@ export async function main(argv, env = process.env, deps = {}) {
   const canUsePinned = () => pinned().ok || (allowUnpinned && pinned().pin !== '')
   let validated = null
 
-  const commandRow = (label, cmd, cmdArgs, timeout, extra = {}) => {
-    const r = run(cmd, cmdArgs, { cwd: root, timeout, env })
+  // The children that run tests get no GIT_* variable: under pre-commit they would point at the real index.
+  const testEnv = withoutGitEnv(env)
+  const commandRow = (label, cmd, cmdArgs, timeout, extra = {}, childEnv = env) => {
+    const r = run(cmd, cmdArgs, { cwd: root, timeout, env: childEnv })
     return { ...outcome(r, label, timeout), raw: r, ...extra }
   }
+
+  // A MANUAL row says why it was selected: by a change, or by --all (which selects it whatever changed).
+  const manual = (what, todo) => ({
+    result: 'MANUAL',
+    note: all ? `selected by --all: nothing to do unless ${what} changed; then ${todo}` : gitFailed ? `the change set is unknown (git failed): if ${what} changed, ${todo}` : `${what} changed: ${todo}`,
+  })
 
   const impl = {
     hygiene: () => {
@@ -470,7 +491,7 @@ export async function main(argv, env = process.env, deps = {}) {
     },
     tests: () => {
       if (!canUsePinned()) return { result: 'SKIP', missing: true, note: 'not the pinned build' }
-      return commandRow(`${bin} plugin test`, bin, ['plugin', 'test', MOD], 600_000)
+      return commandRow(`${bin} plugin test`, bin, ['plugin', 'test', MOD], 600_000, {}, testEnv)
     },
     typecheck: () => commandRow('tsc', 'tsc', ['-p', 'mods'], 120_000),
     'validate-plugin': () => {
@@ -505,9 +526,9 @@ export async function main(argv, env = process.env, deps = {}) {
       if (!canUsePinned()) return { result: 'SKIP', missing: true, note: 'not the pinned build' }
       return commandRow(`${bin} plugin validate`, bin, ['plugin', 'validate', '--strict', '.'], 120_000)
     },
-    sweep: () => ({ result: 'MANUAL', note: 'a rule, protected path, redaction or secrets-scan file changed: run the sweep against main by hand and note "lower than main: none" in the pull request (references/domain-gate-direction.md)' }),
-    mutation: () => ({ result: 'MANUAL', note: 'a path that decides whether a call runs changed: break it on purpose and watch a test fail (R7 in CLAUDE.md; references/conventions.md)' }),
-    'scripts-tests': () => commandRow('node --test', 'node', ['--test', 'scripts/tests/'], 120_000),
+    sweep: () => manual('a rule, protected path, redaction or secrets-scan file', 'run the sweep against main by hand and note "lower than main: none" in the pull request (references/domain-gate-direction.md)'),
+    mutation: () => manual('a path that decides whether a call runs', 'break it on purpose and watch a test fail (R7 in CLAUDE.md; references/conventions.md)'),
+    'scripts-tests': () => commandRow('node --test', 'node', ['--test', 'scripts/tests/'], 120_000, {}, testEnv),
   }
 
   function pluginUserConfigChanged() {

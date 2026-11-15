@@ -12,7 +12,7 @@ How a session runs one brief. Which brief to take is the board's job: `mods/coun
 3. Get the pinned build. The gates run on the Claude Code build CI pins, not on whatever is
    installed; a newer installed build is expected and is not a reason to upgrade.
    The command and its variables: `references/qa-ci.md` (The pinned build).
-4. Run the **standard verify** once and see it green: `node scripts/verify.mjs --all` (`/verify-change`; what it runs is in `references/qa-ci.md`). If it is red on a clean checkout, stop and report; do not fix forward inside another brief.
+4. Run the **standard verify** once and see it green: `node scripts/verify.mjs --all` (`/verify-change`; what it runs is in `references/qa-ci.md`). With `--all` the expected green is `PASS (2 manual checks outstanding)`, because `--all` selects the two MANUAL rows (the sweep and the mutation check) whether or not anything changed; nothing is owed for them unless the change touches such a file. If it is red on a clean checkout, stop and report; do not fix forward inside another brief.
 
 ## Run one brief
 

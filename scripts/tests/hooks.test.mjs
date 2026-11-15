@@ -3,13 +3,13 @@
 // Run: node --test scripts/tests/
 
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { editorconfigFindings, filePathOf } from '../hooks/lint-edited.mjs'
+import { fixtureGit, spawnClean } from './helpers.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = join(here, '..', '..')
@@ -34,7 +34,7 @@ const put = (root, rel, text, mode) => {
 
 describe('lint-edited.mjs', () => {
   const lint = (input, options = {}) => {
-    const r = spawnSync(process.execPath, [LINT], { input, encoding: 'utf8', timeout: 30_000, ...options })
+    const r = spawnClean(process.execPath, [LINT], { input, encoding: 'utf8', timeout: 30_000, ...options })
     return { status: r.status, stdout: r.stdout, stderr: r.stderr }
   }
   const forFile = (file, extra = {}) => JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: file }, ...extra })
@@ -123,7 +123,7 @@ describe('lint-edited.mjs', () => {
   })
 
   test('a type error in a .ts under mods/ is reported for that file only, when tsc is available', (t) => {
-    if (spawnSync('tsc', ['--version']).status !== 0) return t.skip('tsc is not installed')
+    if (spawnClean('tsc', ['--version']).status !== 0) return t.skip('tsc is not installed')
     const root = tmp('lint-proj-')
     mkdirSync(join(root, '.git'))
     put(root, 'mods/tsconfig.json', readFileSync(join(repo, 'mods/tsconfig.json'), 'utf8'))
@@ -154,7 +154,7 @@ describe('session-start.sh', () => {
   const PIN = '2.1.322'
   // stdin is ignored on purpose: a bash whose stdin is a socket sources the system bashrc, which can add folders to PATH.
   const quiet = ['ignore', 'pipe', 'pipe']
-  const found = (tool) => spawnSync('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim()
+  const found = (tool) => spawnClean('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim()
   const BASH = found('bash')
   // The only host tools the script needs. They are linked into the stub folder, which is the whole
   // PATH of every run, so no real npm, claude or tsc can be reached and nothing can touch the network.
@@ -184,7 +184,7 @@ describe('session-start.sh', () => {
     }
     put(project, '.github/workflows/ci.yml', `run: npm install -g @anthropic-ai/claude-code@${PIN} typescript\n`)
     put(project, '.githooks/pre-commit', '#!/bin/sh\n')
-    const git = (...args) => spawnSync('git', args, { cwd: project, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } })
+    const git = (...args) => fixtureGit(project, ...args)
     git('init', '-q')
     git('add', '.')
     git('-c', 'user.name=me', '-c', 'user.email=me@example.com', 'commit', '-q', '-m', 'fixture')
@@ -235,7 +235,7 @@ fi
       ...extra,
     })
     const run = (extra) => {
-      const r = spawnSync(BASH, [START], { env: env(extra), encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL', stdio: quiet })
+      const r = spawnClean(BASH, [START], { env: env(extra), encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL', stdio: quiet })
       assert.equal(r.error, undefined, 'the hook ran to the end inside its test timeout')
       return { status: r.status, stdout: r.stdout, stderr: r.stderr }
     }
@@ -268,12 +268,12 @@ fi
 
   test('the PATH of a run holds the stub folder and nothing else, so no real npm can run', () => {
     const s = setup()
-    const where = (tool) => spawnSync(BASH, ['-c', `command -v ${tool}`], { env: { PATH: s.stubs }, encoding: 'utf8', stdio: quiet }).stdout.trim()
+    const where = (tool) => spawnClean(BASH, ['-c', `command -v ${tool}`], { env: { PATH: s.stubs }, encoding: 'utf8', stdio: quiet }).stdout.trim()
     assert.equal(where('npm'), join(s.stubs, 'npm'))
     assert.equal(where('claude'), join(s.stubs, 'claude'))
     assert.equal(where('timeout'), join(s.stubs, 'timeout'))
     assert.equal(where('tsc'), '', 'no real tsc either')
-    assert.equal(spawnSync(BASH, ['-c', 'echo "$PATH"'], { env: { PATH: s.stubs }, encoding: 'utf8', stdio: quiet }).stdout.trim(), s.stubs)
+    assert.equal(spawnClean(BASH, ['-c', 'echo "$PATH"'], { env: { PATH: s.stubs }, encoding: 'utf8', stdio: quiet }).stdout.trim(), s.stubs)
   })
 
   test('the first run installs the pinned build and typescript outside the repository; the second run installs nothing', () => {
@@ -383,6 +383,6 @@ fi
   })
 
   test('the script itself parses', () => {
-    assert.equal(spawnSync('bash', ['-n', START]).status, 0)
+    assert.equal(spawnClean('bash', ['-n', START]).status, 0)
   })
 })

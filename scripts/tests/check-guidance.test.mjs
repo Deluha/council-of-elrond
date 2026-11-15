@@ -2,7 +2,7 @@
 // Run: node --test scripts/tests/
 
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawnClean } from './helpers.mjs'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -129,11 +129,12 @@ describe('G1 pointers resolve', () => {
     assert.deepEqual(g.checkG1(root), [])
   })
 
-  test('only CLAUDE.md and .claude/ are read, and three documents for their .claude/ and scripts/ pointers', () => {
+  test('only CLAUDE.md and .claude/ are read, and the pointer documents for their .claude/ and scripts/ pointers', () => {
     const { root, put } = tree()
     put('docs/other.md', 'See `docs/nowhere.md`\n')
     assert.deepEqual(g.checkG1(root), [])
-    for (const file of ['CONTRIBUTING.md', 'docs/DEVELOPMENT.md', 'docs/MAINTENANCE.md']) {
+    assert.deepEqual([...g.POINTER_DOCS].sort(), ['CONTRIBUTING.md', 'docs/DEVELOPMENT.md', 'docs/GITHUB.md', 'docs/MAINTENANCE.md'])
+    for (const file of g.POINTER_DOCS) {
       put(file, 'Prose with `docs/nowhere.md`, `src/x.ts`, `a/b.md` and a good pointer `.claude/skills/verify-change/SKILL.md` and `scripts/verify.mjs`.\n')
       assert.deepEqual(g.checkG1(root), [], file)
       put(file, 'See `.claude/skills/council-of-elrond-development/references/gone.md`.\n')
@@ -146,20 +147,67 @@ describe('G1 pointers resolve', () => {
     }
   })
 
+  test('a token that starts with ./scripts/ or ./.claude/ is a pointer from the root, in the pointer documents', () => {
+    const { root, put } = tree()
+    for (const file of g.POINTER_DOCS) {
+      put(file, 'See `./scripts/verify.mjs`, `./.claude/skills/verify-change/SKILL.md` and `./schema.js`, `./other/x.md`.\n')
+      assert.deepEqual(g.checkG1(root), [], file)
+      put(file, 'See `./scripts/gone.mjs`.\n')
+      assert.equal(g.checkG1(root).length, 1, `${file}: ./scripts/`)
+      put(file, 'See `./.claude/skills/gone/SKILL.md`.\n')
+      assert.equal(g.checkG1(root).length, 1, `${file}: ./.claude/`)
+      put(file, '# x\n')
+    }
+  })
+
+  test('the first argument of a node, bash or sh command is a pointer, in every file read; a flag first is not', () => {
+    const { root, put } = tree()
+    put('.claude/rules/x.md', 'Run `node scripts/verify.mjs --all`, `bash scripts/verify.mjs`, `sh scripts/verify.mjs`, `node --test scripts/tests/` and `node <file>`.\n')
+    assert.deepEqual(g.checkG1(root), [])
+    for (const cmd of ['node scripts/gone.mjs --all', 'bash scripts/gone.sh', 'sh scripts/gone.sh', 'node ./scripts/gone.mjs']) {
+      put('.claude/rules/x.md', `Run \`${cmd}\`.\n`)
+      const f = g.checkG1(root)
+      assert.equal(f.length, 1, cmd)
+      assert.match(f[0].message, /does not resolve/, cmd)
+    }
+    put('.claude/rules/x.md', '# x\n')
+    for (const file of g.POINTER_DOCS) {
+      put(file, 'Run `node scripts/gone.mjs`, and `node src/other.js`.\n')
+      const f = g.checkG1(root)
+      assert.equal(f.length, 1, file)
+      assert.equal(f[0].file, file)
+      put(file, '# x\n')
+    }
+    put('.claude/rules/x.md', 'Run `node scripts/verify.mjs#gone`.\n')
+    assert.equal(g.checkG2(root).length, 0, 'verify.mjs is not markdown; no anchor check')
+  })
+
   test('a slash command naming one of the command skills needs its SKILL.md; an unknown name is skipped', () => {
     const { root, put } = tree()
     put('.claude/rules/x.md', 'Run `/verify-change` or `/verify-change --all`.\n')
     assert.deepEqual(g.checkG1(root), [])
+    // A folder with no SKILL.md is a command skill that lost its file; a name with no folder is not a command of this repository.
+    put('.claude/skills/live-check/notes.md', 'x\n')
     put('.claude/rules/x.md', 'Run `/live-check` and `/live-check a probe`, `/compact` and `/nothing-here`.\n')
     const f = g.checkG1(root)
     assert.equal(f.length, 2)
     assert.match(messages(f), /\/live-check.*no \.claude\/skills\/live-check\/SKILL\.md/)
     put('.claude/skills/live-check/SKILL.md', '---\nname: live-check\n---\n\nSee `scripts/verify.mjs`.\n')
     assert.deepEqual(g.checkG1(root), [])
-    for (const name of g.COMMAND_SKILLS) {
-      put('.claude/rules/x.md', `Run \`/${name}\`.\n`)
-      assert.equal(g.checkG1(root).length, name === 'verify-change' || name === 'live-check' ? 0 : 1, name)
-    }
+  })
+
+  test('the command skills are the folders under .claude/skills/ except the development skill: a new one needs no edit', () => {
+    const { root, put } = tree()
+    assert.deepEqual(g.commandSkills(root), ['verify-change'])
+    put('.claude/skills/brand-new/notes.md', 'x\n')
+    assert.deepEqual(g.commandSkills(root), ['brand-new', 'verify-change'])
+    put('.claude/rules/x.md', 'Run `/brand-new`, `/council-of-elrond-development`.\n')
+    const f = g.checkG1(root)
+    assert.equal(f.length, 1)
+    assert.match(f[0].message, /\/brand-new/)
+    put('.claude/skills/brand-new/SKILL.md', '---\nname: brand-new\n---\n\nSee `scripts/verify.mjs`.\n')
+    assert.deepEqual(g.checkG1(root), [])
+    assert.deepEqual(g.commandSkills(join(root, 'nowhere')), [])
   })
 
   test('an unclosed code fence is a finding, at the line that opens it', () => {
@@ -561,16 +609,81 @@ describe('G11 wired in', () => {
       '#!/bin/sh\n# exec node scripts/verify.mjs --staged\n',
       '#!/bin/sh\necho node scripts/verify.mjs --staged\n',
       '#!/bin/sh\nexec node scripts/verify.mjs\n',
+      '#!/bin/sh\nnode scripts/verify.mjs --staged || true\n',
+      '#!/bin/sh\nnode scripts/verify.mjs --staged; exit 0\n',
+      '#!/bin/sh\nexec node scripts/verify.mjs --staged || true\n',
+      '#!/bin/sh\nnode scripts/verify.mjs --staged || exit 1\n',
+      '#!/bin/sh\nnode scripts/verify.mjs --staged && echo ok\n',
+      '#!/bin/sh\nnode scripts/verify.mjs --staged # never || true\n',
+      '#!/bin/sh\nnode scripts/verify.mjs --staged-only\n',
     ]) {
       put('.githooks/pre-commit', hook)
       const f = g.checkG11(root)
       assert.equal(f.length, 1, hook)
       assert.match(f[0].message, /verify\.mjs --staged/)
     }
-    for (const hook of ['#!/bin/sh\nexec node scripts/verify.mjs --staged\n', '#!/bin/sh\nif command -v node; then\n  node scripts/verify.mjs --staged\nfi\n', '#!/bin/sh\nnode scripts/verify.mjs --staged || exit 1\n']) {
+    for (const hook of ['#!/bin/sh\nexec node scripts/verify.mjs --staged\n', '#!/bin/sh\nif command -v node; then\n  node scripts/verify.mjs --staged\nfi\n', '#!/bin/sh\n  exec node scripts/verify.mjs --staged   # the checks\n']) {
       put('.githooks/pre-commit', hook)
       assert.deepEqual(g.checkG11(root), [], hook)
     }
+  })
+
+  test('CI: a matching step switched off by if: false or continue-on-error: true does not count; an enabled one does', () => {
+    const { root, put } = tree()
+    const both = (a, b) => CI(...a, ...b)
+    const guidance = ['      - run: node scripts/check-guidance.mjs']
+    const tests = ['      - run: node --test scripts/tests/']
+    const off = [
+      ['      - name: x', '        if: false', '        run: node --test scripts/tests/'],
+      ['      - if: false', '        run: node --test scripts/tests/'],
+      ['      - run: node --test scripts/tests/', '        if: false'],
+      ["      - name: x", "        if: 'false'", '        run: node --test scripts/tests/'],
+      ['      - name: x', '        if: ${{ false }}', '        run: node --test scripts/tests/'],
+      ['      - name: x', '        continue-on-error: true', '        run: node --test scripts/tests/'],
+      ['      - run: |', '          node --test scripts/tests/', '        continue-on-error: true'],
+    ]
+    for (const step of off) {
+      put('.github/workflows/ci.yml', both(guidance, step))
+      const f = g.checkG11(root)
+      assert.equal(f.length, 1, step.join('\n'))
+      assert.match(f[0].message, /--test/)
+    }
+    // The same step with other keys, and a step that is off next to one that is on.
+    put('.github/workflows/ci.yml', both(guidance, ['      - name: x', "        if: github.event_name == 'push'", '        continue-on-error: false', '        run: node --test scripts/tests/']))
+    assert.deepEqual(g.checkG11(root), [])
+    put('.github/workflows/ci.yml', CI(...guidance, '      - if: false', '        run: node --test scripts/tests/', ...tests))
+    assert.deepEqual(g.checkG11(root), [])
+    // A neighbouring step's switch does not leak into the step that runs.
+    put('.github/workflows/ci.yml', CI(...guidance, '      - if: false', '        run: echo skipped', ...tests))
+    assert.deepEqual(g.checkG11(root), [])
+  })
+
+  test('CI: a job switched off by if: false or continue-on-error: true does not count its steps', () => {
+    const { root, put } = tree()
+    const job = (head, ...lines) => `jobs:\n  hygiene:\n${head}    steps:\n      - run: node scripts/check-guidance.mjs\n      - run: node --test scripts/tests/\n${lines.join('')}`
+    put('.github/workflows/ci.yml', job(''))
+    assert.deepEqual(g.checkG11(root), [])
+    for (const head of ['    if: false\n', '    continue-on-error: true\n', "    if: 'false'\n"]) {
+      put('.github/workflows/ci.yml', job(head))
+      assert.equal(g.checkG11(root).length, 2, head)
+    }
+    // Another job's switch does not count, and a job's own steps keys at the step indentation are not job keys.
+    put('.github/workflows/ci.yml', `${job('')}  other:\n    if: false\n    steps:\n      - run: echo hi\n`)
+    assert.deepEqual(g.checkG11(root), [])
+  })
+
+  test('verify: a call in a JSDoc or a block comment does not count', () => {
+    const { root, put } = tree()
+    for (const text of [
+      "/**\n * run('node', ['scripts/check-guidance.mjs', '--json'], { cwd: root })\n */\n",
+      "/* run('node', ['scripts/check-guidance.mjs', '--json']) */\n",
+      "  // run('node', ['scripts/check-guidance.mjs', '--json'])\n",
+    ]) {
+      put('scripts/verify.mjs', text)
+      assert.match(messages(g.checkG11(root)), /does not run scripts\/check-guidance\.mjs/, text)
+    }
+    put('scripts/verify.mjs', "/** the row */\nconst r = run('node', ['scripts/check-guidance.mjs', '--json'], { cwd: root })\n")
+    assert.deepEqual(g.checkG11(root), [])
   })
 
   test('verify must run the checker; an import or a mention does not count', () => {
@@ -605,7 +718,7 @@ describe('the real allow list', () => {
 })
 
 describe('the command line', () => {
-  const run = (root, ...args) => spawnSync(process.execPath, [SCRIPT, '--root', root, ...args], { encoding: 'utf8' })
+  const run = (root, ...args) => spawnClean(process.execPath, [SCRIPT, '--root', root, ...args], { encoding: 'utf8' })
 
   test('exit 0 and no output on a clean tree', () => {
     const { root } = tree()

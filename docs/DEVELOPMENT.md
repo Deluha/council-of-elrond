@@ -21,7 +21,7 @@ The gates run on the Claude Code build CI pins, not on the one on your PATH. How
 
 ## Live checks
 
-A live check runs the real engine, headless, in a throwaway repository, and never loads the mod into the session developing it. The procedure: `.claude/skills/council-of-elrond-development/references/workflows/live-check.md`.
+A live check runs the real engine, headless, in a throwaway repository and a copy of the mod, and never loads the mod into the session developing it. The procedure: `.claude/skills/council-of-elrond-development/references/workflows/live-check.md`.
 
 ## Add a member
 

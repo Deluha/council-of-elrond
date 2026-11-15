@@ -11,6 +11,7 @@ description: Development guidance for the council-of-elrond repository (the hard
 | Facts about the host API (budget, `$.ui.ask`, the test kit, denial wording) | `references/host-api-facts.md` |
 | Writing tests; the mutation check | `references/testing.md` |
 | Verify, CI, pre-commit, the pinned build, the hooks, the guidance checker | `references/qa-ci.md` |
+| The ask and deny rules, the two hooks, what the guidance checker checks and does not prove | `references/guidance-machinery.md` |
 | How a session runs a brief; stop conditions; hand-over | `references/session-protocol.md` |
 | Tightening or loosening; the sweep against `main` | `references/domain-gate-direction.md` |
 | The classifier and the shell parser | `references/domain-classifier.md` |
