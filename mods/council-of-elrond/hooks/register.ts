@@ -14,7 +14,7 @@ import { MODEL_SLOTS } from './config/types.js'
 import type { GimliCommand, MemberName, ModelSlot } from './config/types.js'
 import { withAllowlistEntry, withRule } from './config/write.js'
 import type { FileEdit } from './config/write.js'
-import { countsText, errorsLine, isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput, trustedOutput, trustLines, trustListing } from './elrond/commands.js'
+import { errorsLine, isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput, trustedOutput, trustLines, trustListing, unconfirmedNotice } from './elrond/commands.js'
 import { callKeyOf, codeOf as chatCodeOf, isOfferable, parseChatLines } from './elrond/chat.js'
 import { combine, hasRealBlock } from './elrond/combine.js'
 import type { Voice } from './elrond/combine.js'
@@ -27,7 +27,7 @@ import { deadlineFor, profileOf, resolveModel } from './elrond/models.js'
 import type { ModelChoice } from './elrond/models.js'
 import {
   cacheApprove,
-  hasGitPart,
+  isCacheable as isCacheableCall,
   isOutOfRounds,
   isWipeOutcome,
   lockedVerbOf,
@@ -338,7 +338,8 @@ async function saveTrust($: EngineInterface, record: TrustRecord): Promise<strin
  * Trusted means the file's exact text, as read, hashes to what a person confirmed for that path.
  */
 async function fileTrustOf($: EngineInterface, path: string, fileText: string, loaded: LoadedConfig): Promise<RulesFile> {
-  if (loaded.needsTrust === undefined) return { path, state: 'nothing' }
+  // Nothing to confirm (no rule, nothing waits). Lists that only add are settings all the same: the mod does not rewrite such a file as if it were its own.
+  if (loaded.needsTrust === undefined) return { path, state: 'nothing', ...(loaded.hasSettings === true && settings.trustProjectRules !== 'always' && { holdsSettings: true }) }
   if (settings.trustProjectRules === 'always') return { path, state: 'option' }
   const key = await rulesKeyOf($, path)
   const hash = await hashOf(fileText)
@@ -361,7 +362,8 @@ async function appendRow($: EngineInterface, content: string): Promise<void> {
 async function noticeUntrusted($: EngineInterface, file: RulesFile, counts: TrustCounts): Promise<void> {
   const key = `trust:${file.path}:${file.hash ?? ''}`
   if (warned.has(key)) return
-  warnOnce($, key, text('notice.rulesUntrusted', { summary: countsText(counts) }), text('notice.rulesUntrustedShort'))
+  const notice = unconfirmedNotice(counts)
+  warnOnce($, key, notice.line, notice.toast)
   await appendRow($, untrustedNotice(counts))
 }
 
@@ -1092,20 +1094,23 @@ async function confirmAllowlist($: EngineInterface, finding: GollumFinding): Pro
 /**
  * Rewrites the project rules file with one confirmed change, read fresh: a
  * broken file is left alone, and a result that doesn't validate isn't written.
- * A file with settings waiting for confirmation is not rewritten either (it was
- * not offered; the change could not take effect). When the file was trusted
- * before, or was not there, the person just confirmed this change, so its new
- * content is recorded as trusted; no other path records trust.
+ * A file nobody confirmed is not rewritten either (it was not offered; the
+ * change could not take effect): not one with settings waiting, nor one whose
+ * rules would decide first, nor one that holds settings nobody can confirm.
+ * The person confirmed this one change, and nothing else in the file: only when
+ * the file was trusted before, or was not there, or holds no setting at all, is
+ * its new content recorded as trusted; no other path records trust (DESIGN §16).
  */
 async function writeOverrides($: EngineInterface, root: string, change: (current: string | undefined) => FileEdit): Promise<FileEdit> {
   const path = `${root}/${OVERRIDES_PATH}`
   try {
     const current = (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
     const before = current === undefined ? undefined : await fileTrustOf($, path, current, loadConfig(current))
-    if (before?.state === 'untrusted') return { ok: false, problem: text('trust.writeRefused') }
+    if (before !== undefined && isHeldBack({ file: before })) return { ok: false, problem: text('trust.writeRefused') }
     const edit = change(current)
     if (edit.ok) {
       await $.fs.write(path, edit.text)
+      // Only here: a file that was not there, was confirmed, or holds no setting at all (any other was refused above), so the one change the person confirmed is all the new content holds.
       if (settings.trustProjectRules === 'confirm') await recordTrust($, path, edit.text)
     }
     return edit
@@ -1863,7 +1868,8 @@ export const register: Register = (on, options) => {
     const operation = operationOf(call, classification, where, ctx.patterns)
     // The branch, the index and the history are not in the key: a call with a git part is never served from the cache, nor cached. Nor is one no reviewer decides (too many parts).
     // Nor one an unconfirmed ask rule puts to the person after its review: that answer is the person's, call by call.
-    const isCacheable = !hasGitPart(call) && operation.hasTooManyParts !== true && classification.alsoAsk === undefined
+    // Nor one that runs a script or a project's runner: the code it runs can change between two calls with the same text.
+    const isCacheable = isCacheableCall(call, classification, operation)
     const decided = classification.decided
     const shadow = isShadow(state, settings.shadowMode)
     // Built on first use: a block, lockout or cached call never shows it, and a write can be megabytes.

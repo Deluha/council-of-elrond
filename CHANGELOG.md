@@ -12,8 +12,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 
 ### Added
 - **`/council trust`, `/council trust <code>`, `/council untrust` and the option "Trust project rules
-  files".** `trust` lists what a project's rules file would enable once confirmed, all of it, each
-  setting in full with every field it has (each allow rule, disabled rule, model, check with
+  files".** `trust` lists what a project's rules file holds and what confirming it would change, all of it,
+  each setting in full with every field it has (each rule of every tier, protected path, branch,
+  production pattern and big operation, and each disabled rule, model, check with
   every argument on its own line, and secret pattern; secrets allowlist entries counted, never shown),
   with the file's code, or says why the file cannot be confirmed from the session; `trust <code>`
   confirms the file with that code, as it stands now, only if it was listed in this session;
@@ -105,8 +106,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   rules files" to `always` (`trustProjectRules=always`) for a host whose owner controls which
   repositories it opens, such as a cloud or CI environment. The confirmation is kept in the plugin's
   own store, never in the repository. `/council rules` and `/council` show where each file stands; the
-  mod does not offer an allow rule or allowlist entry for a file that waits, and after your own
-  "Add the rule" or allowlist answer the file is trusted at its new content. See "Trusting a
+  mod does not offer an allow rule or allowlist entry for a file you have not confirmed, and after
+  your own "Add the rule" or allowlist answer the file is trusted at its new content only if it was
+  not there, you had confirmed its previous content, or it held no setting at all. See "Trusting a
   project's rules file" in the README.
 - **After upgrading, expect more reviews and questions.** The stricter behaviours you will meet,
   each described under "Security":
@@ -229,12 +231,21 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   gate weaker than no file, and a project check it names is reported as not run, never dropped.
   `/council trust` needs a person at the composer, as `/council off` does.
 - **Confirming a rules file can no longer confirm settings you were not shown.** `/council trust`
-  now lists every setting that waits (it used to show ten of each kind, then "and N more", and
-  `trust <code>` confirmed them all), each in full, with every field it has, not cut and not redacted.
-  A file that cannot be listed in full cannot be confirmed from the session, and the listing says
-  why instead of giving a code: more than 40 settings waiting, a value over 400 characters, a value
-  that looks like a secret, or a value with a control, invisible or direction-changing character in
-  it. The code, now derived from a per-session secret as well as the file's hash, works only for
+  now lists every setting of the file (it used to show ten of each kind, then "and N more", and
+  `trust <code>` confirmed them all), each in full, with every field it has, not cut and not redacted,
+  in two groups: "Applies now and only adds to the shipped rules" (every `block`, `ask` and `review`
+  rule, protected paths, protected branches, production patterns, big operations) and "Switched on by
+  confirming" (allow rules, disabled rules, models, secret patterns, the count of allowlisted secrets,
+  project checks). Under the first group's rules one sentence says that after you confirm, those rules
+  decide before the shipped ones, so a `review` rule can replace a shipped question: confirming does
+  change what they do, which the first version of this listing did not show. A rule with no
+  `command`, `path`, `input` or `check` says it matches every call of the tools it names, and one whose
+  `tools` match every tool says so. A file that cannot be listed in full cannot be confirmed from the
+  session, and the listing says why instead of giving a code: more than 40 settings in all (rules of
+  every tier and list entries count), a value over 400 characters, a value that looks like a secret,
+  or a value with a control, invisible or direction-changing character in it, which now includes the
+  soft hyphen, the joiners and fillers, the invisible operators, variation selectors, tag characters
+  and every Unicode space but the plain one. The code, now derived from a per-session secret as well as the file's hash, works only for
   content listed in this session, so a code worked out from the file, by Claude or anyone else who
   can read it, confirms nothing; and each listing is used up by the confirmation it leads to.
   `trustProjectRules=always` is unchanged. The session record gains the secret and the list of
@@ -257,12 +268,14 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   review approves (with the file's reason shown as the project's text; a revise or a block stands and
   you are not asked on top; never remembered; refused where nobody can be asked; in shadow mode too);
   a `review` rule, which now applies at once instead of waiting, reviews a call the shipped rules let
-  through and changes nothing else. A file with nothing that waits is read the same way, since nobody
-  can confirm it; a confirmed file, and the option `always`, decide first as before. The audit line
+  through and changes nothing else. A confirmed file, and the option `always`, decide first as before.
+  A file of rules alone (nothing in it waits) is no longer left in a state between: it is listed by
+  `/council trust` and can be confirmed, and until then the notice and the status say its rules apply
+  now and only add, and that confirming it lets them decide first. The audit line
   keeps the shipped `ruleId` and lists the file's rules that only added in the new field
-  `alsoRuleIds`. `/council trust` no longer lists review rules among what waits. The counts in the
-  status, notice and trust lines say "allow rule(s)", and those lines say that the file's block, ask
-  and review rules apply and only add to what the shipped rules decide. The question put after a review
+  `alsoRuleIds`. The held-back counts in the status, notice and trust lines say "allow rule(s)", and
+  those lines say that the file's block, ask and review rules apply and only add to what the shipped
+  rules decide, and that confirming the file lets all of its rules decide first. The question put after a review
   approved because such a rule asks has its own words ("The project's rules file asks you about this
   call too, after its review."), and `/council rules` lists the paths protected against writes
   ("Protected against writes") apart from the protected paths.
@@ -273,14 +286,57 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   there asks, as does a shell command that names the folder unless it only reads it (`cat`, `head`,
   `tail`, `less`, `more`, `bat`, `ls`, `tree`, `stat`, `file`, `wc`, `du`, `find`, `grep` and its kin,
   `rg`, `ag`, `diff`, `cmp`, `sort`, `uniq`, `cut`, `jq`, `yq`, the checksum tools, `realpath`,
-  `readlink`, `basename`, `dirname`, `test`, `[`, `cd`, `pushd`; not `find -delete` or `-exec`, `jq
-  --in-place`, `yq -i`, `sort -o`, `tree -o`, `less -o`, `file -C`, a redirect into the folder) or runs
+  `readlink`, `basename`, `dirname`, `test`, `[`, `[[`, `cd`, `pushd`, and `git -C <path>` with
+  `status`, `log`, `diff`, `show`, `rev-parse`, `ls-files`, `branch` (no argument, or `--show-current`,
+  `-a`, `-r`, `-v`), `remote` (no argument, or `-v`), `describe`, `blame` or `cat-file`; not `find
+  -delete` or `-exec`, `jq --in-place`, `yq -i`, `-s` or `--split-exp`, `sort -o`, `tree -o`, `less -o`,
+  `file -C`, a redirect into the folder, or output that goes on through a pipe into a program that is no
+  reader, such as `ls ~/.claude/plugins | xargs rm -rf`; see "A `cd` into a protected folder") or runs
   what it holds (the program written as a path, or the script an interpreter or shell is given), which
   the ordinary rules judge as before (a script is reviewed). `cp`, `mv`, `rm`, `tee`, `sed -i`, `ln`,
-  `chmod`, `touch`, `install`, `rsync`, `tar`, `git -C`, an unknown program and a redirect target ask.
+  `chmod`, `touch`, `install`, `rsync`, `tar`, `git -C` with any other subcommand, an unknown program and a redirect target ask.
   The protection of these folders is new in this release, so against the last release nothing is
   looser. A path that is protected proper (`.env`, `.git`,
   the settings files, the rules file) asks for any mention.
+- **A `cd` into a protected folder is followed, a reader's output is followed through a pipe, and the
+  plugin-folder reads come back.** (Corrects a defect of the previous change to the plugin folders.)
+  `cd $HOME/.claude/plugins/x && cp /tmp/e hooks/register.ts` was allowed: a `cd` target holding `$` was
+  treated as unknown, so the later parts were never judged inside the folder. `$HOME`, `${HOME}` and `~`
+  in a `cd` or `pushd` target are now expanded, and a target that still holds an expansion but whose
+  text names a protected or write-protected place (`$X/.claude/plugins/y`, `$D/.git`) is taken as
+  inside it; the old reading (an unknown folder is `/`) is kept beside it, so this only adds places
+  that are looked at. A reader of a write-protected path whose output goes on, through a pipe, into a
+  program that is not itself a reader asks (`ls ~/.claude/plugins | xargs rm -rf`, `find
+  ~/.claude/plugins -type f | xargs sed -i …`; `sed`, `awk` and `tr` count as programs that are not
+  readers there). `yq -s` and `--split-exp` write files, so `yq` with them is not a reader. Restored,
+  against the previous change and not below the release before it: `[[ … ]]` is a reader like `test`,
+  and `git -C <path>` with `status`, `log`, `diff`, `show`, `rev-parse`, `ls-files`, `branch` (no argument,
+  or `--show-current`, `-a`, `-r`, `-v`), `remote` (no argument, or `-v`), `describe`, `blame` or `cat-file`
+  is a read of the path (no other global option than `--no-pager`, no option that writes a file or runs a
+  program).
+- **Typing into another terminal asks.** New rule `terminal-input` (ask): `tmux send-keys`, `paste-buffer`,
+  `pipe-pane -I`, `command-prompt`, and `load-buffer` or `set-buffer` in a tmux command line that also
+  pastes or sends; `screen -X stuff`, `paste`, `readbuf`; `zellij action write` and `write-chars`; `kitty @
+  send-text` and `send-key`; `wezterm cli send-text`; `xdotool type`, `key`, `keydown`; `ydotool type`,
+  `key`; `wtype`; `osascript` with `keystroke`. It matches through wrappers like any rule. What is typed
+  is still read as before (`tmux send-keys 'rm -rf ~' Enter` blocks); `tmux send-keys 'ls' Enter`, which
+  was allowed, now asks. The tmux forms that run a command line nobody can read are reviewed
+  (`command-unreadable`): `set` or `set-option` of `default-command`, `default-shell`, `lock-command`,
+  `status-left` or `status-right`, or of any option whose value holds `#(`; `-f <file>` on the tmux
+  command line; `detach-client -E`; `display-message` with `#(`; `choose-tree`, `choose-buffer` and
+  `choose-client` with a command template.
+- **Three option tables were wrong.** `systemd-run --expand-environment` takes a value; `nsenter -S` and
+  `-G` (and `--setuid`, `--setgid`) take only a glued or `=` value, so a word after them is the command;
+  `nsenter -W` (`--wdns`) takes a value. In each case the old reading hid a command from the rules
+  (`systemd-run --expand-environment no rm -rf ~`, `nsenter -t 1 -a -S rm -rf ~` were not blocked); both
+  block now. A side effect of reading them right: `nsenter -S x rm -rf /` runs a program named `x`, which
+  is what it is read as. `pnpm -c` and `--shell-mode`, before or after `exec` (and `dlx`), make the
+  command a shell string, classified as `sh -c` is (`pnpm exec -c 'cat .env'` asks).
+- **A crafted `env -S` chain no longer stalls the classifier.** `env -Senv -Senv …` repeated 3,000 times
+  took about 38 seconds to classify; it is linear now (about 130 ms for the same input). More than eight
+  `-S` splices in one command are not spliced: each string past the eighth is read alone, and the part is
+  reviewed as one whose options were not all read.
+
 - **More classifier gaps are closed.** Recursive `rm` is blocked when `--recursive` or
   `--no-preserve-root` is written as a unique prefix, for another user's home (`~user`) and for a
   defaulted home expansion (`${HOME:-/}`); a write to a disk device is blocked when the device is
@@ -300,7 +356,8 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   `confirm-before`, `bind-key`, `\;` lists, unique command prefixes), `screen`, `zellij`,
   `nix develop|shell|run`, `git submodule foreach`, `git bisect run`, `git rebase --exec`, the filters
   of `git filter-branch`, `find -exec` and `-ok`, `entr` and `parallel`. A key sequence or a command
-  file that cannot be read is reviewed (new rule `command-unreadable`).
+  file that cannot be read is reviewed (new rule `command-unreadable`), as are the tmux forms that run
+  a command line nobody can read (see "Typing into another terminal asks").
 - **More forms are reviewed.** `curl` data options attached or clustered and methods other than GET,
   `wget` and HTTPie bodies, `gh` writes, more `git rm`, `git checkout` of paths,
   `git switch --discard-changes` and `git branch -df`, `awk` and `sed` that run commands or write
@@ -386,7 +443,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **A malformed verdict echoes less.** The names of unexpected fields in a reviewer's reply are
   capped (three, 40 characters each, control characters removed) before they reach a dialog, a
   refusal or the log.
-- **More secrets are redacted, without blanking ordinary code.** A value is treated as a placeholder only when all of it is one (`$NAME`, `${NAME}`, `${1:-default}`, `<your-key>`, `{{ ... }}`, `****`, a call expression such as `getToken()` or `z.string().min(8)`, an indexed lookup such as `tokens[0]`); a literal that merely starts with such a character (`$ecret123!`, `Sup3r(Secret)9`, `<realkey12345>`, `(hunter2xyz)`) is redacted and reported. Quoted passwords containing spaces, shorter values, `curl -u user:password`, `--password` for the database clients already known, and `Authorization: Token`, `X-Api-Key` and `X-Auth-Token` headers are now covered. A value of 4 or 5 characters counts only when it holds a digit or a character other than letters, `_` and `.`; a plain word needs 6, as before. Not secrets: a bare number under 6 digits, a path or a backtick substitution under 6 characters, and anything assigned to a variable named exactly `PWD` or `OLDPWD`. Text longer than the scan limit also has its end scanned, and is no longer passed silently (see below). Ordinary code that only names a secret (`{ token: token }`, `this.token = token`, `export PWD=/tmp`, `z.string().min(8)`) is left readable and is not asked about.
+- **More secrets are redacted, without blanking ordinary code.** A value is treated as a placeholder only when all of it is one (`$NAME`, `${NAME}`, `${1:-default}`, `<your-key>`, `{{ ... }}`, `****`, a call expression such as `getToken()` or `z.string().min(8)`, an indexed lookup such as `tokens[0]`); a literal that merely starts with such a character (`$ecret123!`, `Sup3r(Secret)9`, `<realkey12345>`, `(hunter2xyz)`) is redacted and reported. Quoted passwords containing spaces, shorter values, `curl -u user:password`, `--password` for the database clients already known, and `Authorization: Token`, `X-Api-Key` and `X-Auth-Token` headers are now covered. A value of 4 or 5 characters counts only when it holds a digit or a character other than letters, `_` and `.`; a plain word needs 6, as before. Not secrets: a bare number under 6 digits, a path or a backtick substitution under 6 characters, and anything assigned to a variable named exactly `PWD` or `OLDPWD` whose value is a directory (a path, `.`, `..`, an expansion or a backtick substitution, with no `;`; any other value after `PWD` is the password keyword of an ODBC-style connection string and is redacted). A value written like a call whose callee starts with a capital letter, is not a known type name and has a digit in its name or starts with a digit argument (`Winter(2024)`, `Passw0rd()`) is a literal again; lower-case calls, known types (`String(128)`) and constructors with a name argument stay code. Text longer than the scan limit also has its end scanned, and is no longer passed silently (see below). Ordinary code that only names a secret (`{ token: token }`, `this.token = token`, `export PWD=/tmp`, `z.string().min(8)`) is left readable and is not asked about.
 - **A project's own secret patterns are applied wherever the mod redacts.** Once a rules file is
   confirmed, its `gollum.patterns` were applied to what reviewers read and to the debate pane, but not
   to the operation key, the audit line, the refusal Claude reads or the dialog's second pass. They are
@@ -396,7 +453,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   it writes), and the whole input of every other tool (a fetch's URL, an agent's prompt, a search
   pattern), not only an MCP call's, are scanned for secrets.
 - **A text too long to scan in full is no longer passed silently.** The secrets scan reads the first
-  500,000 and the last 100,000 characters of a text. Over 600,000 characters, a gated call now comes
+  500,000 and the last 100,000 characters of a text, each reaching 512 characters into the skipped
+  middle (a token straddling the 500,000 mark used to be cut in two and missed while the scan reported
+  it had read everything; a text up to 600,000 characters is now scanned whole). Over 600,000 characters, a gated call now comes
   to you with the reason that it is too long for the scan to read in full (never remembered, no allow
   rule offered), and is refused where nobody can be asked; an allowed call is refused and logged, as a
   high-confidence finding is. Shadow mode does not change it, and bypass skips it for a gated call only.
@@ -405,11 +464,12 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   `(an exact string, not shown)` in both. A `sha256:` fingerprint is still shown.
 - **The question hides invisible characters, wraps long lines and keeps its closing lines.** Direction
   marks and overrides, zero-width characters and the byte order mark are removed from the call, a
-  reviewer's reason, a rule's reason and a finding, as control characters were. A call line over 100
-  characters wraps, and every row of it starts with the gutter. When the question is over its size cap,
-  the end of the call goes first, then the end of the preview, then each reviewer's reason is cut to
-  its share; the question's own lines and every reviewer's verdict stay (the old cap cut the end of
-  the question, where the closing lines and the last reviewers were).
+  reviewer's reason, a rule's reason and a finding, as control characters were. A call line wraps at 72
+  display columns (a wide character counts 2, a combining mark 0), and every row of it starts with the
+  gutter. When the question is over its size cap, what a reviewer wrote is shortened first (at most
+  240 characters each), then the preview to its first and last line, then the middle of the call (its
+  first 4 and last 4 lines always stay); the question's own lines and every reviewer's verdict stay (the
+  old cap cut the end of the question, where the closing lines and the last reviewers were).
 - **A force push of the checked-out branch meets the protected-branch block.** A force push that
   names no branch, or only `HEAD` (`git push --force`, `-f`, `-f origin`, `-f origin HEAD`,
   `origin +HEAD`), overwrites the current branch, so the mod reads the branch checked out where the
@@ -466,8 +526,10 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   repeated big operation (a push, a migration) convenes the council and runs your project's checks
   again. A call that has a `git` part (gated or not) is never served from the approve cache and its
   approve is not cached, since the checked-out branch and the index are not part of what the call
-  says: an approved `git reset --hard` is reviewed again on repeat. The same call without git, in the
-  same folder, is still reviewed once.
+  says: an approved `git reset --hard` is reviewed again on repeat. Nor is a call that runs a script or
+  code (any `script-*` rule matched a part, whichever rule decided it) or a project's runner (`make`,
+  `just`, `npm run`, `cargo` and the like): an approved `bash deploy.sh`, edited and called again, is
+  reviewed again. The same call with none of these, in the same folder, is still reviewed once.
 - **The cache and the rounds are read just before they are used.** Two calls running at once now see
   each other's approve and spent rounds, where each used the snapshot taken when its own hook began.
 - **A script or SQL file that was cut is not approved by a model alone.** A script the call runs, or

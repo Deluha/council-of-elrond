@@ -61,7 +61,7 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     // same quote) or a bare word of 4 or more characters. The quoted run is tried first, so a passphrase is not
     // cut at its first space. Each branch scans forward from one start and stops at a quote, so it stays linear.
     // `isNoise` then drops what is plainly not a secret: a plain word under 6 letters, a small number, a short path,
-    // the shell's own `PWD` and `OLDPWD`.
+    // the shell's own `PWD` and `OLDPWD` when the value is a path.
     re: /\b([A-Za-z0-9_]{0,64}(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|auth[_-]?token|client[_-]?secret)\\?["']?\s*[=:]\s*\\?["']?)(?!\[REDACTED)((?<=")[^"\\\n]{4,1000}(?=\\?")|(?<=')[^'\\\n]{4,1000}(?=\\?')|[^\s"'&;,\\]{4,})/gi,
     keep: 1,
     isNoise: (kept, value) => isAssignmentNoise(kept, value),
@@ -143,6 +143,24 @@ const BRACE_NAME = /^\{([A-Za-z_][A-Za-z0-9_.-]*)\}$/
 const TEMPLATE = /^\{\{[^{}]*\}\}$/
 const SUBSCRIPTS = /^[A-Za-z_][A-Za-z0-9_.]*(?:\[(?:\d{1,4}|[A-Za-z_][A-Za-z0-9_.]*)\])+$/
 const IDENTIFIER = /[A-Za-z_$][A-Za-z0-9_$]*/y
+/**
+ * Type and constructor names that take a size or a number and are code, not a word someone chose: `String(128)`,
+ * `Numeric(10)`, `BigInt(10)`, `Uint8Array(32)`, `VARCHAR(64)`. A short, closed list: any other name that starts with an
+ * upper-case letter and is called with a number is read as a literal (`isImplausibleCallee`).
+ */
+const KNOWN_TYPE_CALLEE =
+  /^(?:String|Number|Boolean|BigInt|Symbol|Object|Array|Date|Integer|Float|Decimal|Numeric|Int|Char|Varchar|Text|Bytes|(?:Big)?(?:Int|Uint|Float)(?:8|16|32|64)(?:Clamped)?Array|VARCHAR|NVARCHAR|CHAR|NUMERIC|DECIMAL|INTEGER|FLOAT|BINARY|VARBINARY)$/
+
+/**
+ * A name called in a way that is not a plausible function reference. The rule: the name starts with an upper-case ASCII
+ * letter (a function is camelCase or snake_case; a capital start is a constructor or a type), is not a known type name,
+ * and either holds a digit (`Passw0rd()`) or its first argument starts with a digit (`Winter(2024)`, `Monkey(1)`,
+ * `Zx(9)`). Such a value is a word with a number dressed as a call. Constructors with a name argument (`Token(options)`,
+ * `CharField(widget=x)`), empty calls (`Config()`) and every lower-case callee (`uuid4()`, `min(8)`, `randomBytes(32)`)
+ * are unaffected. `rest` is the text after the opening parenthesis.
+ */
+const isImplausibleCallee = (name: string, rest: string): boolean =>
+  /^[A-Z]/.test(name) && !KNOWN_TYPE_CALLEE.test(name) && (/[0-9]/.test(name) || /^\s*[0-9]/.test(rest))
 
 /** The index of the `)` that closes the `(` at `open`, or -1 when the text ends first. Nesting is counted; one pass. */
 function closingParen(value: string, open: number): number {
@@ -188,6 +206,7 @@ function isCallExpression(value: string): boolean {
     at += name.length
     if (/[0-9]/.test(name)) hasDigitName = true
     if (value[at] === '(') {
+      if (isImplausibleCallee(name, value.slice(at + 1, at + 1 + 64))) return false
       const close = closingParen(value, at)
       if (close === -1) {
         const rest = value.slice(at + 1)
@@ -254,19 +273,28 @@ const PLAIN_WORD = /^[A-Za-z_.]+$/
 const SMALL_NUMBER = /^[0-9]{1,5}$/
 const PATH = /^(?:\/|~\/)[A-Za-z0-9._/-]*$/
 const BACKTICKS = /^`[^`]*`$/
+// What a directory variable's value starts like: an absolute or home path, `.` and `..` (alone or as a path start), an expansion.
+const DIRECTORY_START = /^(?:[/~$]|\.\.?(?:\/|$))/
 // A subscript cut at its quote by the bare value: `ENV[` of `ENV["TOKEN"]`.
 const OPEN_SUBSCRIPT = /^[A-Za-z_][A-Za-z0-9_.]*\[$/
 /** The shortest value the pattern read before the 4-character minimum. A path or a backtick substitution under it is no secret; a longer one is redacted as it always was. */
 const SHORT_VALUE = 6
 
 /**
- * An assignment match that is plainly not a secret, by its name and its value: the shell's `PWD` and `OLDPWD`; a
+ * A value `PWD` or `OLDPWD` may hold without being a password: a path, `.` or `..`, an expansion (`$NAME`, `${NAME}`, `$(...)`)
+ * or a backtick substitution, with no `;` in it. Anything else after `PWD=` is the password keyword of an ODBC-style
+ * connection string and is read as any other password.
+ */
+const isDirectoryValue = (value: string): boolean => !value.includes(';') && (DIRECTORY_START.test(value) || BACKTICKS.test(value))
+
+/**
+ * An assignment match that is plainly not a secret, by its name and its value: the shell's `PWD` and `OLDPWD` with a directory value; a
  * plain word of letters, `_` and `.` under 6 characters (the 4-character minimum is for a value with a digit or any
  * other character); a bare number under 6 digits; a path (`/tmp`, `~/x`), a backtick substitution or the cut start of a
  * subscript (`ENV[`) under 6 characters.
  */
 function isAssignmentNoise(kept: string, value: string): boolean {
-  if (SHELL_OWN_VARIABLES.test(/^[A-Za-z0-9_]*/.exec(kept)?.[0] ?? '')) return true
+  if (SHELL_OWN_VARIABLES.test(/^[A-Za-z0-9_]*/.exec(kept)?.[0] ?? '') && isDirectoryValue(value)) return true
   if (PLAIN_WORD.test(value)) return value.length < SHORT_VALUE
   // A bare number (`"token": 1234`); a quoted one is a string, which a person may have chosen as a password.
   if (SMALL_NUMBER.test(value)) return !/["']$/.test(kept)

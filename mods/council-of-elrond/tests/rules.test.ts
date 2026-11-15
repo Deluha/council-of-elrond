@@ -797,7 +797,8 @@ describe('multi-call binaries and runners show their command', () => {
       ['tmux ls', 'allow'],
       ['tmux new-session -d -s work', 'allow'],
       ["tmux new-window -n w 'ls'", 'allow'],
-      ["tmux send-keys 'ls' Enter", 'allow'],
+      // Typing into another terminal asks (DESIGN §16): it can answer a prompt or type a command as the person.
+      ["tmux send-keys 'ls' Enter", 'ask', 'terminal-input'],
     ])
   })
 
@@ -1092,7 +1093,9 @@ describe('the mod protects itself', () => {
       `install -m 644 x ${P}/a`,
       `rsync -a x ${P}/a`,
       `tar -xf x.tar -C ${P}/a`,
-      `git -C ${P}/a log`,
+      `git -C ${P}/a commit -m x`,
+      `git -C ${P}/a log --output=${P}/o`,
+      `git -c core.pager=x -C ${P}/a log`,
       `tee ${P}/a`,
       `sort -o ${P}/a b`,
       `sort --output=${P}/a b`,
@@ -2110,15 +2113,16 @@ describe('a command line handed to another program is classified as sh -c is [D]
       [`tmux send-keys 'ls' Enter ${BAD} Enter`, 'block', RM],
       [`tmux send-keys ${BAD}`, 'block', RM],
       ['tmux send-keys rm Space -rf Space / Enter', 'block', RM],
-      ["tmux send-keys 'ls' Enter", 'allow'],
-      ["tmux send-keys -t x 'npm test' Enter", 'allow'],
-      ['tmux send-keys -t work C-c', 'allow'],
-      ['tmux send-keys "$CMD" Enter', 'review', 'shell-dynamic-program'],
-      ['tmux send-keys "$(cat cmd.txt)" Enter', 'review', 'shell-dynamic-program'],
-      // Several keys that are not one string, or hex keys, are not readable: review.
-      ['tmux send-keys ls Space -la Enter', 'review', 'command-unreadable'],
-      ['tmux send-keys -H 72 6d', 'review', 'command-unreadable'],
-      ['tmux send-keys -X cancel', 'allow'],
+      // What is typed is read as before, and a block still blocks; the rest is a question, whatever the keys (the new rule decides over the reviews below).
+      ["tmux send-keys 'ls' Enter", 'ask', 'terminal-input'],
+      ["tmux send-keys -t x 'npm test' Enter", 'ask', 'terminal-input'],
+      ['tmux send-keys -t work C-c', 'ask', 'terminal-input'],
+      ['tmux send-keys "$CMD" Enter', 'ask', 'terminal-input'],
+      ['tmux send-keys "$(cat cmd.txt)" Enter', 'ask', 'terminal-input'],
+      // Several keys that are not one string, or hex keys, are not readable: still reviewed, and asked about.
+      ['tmux send-keys ls Space -la Enter', 'ask', 'terminal-input'],
+      ['tmux send-keys -H 72 6d', 'ask', 'terminal-input'],
+      ['tmux send-keys -X cancel', 'ask', 'terminal-input'],
     ])
   })
 
@@ -2194,13 +2198,13 @@ describe('a command line handed to another program is classified as sh -c is [D]
       ['screen -ls', 'allow'],
       ['screen -r', 'allow'],
       ['screen -dm ls', 'allow'],
-      ["screen -X stuff 'ls\\n'", 'allow'],
+      ["screen -X stuff 'ls\\n'", 'ask', 'terminal-input'],
       ['zellij run -- rm -rf /home/me', 'block', RM],
       ['zellij run -n x --cwd /work -- rm -rf /home/me', 'block', RM],
       ['zellij run rm -rf /home/me', 'block', RM],
       ["zellij action write-chars 'rm -rf /home/me'", 'block', RM],
       ['zellij action new-pane -- rm -rf /home/me', 'block', RM],
-      ['zellij action write 114 109', 'review', 'command-unreadable'],
+      ['zellij action write 114 109', 'ask', 'terminal-input'],
       ['zellij run -- ls', 'allow'],
       ['zellij attach x', 'allow'],
       ['zellij', 'allow'],
@@ -2639,5 +2643,360 @@ describe('the mod protects itself from a nested session [F]', () => {
       ['npx -y @anthropic-ai/claude-code@latest plugin list', 'review', 'script-path'],
       ['npx -y @anthropic-ai/claude-code@x --version', 'review', 'script-path'],
     ])
+  })
+})
+
+describe('write-protected folders reached through a cd or a pipe (DESIGN §16 items 29 to 31)', () => {
+  const P = '/home/me/.claude/plugins'
+  const isProtectedAsk = (command: string): void => {
+    const result = bash(command)
+    expect(result.tier, command).toBe('ask')
+    expect(result.findings.some(finding => finding.ruleId === 'protected-path'), command).toBe(true)
+  }
+
+  test('a cd to $HOME, ${HOME} or a quoted form puts the later parts in the folder', () => {
+    for (const command of [
+      'cd $HOME/.claude/plugins/cache/x && cp /tmp/e hooks/register.ts',
+      'cd ${HOME}/.claude/plugins/cache/x && cp /tmp/e hooks/register.ts',
+      'cd "$HOME/.claude/plugins/cache/x" && cp /tmp/e hooks/register.ts',
+      'cd "${HOME}/.claude/plugins/cache/x" && cp /tmp/e hooks/register.ts',
+      'pushd $HOME/.claude/plugins/cache/x && cp /tmp/e hooks/register.ts',
+      'pushd ${HOME}/.claude/plugins/cache/x >/dev/null && cp /tmp/e hooks/register.ts',
+      'cd $HOME/.claude/plugins/cache/x && touch y',
+      'cd $HOME/.claude/plugins/cache/x && npm install',
+      'cd $HOME/.claude/plugins/cache/x && git pull',
+      '(cd $HOME/.claude/plugins/x; cp a b)',
+      'cd ~/.claude/plugins/x && cp /tmp/e hooks/register.ts',
+    ]) {
+      isProtectedAsk(command)
+    }
+    // The home folder is what it is told to be: where it is itself inside a protected place, `cd $HOME` is too, though the text says nothing of it.
+    const inside: ClassifyContext = { root: '/work', cwd: '/work', home: '/home/me/.claude/plugins/h' }
+    for (const command of ['cd $HOME && touch x', 'cd ${HOME}/sub && touch x', 'pushd "$HOME" && touch x']) {
+      expect(bash(command, inside).tier, command).toBe('ask')
+      expect(bash(command).tier, command).toBe('allow')
+    }
+  })
+
+  test('a target that stays an expansion but names the folder in its text is taken as inside it', () => {
+    for (const command of [
+      'cd $X/.claude/plugins/y && cp /tmp/e hooks/register.ts',
+      'cd "$X/.claude/plugins/y" && touch z',
+      'cd $X/.claude/plugins/$V/x && cp a b',
+      'cd $(echo x)/.claude/plugins/y && cp a b',
+      'cd `echo x`/.claude/plugins/y && cp a b',
+      'cd $D/.github/workflows && touch ci.yml',
+      'cd $D/.git && cp /tmp/e config',
+    ]) {
+      isProtectedAsk(command)
+    }
+    expect(bash('cd $D/.git && touch config').isProtected).toBe(true)
+  })
+
+  test('a cd that names nothing protected is as it was: an unknown target is `/`, a home folder is read as a place', () => {
+    expectCases([
+      ['cd $HOME/project && npm test', 'allow'],
+      ['cd $DIR && npm test', 'allow'],
+      ['cd $A$B && cp x y', 'allow'],
+      ['cd $HOME/x && ls', 'allow'],
+      ['cd $X/.claude/plugins && ls', 'allow'],
+      ['cd $X/.claude/plugins && cat README.md', 'allow'],
+      ['cd $HOME/x && rm -rf build', 'block', RM],
+      ['cd $HOME && rm -rf .', 'block', RM],
+      ['cd $HOME/x && git push -f origin main', 'block', 'force-push-protected-branch'],
+    ])
+    // The folder it is read as is only ever an addition: with home inside the project, the old reading of `/` still counts.
+    const inside: ClassifyContext = { root: '/home/me', cwd: '/home/me', home: '/home/me' }
+    expect(bash('cd $HOME/x && rm -rf build', inside).tier).toBe('block')
+  })
+
+  test('a reader of a write-protected path whose output goes on into a part that is no reader asks', () => {
+    for (const command of [
+      `ls ${P} | xargs rm -rf`,
+      'ls ~/.claude/plugins | xargs rm -rf',
+      `find ${P} -type f | xargs sed -i s/a/b/`,
+      `find ~/.claude/plugins -type f | xargs sed -i 's/a/b/'`,
+      `cat ${P}/x/run.sh | sh`,
+      `cat ${P}/x/a | tee ${P}/x/b`,
+      `ls ${P} | sort | xargs rm -rf`,
+      `git -C ${P}/x log | xargs echo`,
+    ]) {
+      isProtectedAsk(command)
+    }
+    for (const command of [`ls ${P}`, `ls ${P} | wc -l`, `ls ${P} | grep x`, `find ${P} -name x | sort | head -3`, `cat ${P}/x/a.json | jq .`, `git -C ${P}/x log | head`]) {
+      expect(tierOf(command), command).toBe('allow')
+    }
+    // Not a reader on its own either way: the pipe changes nothing for a part that already asks or is not about the folder.
+    expect(tierOf('ls | xargs rm -rf build')).toBe('review')
+  })
+
+  test('yq with -s or --split-exp writes files, so it is not a reader', () => {
+    for (const command of [`yq -s . ${P}/a.yml`, `yq --split-exp . ${P}/a.yml`, `yq --split-e . ${P}/a.yml`, `yq -sP . ${P}/a.yml`, `yq -i .a=1 ${P}/a.yml`]) isProtectedAsk(command)
+    for (const command of [`yq . ${P}/a.yml`, `yq .a ${P}/a.yml`, `yq -o json . ${P}/a.yml`]) expect(tierOf(command), command).toBe('allow')
+  })
+
+  test('reads that are friction again: [[ ]] and git -C with a reading subcommand', () => {
+    for (const command of [
+      `[[ -f ${P}/x ]]`,
+      `[[ -d ${P} ]] && echo yes`,
+      `git -C ${P}/x status`,
+      `git -C ${P}/x log --oneline -5`,
+      `git -C ${P}/x diff --stat`,
+      `git -C ${P}/x show HEAD:README.md`,
+      `git -C ${P}/x rev-parse HEAD`,
+      `git -C ${P}/x ls-files`,
+      `git -C ${P}/x branch`,
+      `git -C ${P}/x branch --show-current`,
+      `git -C ${P}/x branch -a`,
+      `git -C ${P}/x branch -r`,
+      `git -C ${P}/x branch -v`,
+      `git -C ${P}/x remote`,
+      `git -C ${P}/x remote -v`,
+      `git -C ${P}/x describe --tags`,
+      `git -C ${P}/x blame README.md`,
+      `git -C ${P}/x cat-file -p HEAD`,
+      `git --no-pager -C ${P}/x log`,
+      `git -C ${P}/x log | head`,
+      'cat /home/me/.claude/plugins/x/README.md',
+    ]) {
+      expect(bash(command).tier, command).toBe('allow')
+    }
+    // Anything that writes, runs a program or is another subcommand still asks.
+    for (const command of [
+      `git -C ${P}/x commit -m x`,
+      `git -C ${P}/x fetch`,
+      `git -C ${P}/x pull`,
+      `git -C ${P}/x checkout main`,
+      `git -C ${P}/x branch -D x`,
+      `git -C ${P}/x branch new`,
+      `git -C ${P}/x remote add a b`,
+      `git -C ${P}/x diff --output=/tmp/o`,
+      `git -C ${P}/x diff --outp=/tmp/o`,
+      `git -C ${P}/x diff --ext-diff`,
+      `git -C ${P}/x log --textconv`,
+      `git -C ${P}/x status > ${P}/x/out`,
+      `git -c core.pager=x -C ${P}/x log`,
+      `git -C ${P}/x -c core.pager=x log`,
+    ]) {
+      expect(['ask', 'block', 'review'], command).toContain(bash(command).tier)
+      expect(bash(command).tier, command).not.toBe('allow')
+    }
+  })
+})
+
+describe('typing into another terminal asks (DESIGN §16 item 32)', () => {
+  const TI = 'terminal-input'
+
+  test('every way to type or paste into a pane, a window or a terminal', () => {
+    expectCases([
+      ["tmux send-keys 'ls' Enter", 'ask', TI],
+      ['tmux send -t x C-c', 'ask', TI],
+      ['tmux send-keys -X cancel', 'ask', TI],
+      ['tmux send-keys -l hello', 'ask', TI],
+      ['tmux paste-buffer', 'ask', TI],
+      ['tmux pasteb -t x', 'ask', TI],
+      ['tmux paste -t x', 'ask', TI],
+      ["tmux pipe-pane -I 'cat in.txt'", 'ask', TI],
+      ["tmux pipep -IO 'cat in.txt'", 'ask', TI],
+      ['tmux load-buffer - \\; paste-buffer -t x', 'ask', TI],
+      ['tmux set-buffer text \\; send-keys -t x C-y', 'ask', TI],
+      ['tmux setb text \\; pasteb', 'ask', TI],
+      ['tmux command-prompt', 'ask', TI],
+      ['tmux command-prompt -I x -p y', 'ask', TI],
+      ['tmux -L sock send-keys x', 'ask', TI],
+      ['tmux new-session -d \\; send-keys x Enter', 'ask', TI],
+      ["screen -X stuff 'ls\\n'", 'ask', TI],
+      ['screen -S s -X paste .', 'ask', TI],
+      ['screen -X readbuf /tmp/f', 'ask', TI],
+      ['zellij action write 10', 'ask', TI],
+      ['zellij action write-chars hello', 'ask', TI],
+      ['kitty @ send-text hello', 'ask', TI],
+      ['kitty @ send-key ctrl+c', 'ask', TI],
+      ['kitty @ --to unix:/tmp/k send-text hello', 'ask', TI],
+      ['wezterm cli send-text hello', 'ask', TI],
+      ['xdotool type hello', 'ask', TI],
+      ['xdotool key Return', 'ask', TI],
+      ['xdotool keydown a', 'ask', TI],
+      ['ydotool type hello', 'ask', TI],
+      ['ydotool key 28:1', 'ask', TI],
+      ['wtype hello', 'ask', TI],
+      ["osascript -e 'tell application \"System Events\" to keystroke \"x\"'", 'ask', TI],
+      // Through wrappers, and inside a script string, as any rule.
+      ['env X=1 tmux send-keys x', 'ask', TI],
+      ['nice tmux paste-buffer', 'ask', TI],
+      ["bash -c 'tmux send-keys x Enter'", 'ask', TI],
+      ['cd /work && xdotool type hi', 'ask', TI],
+    ])
+    expect(bash('tmux send-keys x').isProtected).toBe(false)
+  })
+
+  test('what is typed is still read as before: a block still blocks, and the rest is asked about', () => {
+    expectCases([
+      ["tmux send-keys 'rm -rf /home/me' Enter", 'block', RM],
+      ["screen -X stuff 'rm -rf /home/me'", 'block', RM],
+      ["zellij action write-chars 'rm -rf /home/me'", 'block', RM],
+      ["tmux command-prompt -p x 'run-shell \"rm -rf /home/me\"'", 'block', RM],
+      ['tmux send-keys "$CMD" Enter', 'ask', TI],
+      ['tmux send-keys ls Space -la Enter', 'ask', TI],
+      ['tmux send-keys -H 72 6d', 'ask', TI],
+      ['sudo tmux send-keys x', 'ask', 'privileged'],
+    ])
+    // Both findings are there: the person is told about the keys, not only about sudo.
+    expect(bash('sudo tmux send-keys x').findings.map(finding => finding.ruleId)).toContain('privileged')
+  })
+
+  test('near misses are as they were', () => {
+    expectCases([
+      ["tmux new -d 'npm run dev'", 'allow'],
+      ['tmux ls', 'allow'],
+      ['tmux capture-pane -p', 'allow'],
+      ['tmux kill-session -t x', 'allow'],
+      ['tmux attach', 'allow'],
+      ['tmux set-buffer text', 'allow'],
+      ['tmux load-buffer -', 'allow'],
+      ['tmux set -g mouse on', 'allow'],
+      ['tmux set -g status on', 'allow'],
+      ['tmux lock-server', 'allow'],
+      ['tmux send-prefix', 'allow'],
+      ["tmux pipe-pane -o 'cat > /dev/null'", 'allow'],
+      ['screen -ls', 'allow'],
+      ['kitty @ ls', 'allow'],
+      ['wezterm cli list', 'allow'],
+      ['xdotool getactivewindow', 'allow'],
+      ['ydotool mousemove 1 1', 'allow'],
+      ["osascript -e 'beep'", 'review', 'script-inline'],
+      ['echo tmux send-keys x', 'allow'],
+    ])
+  })
+
+  test('tmux forms that run a command line nobody can read are reviewed', () => {
+    const U = 'command-unreadable'
+    expectCases([
+      ["tmux set -g default-command 'sh -c x'", 'review', U],
+      ['tmux set-option -g default-shell /bin/zsh', 'review', U],
+      ['tmux set -g lock-command x', 'review', U],
+      ['tmux set -g lock-c x', 'review', U],
+      ["tmux set -g status-left '#[fg=red]x'", 'review', U],
+      ["tmux set -g status-right '#(uptime)'", 'review', U],
+      ["tmux set -g status-left[0] 'x'", 'review', U],
+      ["tmux set -g @foo '#(x)'", 'review', U],
+      ["tmux setw -g window-status-format '#(x)'", 'review', U],
+      ['tmux -f /tmp/x.conf new -d', 'review', U],
+      ['tmux -2f /tmp/x.conf new -d', 'review', U],
+      ["tmux display-message -p '#(x)'", 'review', U],
+      ["tmux display -p 'a #(x) b'", 'review', U],
+      ["tmux choose-tree 'run-shell x'", 'review', U],
+      // The template is read as the tmux command it is: this one pastes.
+      ['tmux choose-buffer "paste-buffer -b %%"', 'ask', TI],
+      ['tmux set lock-command x \\; lock-server', 'review', U],
+      ["tmux detach-client -E 'sh'", 'review', U],
+      ["tmux detach -E 'sh'", 'review', U],
+      ["tmux detach-client -E 'rm -rf /home/me'", 'block', RM],
+      ["tmux choose-tree 'run-shell \"rm -rf /home/me\"'", 'block', RM],
+      ['tmux display -p hi', 'allow'],
+      ['tmux choose-tree', 'allow'],
+      ['tmux detach-client', 'allow'],
+      ["tmux set -g status-style 'bg=red'", 'allow'],
+      ['tmux -L sock new -d', 'allow'],
+    ])
+  })
+})
+
+describe('option arities, shell strings and a bound on env -S (DESIGN §16 items 33 and 34)', () => {
+  test('systemd-run --expand-environment and nsenter -S, -G and -W take what they take', () => {
+    expectCases([
+      ['systemd-run --user --expand-environment no rm -rf /home/me', 'block', RM],
+      ['systemd-run --user --expand-environment=no rm -rf /home/me', 'block', RM],
+      ['systemd-run --expand-env no rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 -a -S rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 -a -G rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 -S0 rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 --setuid=0 rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 --setuid rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 --setgid rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 -W /x rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 --wdns /x rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 --wdns=/x rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 -W/x rm -rf /home/me', 'block', RM],
+    ])
+  })
+
+  test('pnpm -c / --shell-mode makes the command a shell string, in either place', () => {
+    expectCases([
+      ["pnpm exec -c 'cat .env'", 'ask', 'protected-path'],
+      ["pnpm -c exec 'echo x > .git/hooks/pre-commit'", 'ask', 'protected-path'],
+      ["pnpm exec --shell-mode 'cat .env'", 'ask', 'protected-path'],
+      ["pnpm --shell-mode exec 'cat .env'", 'ask', 'protected-path'],
+      ["pnpm -rc exec 'cat .env'", 'ask', 'protected-path'],
+      ["pnpm dlx -c 'cat .env'", 'ask', 'protected-path'],
+      ["pnpm exec -c 'rm -rf /home/me'", 'block', RM],
+      ["pnpm -c exec 'rm -rf /home/me; ls'", 'block', RM],
+      ["pnpm exec -c -- 'rm -rf /home/me'", 'block', RM],
+      ["pnpm exec -c rm -rf /home/me", 'block', RM],
+      ['pnpm exec ls', 'allow'],
+      ['pnpm -r exec ls', 'allow'],
+      ["pnpm exec -c 'ls -la'", 'allow'],
+    ])
+  })
+
+  test('more than eight env -S splices in one command are not spliced: the part is reviewed', () => {
+    const chain = (n: number, tail = 'ls') => `env ${'-Senv '.repeat(n)}${tail}`
+    for (const n of [9, 12, 100]) {
+      const result = bash(chain(n))
+      expect(['review', 'ask', 'block'], `${n}`).toContain(result.tier)
+      expect(result.tier, `${n}`).not.toBe('allow')
+    }
+    // Eight are still spliced and read; the ninth is not, and the part is one the parser could not read for sure.
+    const nine = splitShell(chain(9)).parts
+    expect(nine.some(part => part.isUnresolved === true)).toBe(true)
+    expect(splitShell(chain(3)).parts.some(part => part.isUnresolved === true)).toBe(false)
+    // What the strings say is still read: a block among them blocks, however many there are.
+    expect(tierOf(`env ${'-Senv '.repeat(12)}-S'rm -rf /home/me' x`)).toBe('block')
+    expect(tierOf(chain(12, 'rm -rf /home/me'))).toBe('block')
+  })
+})
+
+describe('the classifier does not stall on crafted input', () => {
+  // About 1 ms before the quadratic splice, 38 s with it (DESIGN §16 item 34). A generous ceiling, since the suite runs beside other work: the point is linear against quadratic.
+  const SLOW_MS = 3000
+  const time = (command: string): number => {
+    const started = Date.now()
+    bash(command)
+    return Date.now() - started
+  }
+
+  test('env -S, thousands of times in one command, is classified at once and is not an allow', () => {
+    const command = `env ${'-Senv '.repeat(3000)}ls`
+    expect(command.length).toBe(18_006)
+    const started = Date.now()
+    const result = bash(command)
+    expect(Date.now() - started).toBeLessThan(SLOW_MS)
+    expect(['review', 'ask', 'block']).toContain(result.tier)
+  })
+
+  test('a run of unknown wrapper options, and the other shapes the last round added, at 20,000 characters', () => {
+    const N = 19_990
+    const fill = (unit: string): string => unit.repeat(Math.ceil(N / unit.length)).slice(0, N)
+    const shapes: Record<string, string> = {
+      'env -S spread': `env ${'-S a '.repeat(3990)}ls`,
+      'env -S nested': fill("env -S '"),
+      'env --split-string': `env ${'--split-string=env '.repeat(1000)}rm -rf /home/me`,
+      'unknown wrapper options': `sudo ${'--pr '.repeat(3990)}ls`,
+      'unknown runner options': `npm exec ${'--zz '.repeat(3990)}ls`,
+      'wrapper chain': fill('env nice time '),
+      'brace lists': fill('{a,b} '),
+      'tmux list': `tmux ${fill('send-keys x \\; ').slice(0, N - 10)}`,
+      'tmux set': `tmux ${fill('set -g status-left x \\; ').slice(0, N - 10)}`,
+      'cd chain': fill('cd $HOME/.claude/plugins/x && '),
+      'pipe chain of readers': `ls ~/.claude/plugins ${fill('| cat ')}`,
+      'git reads': `git ${'-C /home/me/.claude/plugins/x '.repeat(600)}status`,
+      'pnpm shell strings': fill('pnpm -c exec '),
+      'cd through $HOME': fill('cd $HOME/.claude/plugins/x && '),
+      'cd through a variable': fill('cd $X/.claude/plugins/$Y/z && '),
+      'readers piped on': fill('ls ~/.claude/plugins/a | cat; '),
+      'tmux display': `tmux ${fill("display -p '#(x)' \\; ").slice(0, N - 10)}`,
+      'input tools': `xdotool ${'key a '.repeat(3300)}`,
+    }
+    for (const [name, command] of Object.entries(shapes)) expect(time(command), name).toBeLessThan(SLOW_MS)
   })
 })

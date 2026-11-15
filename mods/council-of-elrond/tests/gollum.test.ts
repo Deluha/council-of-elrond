@@ -437,9 +437,33 @@ describe('the scan cap', () => {
   })
 
   test('a secret in the middle of a long text is not read, and the flag is the warning', async () => {
-    const scan = await scanText(`${fill(500_100)}\n${AWS}\n${fill(300_000)}`)
+    // Well past the overlap each seam reads into the skipped middle.
+    const scan = await scanText(`${fill(520_000)}\n${AWS}\n${fill(300_000)}`)
     expect(scan.high).toEqual([])
     expect(scan.partial).toBe(true)
+  })
+
+  // A token that starts at `at` in a text of `length` characters, with a space before it so the match boundary holds.
+  const tokenAt = (at: number, length: number): string => `${fill(at - 1)} ${FAKE_GITHUB_TOKEN} ${fill(length - at - FAKE_GITHUB_TOKEN.length - 1)}`
+
+  test('a token that crosses the cap offset is found whole, wherever it starts, with nothing skipped (text of 520,000)', async () => {
+    for (let at = 499_980; at <= 500_000; at++) {
+      const text = tokenAt(at, 520_000)
+      expect(text.length).toBe(520_000)
+      const scan = await scanText(text)
+      expect(scan.high.map(finding => finding.patternId), String(at)).toEqual(['github-token'])
+      expect(scan.partial).toBe(false)
+    }
+  })
+
+  test('a token at either seam of a text with a skipped middle is found whole, and the scan says it was partial (text of 700,000)', async () => {
+    for (let offset = 499_980; offset <= 500_000; offset++) {
+      for (const at of [offset, offset + 100_000]) {
+        const scan = await scanText(tokenAt(at, 700_000))
+        expect(scan.high.map(finding => finding.patternId), String(at)).toEqual(['github-token'])
+        expect(scan.partial).toBe(true)
+      }
+    }
   })
 
   test('a text that the head and the tail cover whole is not partial; neither is a short one', async () => {

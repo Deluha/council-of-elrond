@@ -35,6 +35,7 @@ export const CHECKS = [
   'interpreter-stdin',
   'claude-session',
   'unreadable-command',
+  'terminal-input',
   'extract-outside-repo',
 ] as const
 export type CheckName = (typeof CHECKS)[number]

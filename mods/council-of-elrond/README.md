@@ -101,16 +101,17 @@ Shipped defaults:
     `--settings`, `--setting-sources`, `--plugin-dir`, `--mcp-config`, `--permission-mode`, a permission
     bypass, a `CLAUDE_*` variable set for it, `claude mcp add|remove` (and its other changing actions)
     and `claude config set` (rule `claude-session`);
+  - typing or pasting into another terminal (rule `terminal-input`): `tmux send-keys` (`send`), `paste-buffer`, `pipe-pane -I`, `command-prompt`, and `load-buffer` or `set-buffer` in a tmux command line that also pastes or sends; `screen -X stuff`, `paste`, `readbuf`; `zellij action write` and `write-chars`; `kitty @ send-text` and `send-key`; `wezterm cli send-text`; `xdotool type`, `key`, `keydown`; `ydotool type`, `key`; `wtype`; `osascript` with `keystroke`. They can answer a prompt, or type a command, as you. What is typed is still read as before (`tmux send-keys 'rm -rf ~' Enter` blocks); anything else comes to you;
   - anything touching a protected path, wherever it appears in the command: as a word, as the value of a wrapper or runner option (`op run --env-file=.env`, `mise x -C .git`, `uv run --env-file`, `npm exec --userconfig`), after `=` (`dd of=`, `NAME=path`) or glued to an option. `.env*`, `Jenkinsfile`, migrations folders, and the entries below. The entries written with a leading `**/` hold in every repository below the session root, at any depth, the rules file included (`app/.claude/council-of-elrond/rules.json`), and so does the directory itself (`rm -rf app/.git` asks). A path outside the session root is matched by its absolute form, so another repository's `.git/` or your user `~/.claude/settings.json` (which holds hooks and permissions) asks too:
     - `**/.github/workflows/**`, `**/.gitlab-ci.yml`, `**/.circleci/**`, `**/.buildkite/**`;
     - `**/db/migrate/**`;
     - `**/.git/**`;
     - `**/.claude/council-of-elrond/**`, `**/.claude/settings.json`, `**/.claude/settings.local.json`;
   - **a write to your plugin folders.** `**/.claude/plugins/**` covers your user plugin folders (`~/.claude/plugins/`) and, because it is written with `**/`, a `.claude/plugins/` folder in any repository. It is a second, built-in list, for writes only: not a field of the rules file, so a project can neither add to it nor empty it. A file write or edit there asks. A shell command that names a path there asks unless it only reads it or runs what it holds:
-    - it reads when its program is one of `cat`, `head`, `tail`, `less`, `more`, `bat`, `ls`, `tree`, `stat`, `file`, `wc`, `du`, `find`, `grep`, `egrep`, `fgrep`, `rg`, `ag`, `diff`, `cmp`, `sort`, `uniq`, `cut`, `jq`, `yq`, `md5sum`, `sha1sum`, `sha256sum`, `shasum`, `realpath`, `readlink`, `basename`, `dirname`, `test`, `[`, `cd` and `pushd`, and the path is one of its operands. Not when an option of it writes (`find -delete`, `-exec`, `-execdir`, `-ok`, `-okdir`, `-fprint*`, `-fls`; `jq --in-place`; `yq -i`; `sort -o` and `-T`; `tree -o`; `less -o` and `-O`; `file -C`; `uniq` with an output file), when a redirect of the command names the path, when a wrapper or an assignment names it (`time -o`, `X=path cat`), or when a wrapper's option was not read in full (`timeout --weird 5 cat path`);
+    - it reads when its program is one of `cat`, `head`, `tail`, `less`, `more`, `bat`, `ls`, `tree`, `stat`, `file`, `wc`, `du`, `find`, `grep`, `egrep`, `fgrep`, `rg`, `ag`, `diff`, `cmp`, `sort`, `uniq`, `cut`, `jq`, `yq`, `md5sum`, `sha1sum`, `sha256sum`, `shasum`, `realpath`, `readlink`, `basename`, `dirname`, `test`, `[`, `[[`, `cd` and `pushd`, and the path is one of its operands; so is `git -C <path>` followed by `status`, `log`, `diff`, `show`, `rev-parse`, `ls-files`, `branch` (with no argument, or only `--show-current`, `-a`, `-r` or `-v`), `remote` (with no argument, or `-v`), `describe`, `blame` or `cat-file`, with no other global option than `--no-pager` and `--no-optional-locks`, and no option that writes a file or runs a program (`--output`, `--ext-diff`, `--textconv`). Not when an option of it writes (`find -delete`, `-exec`, `-execdir`, `-ok`, `-okdir`, `-fprint*`, `-fls`; `jq --in-place`; `yq -i`, `-s` and `--split-exp`; `sort -o` and `-T`; `tree -o`; `less -o` and `-O`; `file -C`; `uniq` with an output file), when a redirect of the command names the path, when a wrapper or an assignment names it (`time -o`, `X=path cat`), or when a wrapper's option was not read in full (`timeout --weird 5 cat path`); and not when what the reader prints goes on, through a pipe, into a program that is not itself one of these readers (`ls ~/.claude/plugins | xargs rm -rf`, `find ~/.claude/plugins -type f | xargs sed -i …`, `cat path | sh`);
     - it runs when the path is the program (`~/.claude/plugins/x/bin/tool --help`) or the script an interpreter or a shell is given (`python3 ~/.claude/plugins/x/run.py`, `bash ~/.claude/plugins/x/run.sh`), and no code flag or piped code comes with it. The ordinary rules then judge it, so a script is reviewed (`script-file`, `script-shell`, `script-path`) as it was before the folder was protected.
 
-    Every other command that names the folder asks: `cp`, `mv`, `rm`, `tee`, `sed -i`, `ln`, `chmod`, `touch`, `install`, `rsync`, `tar`, `git -C`, a program the mod does not know, a redirect target. A path that is protected proper (`.env`, `.git`, the settings files, the rules file) asks for any mention, a read included.
+    Every other command that names the folder asks: `cp`, `mv`, `rm`, `tee`, `sed -i`, `ln`, `chmod`, `touch`, `install`, `rsync`, `tar`, `git -C` with any other subcommand, a program the mod does not know, a redirect target. A path that is protected proper (`.env`, `.git`, the settings files, the rules file) asks for any mention, a read included.
 - **Review:**
   - file writes and edits;
   - deletes, moves, in-place edits, writes through a redirect;
@@ -119,7 +120,7 @@ Shipped defaults:
   - infrastructure changes, including more cloud deletes (`gsutil rm`, `aws s3 rb`, `pulumi destroy`), network writes (a `curl` data option attached or clustered, a method other than GET, `wget` bodies, HTTPie bodies and methods) and publishing, `gh` writes included;
   - `awk` and `sed` programs that run a command or write a file;
   - extracting an archive (`tar -x`, `unzip`) into a folder outside the project, or one only known at run time (rule `extract-outside-project`); other uses of `tar` and `unzip` are not matched;
-  - a command line handed to another program in a form that cannot be read: a key sequence of several tmux keys, a command file, an ambiguous tmux command prefix (rule `command-unreadable`);
+  - a command line handed to another program in a form that cannot be read: a key sequence of several tmux keys, a command file, an ambiguous tmux command prefix, and the tmux forms that run a command line nobody can read: `set` or `set-option` of `default-command`, `default-shell`, `lock-command`, `status-left` or `status-right`, or of any option whose value holds `#(`; `-f <file>` on the tmux command line; `detach-client -E`; `display-message` with `#(`; `choose-tree`, `choose-buffer` and `choose-client` with a command template (rule `command-unreadable`);
   - running scripts or inline code, including code fed to an interpreter on its standard input (a
     pipe, a heredoc, a here-string or a `<` redirect into `python3`, `node`, `perl`, `ruby`, `php`,
     `deno`, `bun`, `Rscript` or `lua` with no script named; rule `script-stdin`), also when the script
@@ -346,15 +347,23 @@ then add to it:
 
 A rule that only adds (it asks after a review, or it matched where the shipped rules had already decided) is listed in the audit line (`alsoRuleIds`); `ruleId` keeps the shipped rule.
 So such a file can never leave a call with less review, a thinner preview or a smaller council than
-having no file: it only adds a question or a block, or a review where there was none. A file with
-nothing that waits has nothing to confirm, so its rules are read the same way; the option set to
-`always` and a file you confirmed decide first, as a project's rules always did.
+having no file: it only adds a question or a block, or a review where there was none. The option set
+to `always` and a file you confirmed decide first, as a project's rules always did.
+
+**Confirming changes more than the settings that wait.** Once you confirm a file, *every* rule in it
+decides before the shipped non-block rules, whatever its tier: a `review` rule of the file can replace
+a shipped question (a `review` rule matching `ls` turns `sudo ls` from a question into a review); only
+the shipped block rules and the protected paths stay a floor no project rule lowers. So a file that holds a rule of any tier
+is a file to confirm, even if nothing in it is ignored: it is listed by `/council trust`, the notice
+and the status say that its rules apply now and only add, and that confirming it lets them decide
+first. A file of lists only (`protectedPaths` and the like) has nothing to confirm: it is not listed,
+and the mod does not rewrite it either.
 
 Until then the waiting settings are as if absent: an allow rule lets nothing through, a shipped
 rule you disabled still fires, the built-in models are used, your patterns are not applied, and the
 project checks are not run. A big operation whose checks are among them is refused with "not run:
 the rules file is not trusted", the same as a check that could not be started, so a check the
-project asked for is never dropped silently. (The `/council trust` listing names an unconfirmed file's `allow` rules only: its `review`, `ask` and `block` rules apply already.)
+project asked for is never dropped silently.
 
 **Telling you.** Once per session per file the council says, in a transcript line and a toast, that
 the file has settings that are ignored, with counts and no text from the file. Where nothing draws
@@ -363,17 +372,30 @@ the same notice reaches you through Claude, with counts only (see [Where nothing
 content), trusted by the option, or not trusted, with how many settings are ignored.
 
 **Confirming.**
-- `/council trust` lists, for each file in scope that has settings waiting (a session root that
-  holds several repositories has one per repository), every one of them, none left behind a "more":
-  each allow rule with every field it has (id, tier, tools, command, path, input, check,
-  member, profile and reason), each disabled rule, each model, each check's name, timeout and every
-  argument on a line of its own in quotes, and each secret pattern's id, level, regex, label and kind.
-  One value per line after a `|` bar, as the file has it: not cut and not redacted. Secrets
-  allowlist entries are counted and never shown. Then the file's code and the line to type.
+- `/council trust` lists, for each file in scope that has something to confirm (a session root that
+  holds several repositories has one per repository), every setting of it, none left behind a "more",
+  in two groups:
+  - **Applies now and only adds to the shipped rules:** each `block`, `ask` and `review` rule, each
+    protected path, protected branch, production pattern and big operation. One sentence follows the
+    rules: after you confirm, these rules decide before the shipped ones, so a `review` rule here can
+    replace a shipped question.
+  - **Switched on by confirming:** each `allow` rule, disabled rule, model, check and secret pattern,
+    and the count of allowlisted secrets.
+
+  Every rule of every tier is listed with every field it has (id, tier, tools, command, path, input,
+  check, member, profile and reason), each check's name, timeout and every argument on a line of its
+  own in quotes, and each secret pattern's id, level, regex, label and kind. One value per line after
+  a `|` bar, as the file has it: not cut and not redacted. Secrets allowlist entries are counted and
+  never shown. A rule with no `command`, `path`, `input` or `check` gets a line under it saying it
+  matches every call of the tools it names, and one whose `tools` match every tool (`*`) says so.
+  Then the file's code and the line to type.
 - **Some files cannot be confirmed from the session**, because the listing would not show you all
-  of them or could mislead you: more than 40 settings waiting (or more than 20 files, past the twentieth); a value over 400 characters; a value that looks like a
-  secret (it is shown as "not shown: looks like a secret"); a value with a control, invisible or
-  direction-changing character in it. `/council trust` still prints what it can, names each such
+  of them or could mislead you: more than 40 settings in all, in both groups together (every rule of
+  every tier, every list entry, every allowlist entry, or more than 20 files, past the twentieth); a
+  value over 400 characters; a value that looks like a secret (it is shown as "not shown: looks like a
+  secret"); a value with a control, invisible or direction-changing character in it, which includes the
+  soft hyphen, the joiners and fillers, the invisible operators, variation selectors, tag characters
+  and every Unicode space but the plain one (a no-break or ideographic space reads like a space). `/council trust` still prints what it can, names each such
   value, and says the file cannot be confirmed from the session instead of giving a code. Shorten or fix the file, or, if you control
   which repositories this host opens, set `trustProjectRules` to `always`.
 - `/council trust <code>` reads the files again and confirms the one with that code, but only if
@@ -394,9 +416,11 @@ folder), never in the repository, as a path and the SHA-256 of the exact text; a
 store that cannot be read trusts nothing.
 
 **The mod's own writes.** When you answer "Add the rule" after "allow once", or add an allowlist
-entry, the file is written and its new content recorded as trusted, because you just confirmed that
-entry. If the file has settings waiting, the offer is not made (it would not take effect); run
-`/council trust` first.
+entry, the file is written, and its new content is recorded as trusted only if the file was not there,
+or you had confirmed its previous content, or it held no setting at all: you confirmed that one entry
+and nothing else in the file. A file that exists and that you have not confirmed (one with settings
+waiting, one that holds only `review`, `ask` or `block` rules, or one that holds only lists) is not
+offered a rule or an allowlist entry, and nothing is recorded for it; run `/council trust` first.
 
 **For a host with nobody to confirm.** Set the option "Trust project rules files" to `always`
 (`trustProjectRules=always` in the plugin's configuration) and every rules file is trusted, as it was
@@ -690,8 +714,10 @@ prompt, a search pattern, an MCP call's arguments). A high-confidence finding re
 whatever its tier, allowed calls included. A low-confidence finding comes to you only on a gated
 call: an allowed call never gets a question.
 
-A text over 600,000 characters is read from its start (500,000 characters) and its end (100,000), not
-its middle, and the scan says so instead of passing it silently. A gated call of that length comes
+A text up to 600,000 characters is scanned whole. A longer one is read from its start (500,000
+characters) and its end (100,000), each reaching 512 characters into the skipped middle, so a token
+that straddles either cut is still read whole; the rest of the middle is not read, and the scan says
+so instead of passing it silently. A gated call of that length comes
 to you, with the reason that it is too long for the secrets scan to read in full (allow once, keep
 blocked, talk first or type an instruction; your answer is not remembered and no allow rule is
 offered for it); where nobody can be asked it is refused. An allowed call of that length is refused,
@@ -701,7 +727,7 @@ finding; bypass skips a gated call's scan, not an allowed call's.
 - **High confidence** (private keys, PGP private key blocks, AWS, GitHub, GitLab, npm, Anthropic, OpenAI, Slack, Google and Stripe keys, Google OAuth client secrets, Slack webhook URLs, passwords in connection strings): refused without asking you, on an allowed call too (it is logged, with tier `allow`). Claude is told to remove the secret.
 - **Low confidence** (`password=…`-style assignments, including compound names such as `DB_PASSWORD`, `PGPASSWORD` and `dbPassword`; JWTs; `Authorization: Bearer …` and `Basic …` headers; a `mysql -p<password>` argument; a password in a connection string with no user, `redis://:<password>@host`; long random-looking tokens): comes to you with a redacted snippet. Allow once, keep blocked, type an instruction, or **add to allowlist**. The allowlist asks a second time, showing the exact entry: a `sha256:` fingerprint of the secret, never the secret. Only then is it written to `rules.json` under `gollum.allowlist`. The fingerprint of a short password can be guessed offline, so the allowlist is for keys and tokens: for a password finding the second question says so, and a real password is better changed.
 
-Code that only names a secret is neither a finding nor redacted. That is a value which is wholly a reference: a variable or a template (`$TOKEN`, `${DB_PASSWORD:-}`, `${1:-default}`, `{{ secrets.TOKEN }}`), a call expression whose arguments hold no quoted string and no literal of 8 or more letters and digits (`getToken()`, `z.string().min(8)`, `crypto.randomBytes(32)`, `uuid4()`, `await getToken(user)`, `response.json()["token"]`), an indexed lookup such as `tokens[0]`, a type annotation such as `password: string`, a bare number under 6 digits (`"token": 1234`), a path or a backtick substitution under 6 characters (`/tmp`, `~/x`, `` `pwd` ``), and the shell's own `PWD` and `OLDPWD`. A plain word of letters, `_` and `.` is a secret only from 6 characters (`token: token`, a commit message "fix password: reset flow"); with a digit or any other character, from 4 (`PASSWORD=abc12`). A value that only starts like a reference is still a secret: `$ecret123!`, `Sup3r(Secret)9`, `<realkey12345>`, `(hunter2xyz)`. Redaction is stricter than the scan: a value is left readable only when it is plainly code (a variable, a call, a dotted path, an indexed lookup, a type word); any other value after a secret keyword is redacted, even one the scan does not flag (a word of 6 letters or more, such as `correcthorse`). A longer path (`pwd=/work/x`) is redacted, as it was before this release's shorter minimum. Redaction also covers shapes the scan does not flag: the password of `curl -u user:password` (and `--user`), `--password` for the `mysql`-family clients, `Authorization: Token …` and `Authorization: ApiKey …` headers, and the `X-Api-Key` and `X-Auth-Token` headers.
+Code that only names a secret is neither a finding nor redacted. That is a value which is wholly a reference: a variable or a template (`$TOKEN`, `${DB_PASSWORD:-}`, `${1:-default}`, `{{ secrets.TOKEN }}`), a call expression whose arguments hold no quoted string and no literal of 8 or more letters and digits (`getToken()`, `z.string().min(8)`, `crypto.randomBytes(32)`, `uuid4()`, `await getToken(user)`, `response.json()["token"]`; not one whose callee starts with a capital letter, is not a known type name (`String`, `Numeric`, `Uint8Array`, `VARCHAR`, ...) and either has a digit in its name or starts with a digit argument: `Winter(2024)`, `Passw0rd()` are words dressed as calls, while `Token(options)`, `Config()` and `String(128)` stay code), an indexed lookup such as `tokens[0]`, a type annotation such as `password: string`, a bare number under 6 digits (`"token": 1234`), a path or a backtick substitution under 6 characters (`/tmp`, `~/x`, `` `pwd` ``), and the shell's own `PWD` and `OLDPWD` when the value is a directory (it starts with `/`, `~` or `$`, is `.` or `..` or starts with `./` or `../`, or is a whole backtick substitution, and holds no `;`). Any other value after `PWD` is a password: it is the password keyword of ODBC-style connection strings (`Server=x;PWD=hunter2xyz`). A plain word of letters, `_` and `.` is a secret only from 6 characters (`token: token`, a commit message "fix password: reset flow"); with a digit or any other character, from 4 (`PASSWORD=abc12`). A value that only starts like a reference is still a secret: `$ecret123!`, `Sup3r(Secret)9`, `<realkey12345>`, `(hunter2xyz)`. Redaction is stricter than the scan: a value is left readable only when it is plainly code (a variable, a call, a dotted path, an indexed lookup, a type word); any other value after a secret keyword is redacted, even one the scan does not flag (a word of 6 letters or more, such as `correcthorse`). A longer path (`pwd=/work/x`) is redacted, as it was before this release's shorter minimum. Redaction also covers shapes the scan does not flag: the password of `curl -u user:password` (and `--user`), `--password` for the `mysql`-family clients, `Authorization: Token …` and `Authorization: ApiKey …` headers, and the `X-Api-Key` and `X-Auth-Token` headers.
 
 Add your own patterns in `rules.json`:
 
@@ -755,7 +781,7 @@ operation. A push keys on its remote and branch, and SQL on its database.
 - **The per-kind counters are bounded.** At 200 kinds of operation a new kind is counted on one shared counter ("other verbs"), which locks at five like any kind. Nothing already counted is dropped.
 - A call that runs successfully clears its own operation (for a command of several parts: the command as a whole; its parts' own counts and the per-kind counters stay). Likewise, typing an instruction gives the command as a whole its rounds back, not its parts. Everything resets when you send a new prompt (a `/council` command is not one).
   Only a person's prompt starts them over: in `claude -p` and SDK sessions they last until `/clear`.
-- **Cache:** a single reviewer's approve is reused for the identical call, from the same working folder, until your next prompt. A block or revise never is, and neither is the approve of the full council (a big operation convenes it, and runs your project's checks, every time), nor any call with a `git` part, since the checked-out branch and the index are not part of what the call says. A call with none, in the same folder, still costs one review. The cache and the rounds are read again just before they are used, so two calls running at once see each other's result. Any prompt that is not a person's (`claude -p`, the SDK, a task notification, a schedule) also clears the cache.
+- **Cache:** a single reviewer's approve is reused for the identical call, from the same working folder, until your next prompt. A block or revise never is, and neither is the approve of the full council (a big operation convenes it, and runs your project's checks, every time), nor any call with a `git` part, since the checked-out branch and the index are not part of what the call says, nor any call that runs a script or code (a script file, a program by its path, inline code, code fed to an interpreter, `eval`, `source`, `xargs`; every `script-*` rule) or a project's runner (`make`, `just`, `npm run`, `cargo`, `yarn` and the like), since the same words can run other code after the file is edited. A call with none of these, in the same folder, still costs one review. The cache and the rounds are read again just before they are used, so two calls running at once see each other's result. Any prompt that is not a person's (`claude -p`, the SDK, a task notification, a schedule) also clears the cache.
 
 ## Escalation
 
@@ -765,10 +791,12 @@ shown by its start and its end, with a line saying how much is not shown. Every 
 and the preview starts with a gutter (`  | `) and has its control characters removed, and so are the
 characters that change how text reads without showing (direction marks and overrides, zero-width
 characters), so text in a command cannot pass for a line of the question, such as a reviewer's verdict
-or a heading. A line over 100 characters wraps, and every row of it starts with the gutter. When the
-question would be over about 2,500 characters, the end of the call goes first, then the end of the
-preview, then each reviewer's reason is cut to its share, each with a line saying so: the question's
-own lines and every reviewer's verdict stay. You can:
+or a heading. A line wraps at 72 display columns (a wide character counts 2, a combining mark 0), and
+every row of it starts with the gutter. When the question would be over about 2,500 characters, what
+a reviewer wrote goes first (each reason cut to at most 240 characters), then the preview is cut to
+its first and last line, then the middle of the call; the first 4 and the last 4 lines of the call
+always stay. A line says what was cut each time, and the question's own lines and every reviewer's
+verdict stay. You can:
 
 - **Allow once** (themed: "Need: allow once"): the call runs, and still meets Claude Code's normal permission prompt, which then carries the line "Council: you allowed this once".
 - **Keep blocked** (themed: "Pass: keep blocked"): it is refused.
@@ -869,12 +897,13 @@ command (`chrt`, `taskset`, `setarch`), multi-call binaries (`busybox`, `toybox`
 `script -c`, `nix-shell --run`, `env -S` and the `tmux` subcommands that start a command, and the
 substitutions in an unquoted heredoc body. The gaps that remain:
 
-- **Variables and runtime expansions aren't resolved.** `rm -rf $DIR` has an unknown target, so review decides. A program word the shell builds at run time (a variable, a substitution, a glob, a bracket or a brace list; a flat literal brace list is read as the command it expands to) is reviewed, but what it expands to is not known, so the command it would run is not classified. `cd $X` followed by a relative recursive delete is treated as if `$X` were `/`. A protected file named only through a variable (`X=.env; cat $X`) is not recognised as protected.
+- **Variables and runtime expansions aren't resolved.** `rm -rf $DIR` has an unknown target, so review decides. A program word the shell builds at run time (a variable, a substitution, a glob, a bracket or a brace list; a flat literal brace list is read as the command it expands to) is reviewed, but what it expands to is not known, so the command it would run is not classified. `cd $X` followed by a relative recursive delete is treated as if `$X` were `/`; a `cd` to `$HOME`, `${HOME}` or `~` is followed to that folder (as well as to `/`), and one whose text names a protected or write-protected place (`cd $X/.claude/plugins/y`, `cd $D/.git`) is taken as inside it. A protected file named only through a variable (`X=.env; cat $X`) is not recognised as protected.
 - **A `cd` is followed for the commands of its own level.** A `cd` or `pushd` between the parts of a command (`cd src && rm -rf generated`) moves where the later parts of that level work, and a target the mod cannot know (`cd $X`, `cd -`) counts as `/`. A `cd` inside a subshell, a group or `$(…)` moves the folder for the later commands of that level, not for the commands outside it: both readings are judged, so nothing is judged more leniently than before. The scope selection under a multi-repository root does not follow a `cd` inside a subshell. `popd` is not tracked.
 - **Wrapper and runner options are read as the program reads them, and an unknown one means review.** Clusters are read letter by letter (`timeout -vs KILL 5`, `env -iu NAME`), long options by unique prefix, and global options before a runner's subcommand (`pnpm -r exec`, `npm -s exec`, `yarn workspace web exec`, `uv -q run`). An option the mod's tables do not list sends the call to review. A wrapper or runner that changes the directory or the root (`env -C`, `sudo -D`/`-R`, `chroot`, `nsenter`, `mise -C`, `npm --prefix`, `pnpm --dir`, `uv --directory`) is judged from `/` as well as from where the session is.
 - **A protected path counts wherever the command names it.** Every word as written, the value of `name=value` and `--opt=value`, and a value glued to an option are tested, including a wrapper's or runner's own option value (`op run --env-file=.env`, `fakeroot -s .env`, `firejail --profile=.env`).
 - **Code inside interpreters isn't parsed.** `python -c "shutil.rmtree('/')"` is review (script execution); the reviewer sees the code, but no rule reads it. The same holds for code fed on standard input and for a script file's contents.
-- **tmux key sequences of several keys are reviewed, not read.** `tmux send-keys` with one word reads that word as a command line; several keys typed at once (`send-keys ls Space -l Enter`) cannot be turned into the line they type, so the call is reviewed (`command-unreadable`), as is a command file a multiplexer is told to load.
+- **tmux key sequences of several keys are reviewed, not read; typing into another terminal always asks.** `tmux send-keys` with one word reads that word as a command line; several keys typed at once (`send-keys ls Space -l Enter`) cannot be turned into the line they type, so the call is reviewed (`command-unreadable`) and, as every send, asked about (`terminal-input`), as is a command file a multiplexer is told to load. What `xdotool`, `kitty @ send-text` and the like type is not read, only asked about. tmux's control mode (`tmux -C`), which reads commands from standard input, is not read.
+- **A reader whose output is piped on is judged by what follows it.** Only the programs listed under "a write to your plugin folders" count as readers there, so `ls ~/.claude/plugins | sed s/a/b/` or `| awk` asks, though neither writes.
 - **`nix run` is judged by the app name only.** `nix run nixpkgs#curl -- …` is read as `curl …`; what the flake's app really runs is not known.
 - **Encoded or downloaded payloads** (`base64 -d | sh`, `curl | sh`) are caught only as "piped into a shell" (review).
 - **Shell symbolic links aren't resolved.** File-tool paths are resolved to their real path; paths in shell commands are not.
@@ -883,7 +912,7 @@ substitutions in an unquoted heredoc body. The gaps that remain:
 - **Alternating verbs on one target are separate operations.** `rm build`, `trash build`, `find build -delete` and a script that deletes it each get their own rounds and their own failed attempts, since the key starts with the verb. Three refusals of `rm` do not lock out the fourth try with `trash`; the per-kind counter catches only retries of the same verb.
 - **A `.sql` file's content isn't read by the block rules.** The database reviewer reads a `.sql` file a command names inside the project (`psql -h prod-db -f drop.sql`), but the rules classify the command without opening any file, so a destructive file run against production is reviewed, not blocked. Put a project rule on the command if a file must never run against a database.
 - **POSIX only:** no Windows paths or PowerShell parsing. Windows is unsupported ([docs/INSTALL.md](../../docs/INSTALL.md)).
-- **A text over 600,000 characters has an unscanned middle.** The secrets scan reads the first 500,000 characters and the last 100,000 of a call's text, so a secret only in the middle of a longer text is not found. The call is not passed on that account: a gated one comes to you, and an allowed one is refused (see [Secrets scan](#secrets-scan)).
+- **A text over 600,000 characters has an unscanned middle.** The secrets scan reads the first 500,000 characters and the last 100,000 of a call's text, each 512 characters further into the middle, so a secret only in the middle of a longer text is not found. The call is not passed on that account: a gated one comes to you, and an allowed one is refused (see [Secrets scan](#secrets-scan)).
 - **A regex in a project rule runs before the file is confirmed.** The regexes of a project's `ask` and `block` rules and of `bigOperations` apply at once ([Trusting a project's rules file](#trusting-a-projects-rules-file)). A runaway one (catastrophic backtracking) stalls the hook, which then refuses the call (a hook that overruns its time fails closed: it cannot let one through). Read a repository's rules file before you open it in a session.
 - **`git push.default` and other git configuration aren't read.** A push with no refspec is treated as a push of the checked-out branch (its preview is `@{upstream}..HEAD`), whatever `push.default` would send.
 - **Long commands aren't parsed.** Commands longer than 20,000 characters, or nested more than four levels deep, go to review; and a command longer than its reviewer reads is never approved by a model alone (see [Long input](#long-input)).
@@ -901,7 +930,7 @@ substitutions in an unquoted heredoc body. The gaps that remain:
 - A reviewer persuaded by content it reviews. All session content is marked as untrusted data and the prompt says to ignore instructions in it, but that is mitigation, not a guarantee.
 - Rules you loosen, and calls you allow. An allow rule you add skips review, the ask tier and the secrets scan for that exact command; it does not follow a `cd` earlier in another command, so `rm -r build` is allowed in whichever folder Claude runs it.
 - **Low-confidence secrets in allowed calls.** An allowed call is refused for a high-confidence secret, or for a text too long to scan in full, and for nothing else: a `password=…`-style assignment or a random-looking token in an allowed `curl` or `echo` passes without a question.
-- **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`, `tokens[0]`), an identifier without a digit and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through the scan (redaction still hides it). A plain word of fewer than 6 letters (`token: token`, `password: reset`), a bare number under 6 digits, a call expression whose arguments hold no literal, and anything assigned to a variable named exactly `PWD` or `OLDPWD` are read as code, not redacted and not flagged.
+- **Secrets the patterns don't know.** The scan is patterns plus a randomness check. Low-confidence findings skip values that look like code (`process.env.X`, `getToken()`, `string`, `tokens[0]`), an identifier without a digit and hashes (`sha512-…`), so a password with no digit in a plain assignment can slip through the scan (redaction still hides it). A plain word of fewer than 6 letters (`token: token`, `password: reset`), a bare number under 6 digits, a call expression whose arguments hold no literal, and anything assigned to a variable named exactly `PWD` or `OLDPWD` whose value is a directory are read as code, not redacted and not flagged.
 - **Two sessions in one project share one audit log without a lock.** Claude Code's file access has none, so lines can interleave or be lost; the report skips lines it cannot parse.
 - **Several repositories: a command too long or too complex to parse** names no `cd` or path, so it is classified against the repository of the session's working directory only (it is reviewed at least). Two repositories' checks with the same name show under one name in the debate pane.
 - **Operation keys are best effort.** A retry through a different tool (a script instead of `rm`) is a different operation; the per-kind counter catches only retries of the same verb. A command with more than eight gated parts is counted by the whole command and its first eight parts. A key names the verb and its targets, not the wording: a SQL client's inline statement, the text an `echo` writes to a file and the value of a push option are not part of it.

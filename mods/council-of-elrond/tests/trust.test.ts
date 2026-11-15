@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { OVERRIDES_PATH, SHIPPED } from '../hooks/config/defaults.js'
 import { GIMLI_COMMAND_KEYS, GIMLI_KEYS, GOLLUM_KEYS, GOLLUM_PATTERN_KEYS, loadConfig, RULE_KEYS, TOP_KEYS, validateOverrides } from '../hooks/config/schema.js'
-import { cleanText, codeOf, FIELD_TRUST, hashOf, inspectValue, isCode, isTrusted, matchCode, parseRecord, recordValue, splitByTrust, TIER_TRUST, TRUST_CAP, trustMode, withoutTrusted, withTrusted } from '../hooks/config/trust.js'
+import { cleanText, codeOf, FIELD_TRUST, hashOf, heldCount, inspectValue, isCode, isTrusted, matchCode, parseRecord, recordValue, splitByTrust, TIER_TRUST, TRUST_CAP, trustMode, withoutTrusted, withTrusted } from '../hooks/config/trust.js'
 import type { Overrides } from '../hooks/config/types.js'
 import { TIERS } from '../hooks/config/types.js'
 import { bigOperationOf } from '../hooks/elrond/council.js'
@@ -20,7 +20,7 @@ import { reasonsOf } from '../hooks/members/shared.js'
 import { applyAdditions, classify, classifyBase } from '../hooks/rules/classify.js'
 import type { Call } from '../hooks/rules/classify.js'
 import { text } from '../hooks/strings.js'
-import { ALLOW_ONCE, APPROVE, auditLines, council, CONTEXT, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, REVISE, ROOT, settled, SHIPPED_COMPILED, watchState, world } from './fixtures.js'
+import { ALLOW_ONCE, ALLOWLIST, APPROVE, auditLines, council, CONTEXT, denyOf, FAKE_AWS_KEY, KEEP_BLOCKED, REVISE, ROOT, settled, SHIPPED_COMPILED, watchState, world } from './fixtures.js'
 import type { World } from './fixtures.js'
 import type { CouncilSession } from '../types'
 
@@ -129,7 +129,11 @@ describe('the split: every field of the schema is classified', () => {
         expect(split.always, field).toEqual({ schemaVersion: 1 })
         expect(split.needsTrust, field).toEqual(only)
       } else {
-        expect(split.counts.total, field).toBe(0)
+        // Nothing waits, but the entry is listed all the same, in the group that applies now (DESIGN §16).
+        expect(heldCount(split.counts), field).toBe(0)
+        expect(split.counts.total, field).toBe(1)
+        expect(split.counts.appliedLists, field).toBe(1)
+        expect(split.summary.applied[head as 'protectedPaths' | 'protectedBranches' | 'productionPatterns' | 'bigOperations'], field).toEqual(value)
         expect(split.always, field).toEqual(only)
         expect(split.needsTrust, field).toEqual({ schemaVersion: 1 })
       }
@@ -140,7 +144,8 @@ describe('the split: every field of the schema is classified', () => {
     const split = splitByTrust(FULL)
     expect(split.always.rules?.map(rule => rule.id)).toEqual(['review-ls', 'ask-terraform', 'no-destroy'])
     expect(split.needsTrust.rules?.map(rule => rule.id)).toEqual(['allow-clean'])
-    expect(split.counts).toEqual({ rules: 1, disabled: 1, allowlist: 1, models: 1, checks: 1, patterns: 1, total: 6 })
+    expect(split.counts).toEqual({ rules: 1, disabled: 1, allowlist: 1, models: 1, checks: 1, patterns: 1, appliedRules: 3, appliedLists: 4, total: 13 })
+    expect(split.summary.applied.rules.map(rule => rule.id)).toEqual(['review-ls', 'ask-terraform', 'no-destroy'])
     expect(split.always).toEqual({
       schemaVersion: 1,
       rules: FULL.rules?.filter(rule => rule.tier !== 'allow'),
@@ -151,10 +156,20 @@ describe('the split: every field of the schema is classified', () => {
     })
   })
 
-  test('a file with nothing that waits has no summary to confirm', () => {
-    const split = splitByTrust({ schemaVersion: 1, protectedPaths: ['x/**'], rules: [{ id: 'b', tier: 'block', tools: ['Bash'], command: '^x$', reason: 'No.' }] })
-    expect(split.counts.total).toBe(0)
-    expect(loadConfig(fileOf({ schemaVersion: 1, protectedPaths: ['x/**'] })).needsTrust).toBeUndefined()
+  test('a file with lists only has nothing to confirm; one with any rule has, though nothing waits in it', () => {
+    const lists = { schemaVersion: 1 as const, protectedPaths: ['x/**'], protectedBranches: ['staging'] }
+    const rule = { id: 'b', tier: 'block' as const, tools: ['Bash'], command: '^x$', reason: 'No.' }
+    expect(heldCount(splitByTrust({ ...lists, rules: [rule] }).counts)).toBe(0)
+    expect(loadConfig(fileOf(lists)).needsTrust).toBeUndefined()
+    expect(loadConfig(fileOf(lists)).hasSettings).toBe(true)
+    // A rule of any tier: confirming the file lets it decide before the shipped rules.
+    for (const tier of TIERS) {
+      const loaded = loadConfig(fileOf({ schemaVersion: 1, rules: [{ ...rule, tier }] }))
+      expect(loaded.needsTrust, tier).toBeDefined()
+      expect(loaded.needsTrust?.counts, tier).toMatchObject({ rules: tier === 'allow' ? 1 : 0, appliedRules: tier === 'allow' ? 0 : 1 })
+    }
+    expect(loadConfig(fileOf({ schemaVersion: 1 })).hasSettings).toBeUndefined()
+    expect(loadConfig(fileOf({ schemaVersion: 1, rules: [], protectedPaths: [] })).hasSettings).toBeUndefined()
   })
 })
 
@@ -174,7 +189,8 @@ describe('loadConfig with the file held back', () => {
     const loaded = loadConfig(text, SHIPPED, false)
     const config = loaded.compiled.config
     expect(loaded.errors).toEqual([])
-    expect(loaded.needsTrust).toMatchObject({ isIgnored: true, counts: { total: 6 } })
+    expect(loaded.needsTrust).toMatchObject({ isIgnored: true, counts: { total: 13 } })
+    expect(heldCount(loaded.needsTrust?.counts as never)).toBe(6)
     expect(loaded.compiled.rules.filter(rule => rule.source === 'project').map(rule => rule.id)).toEqual(['review-ls', 'ask-terraform', 'no-destroy'])
     // Every project rule that applies is marked: it only adds to the shipped decision.
     expect(loaded.compiled.rules.filter(rule => rule.source === 'project').every(rule => rule.isUnconfirmed === true)).toBe(true)
@@ -338,7 +354,7 @@ describe('what the listing shows: every held-back setting, every field, whole; o
   test('every rule, disabled rule, model, check and pattern, each field of it, with the counts and the code', () => {
     const { lines } = trustOutput([view(FULL)], [])
     const shown = lines.join('\n')
-    expect(lines[0]).toBe('/work: 1 allow rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s) are ignored until you confirm this content.')
+    expect(lines[0]).toBe('/work: waiting for your confirmation. Ignored until you confirm this content: 1 allow rule(s), 1 disabled shipped rule(s), 1 allowlisted secret(s), 1 model choice(s), 1 project check(s), 1 secret pattern(s).')
     for (const line of ['id: allow-clean', 'tier: allow', 'tools[0]: "Bash"', 'command: ^rm\\s+-rf\\s+build$', 'reason: The build folder is disposable.']) {
       expect(lines, line).toContain(`${GUTTER}${line}`)
     }
@@ -350,10 +366,83 @@ describe('what the listing shows: every held-back setting, every field, whole; o
     expect(shown).toContain('allowlists 1 secret(s) (the entries are not shown)')
     expect(shown).not.toContain('sha256:0123456789abcdef')
     expect(lines.at(-1)).toBe('Its code is abcdef01. To confirm exactly this content, type: /council trust abcdef01. Any change to the file makes it untrusted again.')
-    // What the file also holds that applies at once is not listed: nothing is asked about it.
-    expect(shown).not.toContain('no-destroy')
-    expect(shown).not.toContain('review-ls')
-    expect(shown).not.toContain('infra/**')
+    // What applies now is listed too, in a group of its own, before what confirming switches on: confirming lets those rules decide first.
+    for (const line of ['id: review-ls', 'tier: review', 'id: ask-terraform', 'id: no-destroy', 'tier: block', 'infra/**', 'staging', 'prod-db', '/^terraform\\s+apply/']) {
+      expect(lines, line).toContain(`${GUTTER}${line}`)
+    }
+    const at = (line: string): number => lines.indexOf(line)
+    expect(at(text('trust.group.applied'))).toBe(1)
+    expect(at(text('trust.group.applied'))).toBeLessThan(at(`${GUTTER}id: review-ls`))
+    expect(at(`${GUTTER}id: no-destroy`)).toBeLessThan(at(text('trust.decideFirst')))
+    expect(at(text('trust.decideFirst'))).toBeLessThan(at(text('trust.group.held')))
+    expect(at(text('trust.group.held'))).toBeLessThan(at(`${GUTTER}id: allow-clean`))
+    expect(lines.filter(line => line === text('trust.decideFirst'))).toHaveLength(1)
+  })
+
+  test('the sentence under the first group: after confirming these rules decide before the shipped ones, so a review rule can replace a shipped question', () => {
+    expect(text('trust.decideFirst')).toBe('After you confirm, these rules decide before the shipped ones, so a review rule here can replace a shipped question.')
+    expect(text('trust.group.applied')).toBe('Applies now and only adds to the shipped rules:')
+    expect(text('trust.group.held')).toBe('Switched on by confirming:')
+    // A file whose first group holds lists alone has no rule to decide first: no sentence.
+    const lists = trustOutput([view({ schemaVersion: 1, protectedPaths: ['x/**'], models: { gandalf: 'fable' } })], []).lines
+    expect(lists).toContain(text('trust.group.applied'))
+    expect(lists).not.toContain(text('trust.decideFirst'))
+  })
+
+  test('one allow rule and one review rule that matches sudo: both are listed, the sentence is there, and the review rule counts toward forty', () => {
+    const review = { id: 'review-sudo', tier: 'review' as const, tools: ['Bash'], command: '^sudo\\b', reason: 'Look at sudo.' }
+    const both = trustListing([view({ schemaVersion: 1, rules: [allow(1), review] })], [])
+    expect(both.output.lines).toContain(`${GUTTER}id: allow-1`)
+    expect(both.output.lines).toContain(`${GUTTER}id: review-sudo`)
+    expect(both.output.lines).toContain(`${GUTTER}command: ^sudo\\b`)
+    expect(both.output.lines).toContain(text('trust.decideFirst'))
+    expect(both.listed).toHaveLength(1)
+    // 39 allow rules and the review rule are forty; one more is forty-one.
+    const forty = trustListing([view({ schemaVersion: 1, rules: [...Array.from({ length: 39 }, (_, n) => allow(n)), review] })], [])
+    expect(forty.listed).toHaveLength(1)
+    const over = trustListing([view({ schemaVersion: 1, rules: [...Array.from({ length: 40 }, (_, n) => allow(n)), review] })], [])
+    expect(over.listed).toEqual([])
+    expect(over.blocked[0]?.why).toBe('it holds 41 settings to list, and at most 40 can be listed')
+    expect(over.output.lines).toContain('  ... 1 more setting(s) are not listed')
+    // Rules of every tier and every list entry count, whichever group they are in.
+    const tiers = [{ ...review, id: 'r' }, { ...review, id: 'a', tier: 'ask' as const }, { ...review, id: 'b', tier: 'block' as const }]
+    const mixed = view({ schemaVersion: 1, rules: [...tiers, ...Array.from({ length: 35 }, (_, n) => allow(n))], protectedPaths: ['a/**', 'b/**'] })
+    expect(mixed.counts.total).toBe(40)
+    expect(trustListing([mixed], []).listed).toHaveLength(1)
+    expect(trustListing([view({ schemaVersion: 1, rules: [...tiers, ...Array.from({ length: 35 }, (_, n) => allow(n))], protectedPaths: ['a/**', 'b/**', 'c/**'] })], []).listed).toEqual([])
+    // A list entry that looks like a secret or is long makes the file unconfirmable too.
+    expect(trustListing([view({ schemaVersion: 1, protectedPaths: [`secrets/${FAKE_AWS_KEY}/**`], rules: [review] })], patternsWith([])).listed).toEqual([])
+    expect(trustListing([view({ schemaVersion: 1, productionPatterns: ['a'.repeat(401)], rules: [review] })], []).listed).toEqual([])
+  })
+
+  test('a file of review rules alone is listed, with a code, and says it has nothing ignored', () => {
+    const listing = trustListing([view({ schemaVersion: 1, rules: [{ id: 'review-ls', tier: 'review', tools: ['Bash'], command: '^ls\\b', reason: 'Look.' }] })], [])
+    expect(listing.output.lines[0]).toBe('/work: waiting for your confirmation. Nothing in it is ignored; its rules apply now and only add to the shipped rules.')
+    expect(listing.output.lines).toContain(text('trust.group.applied'))
+    expect(listing.output.lines).not.toContain(text('trust.group.held'))
+    expect(listing.output.lines.at(-1)).toContain('Its code is abcdef01.')
+    expect(listing.listed).toHaveLength(1)
+  })
+
+  test('a rule with no command, path or input pattern says it matches every call of its tools, whatever its tier; one that names every tool says so', () => {
+    const MATCHES_ALL = text('trust.matchesAll')
+    const ALL_TOOLS = text('trust.allTools')
+    const linesOf = (rule: Record<string, unknown>): string[] => trustOutput([view({ schemaVersion: 1, rules: [{ id: 'r1', tier: 'allow', tools: ['Bash'], reason: 'r', ...rule } as never] })], []).lines
+    expect(linesOf({})).toContain(MATCHES_ALL)
+    for (const tier of ['review', 'ask', 'block']) expect(linesOf({ tier }), tier).toContain(MATCHES_ALL)
+    for (const matcher of [{ command: '^ls$' }, { path: '^a$' }, { input: 'x' }, { check: 'privileged' }]) expect(linesOf(matcher), JSON.stringify(matcher)).not.toContain(MATCHES_ALL)
+    // Every tool: `*`, or a pattern no tool name escapes; not a glob or a pattern that only some tools match.
+    expect(linesOf({ tools: ['*'], command: '^ls$' })).toContain(ALL_TOOLS)
+    expect(linesOf({ tools: ['*'] })).toEqual(expect.arrayContaining([MATCHES_ALL, ALL_TOOLS]))
+    expect(linesOf({ tools: ['/.*/'], command: '^ls$' })).toContain(ALL_TOOLS)
+    expect(linesOf({ tools: ['Bash', '/./'], command: '^ls$' })).toContain(ALL_TOOLS)
+    expect(linesOf({ tools: ['/^Ba/'], command: '^ls$' })).not.toContain(ALL_TOOLS)
+    expect(linesOf({ tools: ['mcp__*'], command: '^ls$' })).not.toContain(ALL_TOOLS)
+    expect(linesOf({ tools: ['Bash', 'Edit'], command: '^ls$' })).not.toContain(ALL_TOOLS)
+    // The note is the mod's own line, under its rule, not the file's text.
+    const lines = linesOf({})
+    expect(lines.indexOf(MATCHES_ALL)).toBeGreaterThan(lines.indexOf(`${GUTTER}reason: r`))
+    expect(MATCHES_ALL.startsWith(GUTTER)).toBe(false)
   })
 
   test('eleven rules are all listed, none behind "and N more"', () => {
@@ -391,11 +480,11 @@ describe('what the listing shows: every held-back setting, every field, whole; o
     expect(forty.output.lines.at(-1)).toContain('Its code is')
     const over = trustListing([view({ schemaVersion: 1, rules: Array.from({ length: 41 }, (_, n) => allow(n)) })], [])
     const lines = over.output.lines
-    expect(lines.at(-1)).toBe(`${CANNOT} it holds 41 settings that wait, and at most 40 can be listed. Shorten or fix the file, or set trustProjectRules to always in the plugin configuration if you control which repositories this host opens.`)
+    expect(lines.at(-1)).toBe(`${CANNOT} it holds 41 settings to list, and at most 40 can be listed. Shorten or fix the file, or set trustProjectRules to always in the plugin configuration if you control which repositories this host opens.`)
     expect(lines.join('\n')).not.toContain('Its code is')
     expect(lines).toContain('  ... 1 more setting(s) are not listed')
     expect(over.listed).toEqual([])
-    expect(over.blocked).toEqual([{ hash: 'abcdef01'.repeat(8), why: 'it holds 41 settings that wait, and at most 40 can be listed' }])
+    expect(over.blocked).toEqual([{ hash: 'abcdef01'.repeat(8), why: 'it holds 41 settings to list, and at most 40 can be listed' }])
     // The allowlist counts too, though its entries are not listed.
     const allowlisted = { schemaVersion: 1 as const, gollum: { allowlist: Array.from({ length: 41 }, (_, n) => `exact-secret-${n}`) } }
     expect(trustListing([view(allowlisted)], []).listed).toEqual([])
@@ -426,16 +515,26 @@ describe('what the listing shows: every held-back setting, every field, whole; o
   })
 
   test('a control, direction or zero-width character in a value makes the file unconfirmable, is gone from what is shown, and is named', () => {
-    for (const bad of ['\u202e', '\u200b', '\u200d', '\u2066', '\u2069', '\ufeff', '\u0085', '\u2028', '\n', '\u0007', '\u200f']) {
+    // Beyond the first eleven (DESIGN §16): the soft hyphen, the joiner and fillers, the invisible operators, variation selectors, tag characters, and every space but the plain one.
+    const MORE_HIDDEN = [
+      '\u00ad', '\u034f', '\u115f', '\u1160', '\u3164', '\u2800', '\u206a', '\u206b', '\u206c', '\u206d', '\u206e', '\u206f', '\ufe00', '\ufe0f',
+      '\u{e0100}', '\u{e01ef}', '\u{e0000}', '\u{e0041}', '\u{e007f}', '\u00a0', '\u1680', '\u2000', '\u2005', '\u200a', '\u202f', '\u205f', '\u3000',
+    ]
+    for (const bad of ['\u202e', '\u200b', '\u200d', '\u2066', '\u2069', '\ufeff', '\u0085', '\u2028', '\n', '\u0007', '\u200f', ...MORE_HIDDEN]) {
       const listing = trustListing([view({ schemaVersion: 1, rules: [allow(1, { command: `^a${bad}b$` })] })], patternsWith([]))
       const name = JSON.stringify(bad)
       expect(listing.listed, name).toEqual([])
       expect(listing.blocked[0]?.why, name).toBe('1 value(s) hold control, invisible or direction-changing characters')
       expect(listing.output.lines.some(line => line.startsWith(`${GUTTER}command: ^a`) && line.includes('[had control')), name).toBe(true)
-      expect(listing.output.lines.join('\n'), name).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069\u200b-\u200f\ufeff]/)
+      expect(listing.output.lines.join('\n'), name).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069\u200b-\u200f\ufeff\u00a0\u00ad\u034f\u115f\u1160\u3164\u2800\u206a-\u206f\ufe00-\ufe0f\u1680\u2000-\u200a\u202f\u205f\u3000]/u)
+      expect(listing.output.lines.join('\n'), name).not.toMatch(/[\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/u)
     }
     expect(cleanText('a\u202eb\u200bc\nd')).toBe('abc d')
+    expect(cleanText('a\u00a0b\u3000c\u{e0041}d\ufe0fe')).toBe('abcde')
     expect(inspectValue('plain', []).isUnclean).toBe(false)
+    expect(inspectValue('a b', []).isUnclean).toBe(false)
+    // Only the plain space stays.
+    expect(inspectValue('a\u00a0b', []).isUnclean).toBe(true)
   })
 
   test('the reasons add up, each file on its own, and the unconfirmable one has no code while the other has', () => {
@@ -671,6 +770,106 @@ describe('confirm mode through the pipeline (the default)', () => {
       expect(shown).not.toContain('allow or review')
       expect(shown).toContain('No allow rule or allowlist entry is offered for it meanwhile')
     }
+  })
+})
+
+describe('a file of rules that apply now and only add (DESIGN §16): confirming it lets them decide first', () => {
+  // A wrapper is stripped before a rule's pattern is matched: this one matches `sudo ls`, as `ls`.
+  const REVIEW_SUDO = { id: 'review-sudo', tier: 'review', tools: ['Bash'], command: '^ls\\b', reason: 'Sudo here is routine.' } as const
+  const ALLOW_RM = { id: 'allow-clean', tier: 'allow', tools: ['Bash'], command: '^rm\\s+-rf\\s+build$', reason: 'The build folder is disposable.' } as const
+  const SUDO_LS = { tool: 'Bash', command: 'sudo ls' } as const
+  const ONLY_REVIEW = fileOf({ schemaVersion: 1, rules: [REVIEW_SUDO] })
+
+  test('the notice, the status and the rules listing say its rules apply now and only add, and that confirming lets them decide first; no word of the file', async ($, on) => {
+    const w = world(on, { answer: KEEP_BLOCKED })
+    w.files.set(RULES, ONLY_REVIEW)
+    await $.tool.call(SUDO_LS)
+    const notices = w.logs.filter(line => line.includes('rules that apply now and only add'))
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('1 block, ask or review rule(s)')
+    expect(notices[0]).toContain('its rules decide before the shipped ones')
+    expect(notices[0]).toContain('/council trust')
+    expect(notices[0]).not.toMatch(/review-sudo|Sudo here/)
+    expect(w.toasts.filter(toast => toast.includes('not confirmed'))).toHaveLength(1)
+    for (const sub of ['status', 'rules']) {
+      const shown = await say($, w, sub)
+      expect(shown, sub).toContain('Project rules file: not confirmed. It has rules that apply now and only add to what the shipped rules decide (1 block, ask or review rule(s)); nothing in it is ignored.')
+      expect(shown, sub).toContain('lets its rules decide before the shipped ones')
+      if (sub === 'status') expect(shown, sub).not.toMatch(/review-sudo|Sudo here/)
+    }
+  })
+
+  test('where nothing draws the relay says so once, with counts and nothing from the file', async ($, on) => {
+    const w = world(on, { surfaces: [], answer: KEEP_BLOCKED })
+    w.files.set(RULES, ONLY_REVIEW)
+    await $.tool.call(SUDO_LS)
+    await $.tool.call(SUDO_LS)
+    const rows = w.appended.map(row => row.content.map(part => part.text ?? '').join('')).filter(row => row.includes('apply now and only add'))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toContain('1 block, ask or review rule(s)')
+    expect(rows[0]).toContain('its rules decide before the shipped ones')
+    expect(rows[0]).not.toMatch(/review-sudo|Sudo here/)
+  })
+
+  test('/council trust lists a file of review rules alone and offers a code; typing it lets the review rule decide first, which lowers a shipped question to a review', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: KEEP_BLOCKED })
+    w.files.set(RULES, ONLY_REVIEW)
+    // Unconfirmed: the shipped rule asks, and the file's review rule only adds.
+    await $.tool.call(SUDO_LS)
+    expect(w.asked).toHaveLength(1)
+    expect(w.modelRequests).toEqual([])
+    const shown = await say($, w, 'trust')
+    expect(shown).toContain('id: review-sudo')
+    expect(shown).toContain('Applies now and only adds to the shipped rules:')
+    expect(shown).toContain('After you confirm, these rules decide before the shipped ones, so a review rule here can replace a shipped question.')
+    const code = codeIn(shown)
+    expect(code).toMatch(/^[0-9a-f]{8}$/)
+    expect(await say($, w, `trust ${code}`)).toContain(`${ROOT}: confirmed. Its rules now decide before the shipped ones: 1 block, ask or review rule(s).`)
+    expect(recordOf(w)).toEqual([{ path: RULES, hash: await hashOf(ONLY_REVIEW) }])
+    w.asked.length = 0
+    expect(await $.tool.call({ tool: 'Bash', command: 'sudo ls -la' })).toEqual({ result: 'ran' })
+    expect(w.asked).toEqual([])
+    expect(w.modelRequests).toHaveLength(1)
+    expect(await say($, w, 'status')).toContain('trusted (you confirmed this content)')
+  })
+
+  test('a file with one allow rule and one review rule that matches sudo lists both, with the sentence, and confirming covers both', async ($, on) => {
+    const w = world(on, { replies: [APPROVE], answer: KEEP_BLOCKED })
+    const content = fileOf({ schemaVersion: 1, rules: [ALLOW_RM, REVIEW_SUDO] })
+    w.files.set(RULES, content)
+    const shown = await say($, w, 'trust')
+    expect(shown).toContain('id: allow-clean')
+    expect(shown).toContain('id: review-sudo')
+    expect(shown.indexOf('id: review-sudo')).toBeLessThan(shown.indexOf('After you confirm, these rules decide before the shipped ones'))
+    expect(shown.indexOf('After you confirm, these rules decide before the shipped ones')).toBeLessThan(shown.indexOf('Switched on by confirming:'))
+    expect(shown.indexOf('Switched on by confirming:')).toBeLessThan(shown.indexOf('id: allow-clean'))
+    await say($, w, `trust ${codeIn(shown)}`)
+    expect(recordOf(w)).toEqual([{ path: RULES, hash: await hashOf(content) }])
+    // Both are in force now: the allow rule lets rm through, the review rule replaces sudo's question.
+    expect(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).toEqual({ result: 'ran' })
+    expect(w.modelRequests).toEqual([])
+    expect(await $.tool.call(SUDO_LS)).toEqual({ result: 'ran' })
+    expect(w.asked).toEqual([])
+    expect(w.modelRequests).toHaveLength(1)
+  })
+
+  test('a file of lists alone has nothing to confirm: no notice, no listing, no code', async ($, on) => {
+    const w = world(on, { answer: KEEP_BLOCKED })
+    w.files.set(RULES, fileOf({ schemaVersion: 1, protectedPaths: ['infra/**'], protectedBranches: ['staging'] }))
+    await $.tool.call(SUDO_LS)
+    expect(w.logs.join('\n')).not.toMatch(/confirm|apply now/)
+    expect(await say($, w, 'trust')).toContain(text('trust.none'))
+    expect(await say($, w, 'status')).not.toContain('Project rules file:')
+  })
+
+  test('a file with a project check and a review rule: the notice keeps the held-back wording and adds that confirming lets its rules decide first', async ($, on) => {
+    const w = world(on, { answer: KEEP_BLOCKED })
+    w.files.set(RULES, fileOf({ schemaVersion: 1, rules: [REVIEW_SUDO], gimli: { commands: [{ name: 'tests', argv: ['npm', 'test'], timeoutMs: 120_000 }] } }))
+    await $.tool.call(SUDO_LS)
+    const notice = w.logs.find(line => line.includes('ignored until you confirm')) ?? ''
+    expect(notice).toContain('1 project check(s)')
+    expect(notice).toContain('Once you confirm the file, all of its rules decide before the shipped ones.')
+    expect(await say($, w, 'status')).toContain('Once you confirm the file, all of its rules decide before the shipped ones.')
   })
 })
 
@@ -910,13 +1109,93 @@ describe('the mod\'s own writes to the rules file', () => {
     expect(w.files.get(RULES)).toBe(existing)
   })
 
-  test('a file with nothing that waits is writable, and the entry added is confirmed', async ($, on) => {
+  for (const existing of [fileOf({ schemaVersion: 1 }), fileOf({ schemaVersion: 1, rules: [], protectedPaths: [] })]) {
+    test(`a file with no setting at all is writable like a file that is not there, and the entry added is confirmed: ${existing.replace(/\s+/g, ' ')}`, async ($, on) => {
+      const w = world(on, { answers: [ALLOW_ONCE, 'Add the rule'] })
+      w.files.set(RULES, existing)
+      await $.tool.call(SUDO)
+      const written = w.files.get(RULES) ?? ''
+      expect(JSON.parse(written).rules).toHaveLength(1)
+      expect(recordOf(w)).toEqual([{ path: RULES, hash: await hashOf(written) }])
+    })
+  }
+
+  test('a file with only lists is not confirmed by a rule the person adds: not offered, nothing written, nothing recorded', async ($, on) => {
     const existing = fileOf({ schemaVersion: 1, protectedPaths: ['infra/**'] })
     const w = world(on, { answers: [ALLOW_ONCE, 'Add the rule'] })
     w.files.set(RULES, existing)
+    expect(await $.tool.call(SUDO)).toEqual({ result: 'ran' })
+    expect(w.asked).toHaveLength(1)
+    expect(w.files.get(RULES)).toBe(existing)
+    expect(recordOf(w)).toEqual([])
+    // The allowlist is not offered either.
+    w.asked.length = 0
+    await $.tool.call({ tool: 'Bash', command: 'echo password=hunter2xyz > out.txt' })
+    for (const asked of w.asked) expect(asked.options).not.toContain('Greed: add to allowlist')
+    expect(w.files.get(RULES)).toBe(existing)
+  })
+
+  for (const tier of ['review', 'ask', 'block'] as const) {
+    test(`a file of ${tier} rules alone is not offered a rule: nothing waits in it, but nobody confirmed what it does once it decides first`, async ($, on) => {
+      const existing = fileOf({ schemaVersion: 1, rules: [{ id: `${tier}-ls`, tier, tools: ['Bash'], command: '^ls\\b', reason: 'Look.' }] })
+      const w = world(on, { answers: [ALLOW_ONCE, 'Add the rule'] })
+      w.files.set(RULES, existing)
+      expect(await $.tool.call(SUDO)).toEqual({ result: 'ran' })
+      expect(w.asked).toHaveLength(1)
+      expect(w.files.get(RULES)).toBe(existing)
+      expect(recordOf(w)).toEqual([])
+    })
+  }
+
+  test('a confirmed file of review rules alone keeps its trust through the person\'s own addition', async ($, on) => {
+    const existing = fileOf({ schemaVersion: 1, rules: [{ id: 'review-ls', tier: 'review', tools: ['Bash'], command: '^ls\\b', reason: 'Look.' }] })
+    const w = world(on, { answers: [ALLOW_ONCE, 'Add the rule'], store: { [STORE]: recordValue(withTrusted([], RULES, await hashOf(existing))) } })
+    w.files.set(RULES, existing)
     await $.tool.call(SUDO)
     const written = w.files.get(RULES) ?? ''
-    expect(JSON.parse(written).rules).toHaveLength(1)
+    expect(JSON.parse(written).rules).toHaveLength(2)
+    expect(recordOf(w)).toEqual([{ path: RULES, hash: await hashOf(written) }])
+  })
+
+  test('the allowlist entry follows the same rule: not offered for an unconfirmed file, and a confirmed file keeps its trust through it', async ($, on) => {
+    const existing = fileOf({ schemaVersion: 1, rules: [{ id: 'review-ls', tier: 'review', tools: ['Bash'], command: '^ls\\b', reason: 'Look.' }] })
+    const call = { tool: 'Write', file_path: `${ROOT}/src/db.ts`, content: 'const password = "hunter2xyz"' } as const
+    const unconfirmed = world(on, { answer: ALLOW_ONCE })
+    unconfirmed.files.set(RULES, existing)
+    await $.tool.call(call)
+    expect(unconfirmed.asked[0]?.options).not.toContain(ALLOWLIST)
+    expect(unconfirmed.files.get(RULES)).toBe(existing)
+    expect(recordOf(unconfirmed)).toEqual([])
+  })
+
+  test('a file edited after the offer, while the person answers, is not written and not trusted: the new content was not what they confirmed', async ($, on) => {
+    const existing = fileOf({ schemaVersion: 1, rules: [{ id: 'review-ls', tier: 'review', tools: ['Bash'], command: '^ls\\b', reason: 'Look.' }] })
+    const edited = fileOf({ schemaVersion: 1, rules: [{ id: 'review-ls', tier: 'review', tools: ['Bash'], command: '^ls\\b', reason: 'Look.' }, { id: 'allow-all', tier: 'allow', tools: ['*'], reason: 'Added meanwhile.' }] })
+    // The person answers "Add the rule" to the second question; the file changes as they do.
+    const queue: string[] = [ALLOW_ONCE, 'Add the rule']
+    const w = world(on, { answers: queue, store: { [STORE]: recordValue(withTrusted([], RULES, await hashOf(existing))) } })
+    Object.defineProperty(queue, 'shift', {
+      value: () => {
+        const answer = Array.prototype.shift.call(queue) as string | undefined
+        if (answer === 'Add the rule') w.files.set(RULES, edited)
+        return answer
+      },
+    })
+    w.files.set(RULES, existing)
+    await $.tool.call(SUDO)
+    expect(w.asked).toHaveLength(2)
+    expect(w.files.get(RULES)).toBe(edited)
+    expect(recordOf(w)).toEqual([{ path: RULES, hash: await hashOf(existing) }])
+  })
+
+  test('a confirmed file keeps its trust through the allowlist entry the person adds', async ($, on) => {
+    const existing = fileOf({ schemaVersion: 1, rules: [{ id: 'review-ls', tier: 'review', tools: ['Bash'], command: '^ls\\b', reason: 'Look.' }] })
+    const call = { tool: 'Write', file_path: `${ROOT}/src/db.ts`, content: 'const password = "hunter2xyz"' } as const
+    const w = world(on, { answers: [ALLOWLIST, 'Add it'], answer: KEEP_BLOCKED, replies: [APPROVE], store: { [STORE]: recordValue(withTrusted([], RULES, await hashOf(existing))) } })
+    w.files.set(RULES, existing)
+    await $.tool.call(call)
+    const written = w.files.get(RULES) ?? ''
+    expect(JSON.parse(written).gollum.allowlist).toHaveLength(1)
     expect(recordOf(w)).toEqual([{ path: RULES, hash: await hashOf(written) }])
   })
 
@@ -1361,7 +1640,7 @@ describe('an unconfirmed rules file only adds to the shipped decision (DESIGN §
     }
   })
 
-  test('a file with nothing that waits is read the same way, and the option at always counts as confirmed', async ($, on) => {
+  test('a file of an ask rule alone, nothing waiting in it, is read as an unconfirmed one: reviewed first, then put to the person', async ($, on) => {
     const w = world(on, { replies: [APPROVE], answer: ALLOW_ONCE })
     w.files.set(RULES, fileOf({ schemaVersion: 1, rules: [ASK_ALL] }))
     await $.tool.call(PUSH)

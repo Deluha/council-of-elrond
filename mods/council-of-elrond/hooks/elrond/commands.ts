@@ -1,8 +1,10 @@
 import type { CouncilSession } from '../../types'
 import type { CompiledConfig, LoadedConfig } from '../config/schema.js'
 import { GIMLI_COMMAND_KEYS, GOLLUM_PATTERN_KEYS, RULE_KEYS } from '../config/schema.js'
-import { cleanText, inspectValue, isCode, MAX_ITEMS, MAX_VALUE_CHARS } from '../config/trust.js'
+import { cleanText, heldCount, inspectValue, isCode, MAX_ITEMS, MAX_VALUE_CHARS } from '../config/trust.js'
 import type { TrustCounts, TrustSummary } from '../config/trust.js'
+import type { Rule } from '../config/types.js'
+import { toolMatcher } from '../rules/globs.js'
 import { MEMBERS, MODEL_SLOTS, TIERS } from '../config/types.js'
 import type { MemberName, ModelSlot } from '../config/types.js'
 import { whoOf } from '../members/brief.js'
@@ -367,6 +369,21 @@ export function countsText(counts: TrustCounts, mode?: Mode): string {
     .join(', ')
 }
 
+/** What applies now and only adds, as one phrase: `3 block, ask or review rule(s), 2 protected path, ...`. */
+export function appliedText(counts: TrustCounts, mode?: Mode): string {
+  return ([['appliedRules', 'trust.count.appliedRules'], ['appliedLists', 'trust.count.appliedLists']] as const)
+    .filter(([kind]) => counts[kind] > 0)
+    .map(([kind, key]) => text(key, { n: counts[kind] }, mode))
+    .join(', ')
+}
+
+/** The line and the toast for a file nobody confirmed, by what is wrong with leaving it so: counts only, never text from the file. */
+export function unconfirmedNotice(counts: TrustCounts): { line: string; toast: string } {
+  return heldCount(counts) > 0
+    ? { line: text('notice.rulesUntrusted', { summary: countsText(counts) }), toast: text('notice.rulesUntrustedShort') }
+    : { line: text('notice.rulesUnconfirmed', { summary: appliedText(counts) }), toast: text('notice.rulesUnconfirmedShort') }
+}
+
 /** How a loaded file stands, for `/council rules` and `status`: counts only, never text from the file. */
 export function trustLines(loaded: Pick<LoadedConfig, 'file' | 'needsTrust' | 'broken' | 'errors'>, mode?: Mode): string[] {
   // A broken file is never confirmed and has nothing to confirm: only how far it applies is said.
@@ -374,7 +391,14 @@ export function trustLines(loaded: Pick<LoadedConfig, 'file' | 'needsTrust' | 'b
   const state = loaded.file?.state
   if (state === 'confirmed') return [text('trust.state.confirmed', {}, mode)]
   if (state === 'option') return [text('trust.state.option', {}, mode)]
-  if (state === 'untrusted' && loaded.needsTrust !== undefined) return [text('trust.state.untrusted', { summary: countsText(loaded.needsTrust.counts, mode) }, mode)]
+  if (state === 'untrusted' && loaded.needsTrust !== undefined) {
+    const { counts } = loaded.needsTrust
+    return [
+      heldCount(counts) > 0
+        ? text('trust.state.untrusted', { summary: countsText(counts, mode) }, mode)
+        : text('trust.state.unconfirmed', { summary: appliedText(counts, mode) }, mode),
+    ]
+  }
   return []
 }
 
@@ -434,12 +458,50 @@ const itemLines = (head: string, keys: readonly string[], item: object, tally: T
   ...keys.flatMap(key => fieldLines(key, (item as Record<string, unknown>)[key], tally, patterns)),
 ]
 
+/** Probes for "matches every tool": plain names a tool may have. */
+const TOOL_PROBES = ['Bash', 'Read', 'Write', 'Edit', 'NotebookEdit', 'Monitor', 'Task', 'WebFetch', 'WebSearch', 'Glob', 'Grep', 'AskUserQuestion', 'mcp__server__tool', 'x', 'Z9']
+
+/** Whether one entry of a rule's `tools` stands for every tool: a lone `*`, a regular expression that matches any name. */
+const matchesEveryTool = (entry: string): boolean => {
+  try {
+    const matches = toolMatcher(entry)
+    return TOOL_PROBES.every(tool => matches(tool))
+  } catch {
+    return false
+  }
+}
+
+/** What a rule's listing says about how much it matches, in the mod's own words (not the file's): no pattern at all, or every tool. */
+function ruleNotes(rule: Rule): string[] {
+  const hasMatcher = rule.command !== undefined || rule.path !== undefined || rule.input !== undefined || rule.check !== undefined
+  return [...(hasMatcher ? [] : [text('trust.matchesAll')]), ...(rule.tools.some(matchesEveryTool) ? [text('trust.allTools')] : [])]
+}
+
+/** One list entry of the file, after its label and the gutter. */
+const entryLines = (label: string, entries: readonly string[], tally: Tally, patterns: readonly SecretPattern[]): string[][] =>
+  entries.map(entry => [label, guttered(shownValue(entry, tally, patterns))])
+
 /** What one file's listing comes to: its lines, and why the file cannot be confirmed from the session, if it cannot. */
 function fileListing(file: TrustFileView, patterns: readonly SecretPattern[]): { lines: string[]; why: string | undefined } {
   const { summary } = file
+  const { applied } = summary
   const tally: Tally = { secret: 0, long: 0, unclean: 0 }
-  const items: string[][] = [
-    ...summary.rules.map((rule, index) => itemLines(text('trust.rule', { n: index + 1 }), RULE_KEYS, rule, tally, patterns)),
+  // Rules are numbered through both groups, in the order listed.
+  let ruleNumber = 0
+  const ruleItem = (rule: Rule): string[] => [
+    ...itemLines(text('trust.rule', { n: ++ruleNumber }), RULE_KEYS, rule, tally, patterns),
+    ...ruleNotes(rule),
+  ]
+  // What applies now and only adds: every rule that is not an allow rule, and the lists. What confirming switches on follows.
+  const appliedItems: string[][] = [
+    ...applied.rules.map(ruleItem),
+    ...entryLines(text('trust.protectedPath'), applied.protectedPaths, tally, patterns),
+    ...entryLines(text('trust.protectedBranch'), applied.protectedBranches, tally, patterns),
+    ...entryLines(text('trust.productionPattern'), applied.productionPatterns, tally, patterns),
+    ...entryLines(text('trust.bigOperation'), applied.bigOperations, tally, patterns),
+  ]
+  const heldItems: string[][] = [
+    ...summary.rules.map(ruleItem),
     ...summary.disabledRules.map(id => [text('trust.disabled'), guttered(shownValue(id, tally, patterns))]),
     ...summary.models.map(entry => [text('trust.model', { slot: entry.slot }), guttered(shownValue(entry.model, tally, patterns))]),
     ...summary.checks.map((check, index) => itemLines(text('trust.check', { n: index + 1 }), GIMLI_COMMAND_KEYS, check, tally, patterns)),
@@ -451,12 +513,19 @@ function fileListing(file: TrustFileView, patterns: readonly SecretPattern[]): {
     ...(tally.long > 0 ? [text('trust.why.long', { n: tally.long, max: MAX_VALUE_CHARS })] : []),
     ...(tally.unclean > 0 ? [text('trust.why.unclean', { n: tally.unclean })] : []),
   ]
-  const shown = items.slice(0, MAX_ITEMS)
+  // At most MAX_ITEMS items are printed across both groups; a file past it cannot be confirmed from the session.
+  const shownApplied = appliedItems.slice(0, MAX_ITEMS)
+  const shownHeld = heldItems.slice(0, MAX_ITEMS - shownApplied.length)
+  const notShown = appliedItems.length + heldItems.length - shownApplied.length - shownHeld.length
+  const held = heldCount(file.counts)
   return {
     lines: [
-      text('trust.file', { where: whereShown(file.where, patterns), summary: countsText(file.counts) }),
-      ...shown.flat(),
-      ...(items.length > shown.length ? [text('trust.moreItems', { n: items.length - shown.length })] : []),
+      held > 0 ? text('trust.file', { where: whereShown(file.where, patterns), summary: countsText(file.counts) }) : text('trust.fileApplied', { where: whereShown(file.where, patterns) }),
+      ...(shownApplied.length > 0 ? [text('trust.group.applied'), ...shownApplied.flat()] : []),
+      ...(applied.rules.length > 0 ? [text('trust.decideFirst')] : []),
+      ...(shownHeld.length > 0 || summary.allowlist > 0 ? [text('trust.group.held')] : []),
+      ...shownHeld.flat(),
+      ...(notShown > 0 ? [text('trust.moreItems', { n: notShown })] : []),
       ...(summary.allowlist > 0 ? [text('trust.allowlist', { n: summary.allowlist })] : []),
       reasons.length === 0 ? text('trust.code', { code: file.code }) : text('trust.unconfirmable', { why: reasons.join('; ') }),
     ],
@@ -497,6 +566,10 @@ export const trustOutput = (files: readonly TrustFileView[], patterns: readonly 
 export function trustedOutput(files: readonly { where: string; counts: TrustCounts }[]): Output {
   return {
     title: text('cmd.title'),
-    lines: files.map(file => text('trust.confirmedFile', { where: cleanText(file.where), summary: countsText(file.counts) })),
+    lines: files.map(file =>
+      heldCount(file.counts) > 0
+        ? text('trust.confirmedFile', { where: cleanText(file.where), summary: countsText(file.counts) })
+        : text('trust.confirmedRules', { where: cleanText(file.where), summary: appliedText(file.counts) }),
+    ),
   }
 }

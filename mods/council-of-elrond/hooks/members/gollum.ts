@@ -56,6 +56,8 @@ export function scannedText(call: Call): string {
 const MAX_SCAN_CHARS = 500_000
 /** A longer text is scanned from its start and, too, from this many characters at its end. */
 const TAIL_SCAN_CHARS = 100_000
+/** When a middle is skipped, the head and the tail each reach this far into it, so a token at either seam is read whole. */
+const SEAM_OVERLAP_CHARS = 512
 const MAX_FINDINGS = 10
 const SNIPPET_CHARS = 160
 
@@ -88,11 +90,13 @@ export async function scanText(
   patterns: readonly SecretPattern[] = SECRET_PATTERNS,
   allowlist: readonly string[] = [],
 ): Promise<GollumScan> {
-  const capped = text.length > MAX_SCAN_CHARS
   // Head and tail together cover a text up to the cap plus the tail; only a longer one has a middle that is skipped.
   const scan: GollumScan = { high: [], low: [], partial: text.length > MAX_SCAN_CHARS + TAIL_SCAN_CHARS }
-  // The head and the tail, joined by a line break so no match spans the gap.
-  const body = capped ? `${text.slice(0, MAX_SCAN_CHARS)}\n${text.slice(Math.max(MAX_SCAN_CHARS, text.length - TAIL_SCAN_CHARS))}` : text
+  // A head and a tail that meet or overlap are the text whole: no join, so nothing is cut in two. Over a skipped middle, each
+  // reaches SEAM_OVERLAP_CHARS into it, so a token at either seam is intact; the two are joined by a line break so no match spans the gap.
+  const headEnd = MAX_SCAN_CHARS + SEAM_OVERLAP_CHARS
+  const tailStart = text.length - TAIL_SCAN_CHARS - SEAM_OVERLAP_CHARS
+  const body = tailStart > headEnd ? `${text.slice(0, headEnd)}\n${text.slice(tailStart)}` : text
   const covered: [number, number][] = []
   const seen = new Set<string>()
 

@@ -324,7 +324,21 @@ describe('redaction noise this release added is gone, and what must be caught st
   })
 
   test('(b) a short path or substitution, the shell\'s own PWD and OLDPWD: not secrets; the keyword in any other name is', async () => {
-    for (const line of ['export PWD=/tmp', 'OLDPWD=/work', 'pwd=`pwd`', 'PWD=/home/me/project', 'OLDPWD=/work/project/sub', 'export PWD=$(pwd)', '{"PWD": "/work/x"}', 'pwd=/tmp', 'token=~/x', 'token=/work', 'pwd=$PWD', 'PWD=hunter2xyz']) await quiet(line)
+    for (const line of ['export PWD=/tmp', 'OLDPWD=/work', 'pwd=`pwd`', 'PWD=/home/me/project', 'OLDPWD=/work/project/sub', 'export PWD=$(pwd)', '{"PWD": "/work/x"}', 'pwd=/tmp', 'token=~/x', 'token=/work', 'pwd=$PWD']) await quiet(line)
+    // PWD and OLDPWD are let go on a directory value only: a path, `.` or `..`, an expansion or a backtick substitution, with no `;`.
+    for (const line of ['PWD=./src', 'PWD=../x/y', 'PWD=~/work', 'PWD=${HOME}/work', 'OLDPWD=$HOME', 'export OLDPWD=/work/project', 'PWD="/home/me/my project"', 'PWD=.', 'PWD=..']) await quiet(line)
+    // Anything else after PWD is the password keyword of an ODBC-style connection string, as it was on origin/main.
+    for (const line of [
+      'PWD=hunter2xyz',
+      'Server=db;UID=sa;PWD=MyStr0ngP@ssw0rd;',
+      'pyodbc.connect("DSN=x;UID=u;PWD=Passw0rd123")',
+      '"PWD": "Tr0ub4dor&3"',
+      'OLDPWD=Sup3rSecret!!',
+      'PWD="/x;PWD=Tr0ub4dor3"',
+      'PWD=.hidden99',
+    ]) await loud(line)
+    expect(redact('Server=db;UID=sa;PWD=MyStr0ngP@ssw0rd;')).toBe('Server=db;UID=sa;PWD=[REDACTED secret];')
+    expect(redact('"PWD": "Tr0ub4dor&3"')).toBe('"PWD": "[REDACTED secret]"')
     // PWD must be the whole name, in capitals: `pwd` is a keyword anywhere else.
     for (const line of ['pwd=hunter2xyz', 'MYPWD=hunter2xyz', 'NEWPWD=hunter2xyz', 'Pwd=hunter2xyz', 'DB_PWD=hunter2xyz']) await loud(line)
     // A longer path is redacted as it was on origin/main, whatever the name: only a path under 6 characters is let go.
@@ -350,6 +364,14 @@ describe('redaction noise this release added is gone, and what must be caught st
       '"token": 12345,',
       'token = getToken(user, opts)',
       'password = Column(String(128), nullable=False)',
+      'token = min(8)',
+      'secret = randomBytes(32)',
+      'secret = getToken(user)',
+      'password = forms.CharField(widget=x)',
+      'password = String(128)',
+      'password: Numeric(10)',
+      'token = Uint8Array(32)',
+      'password = Config()',
     ]) await quiet(line)
     for (const value of ['z.string().min(8)', 'crypto.randomBytes(32)', 'uuid4()', 'response.json()["token"]', 'await getToken(user)', 'new Token(options)', '${1:-default}', 'tokens[0]', 'getToken(user', 'getSecret(', 'response.json()[']) {
       expect(isPlaceholder(value), value).toBe(true)
@@ -365,6 +387,16 @@ describe('redaction noise this release added is gone, and what must be caught st
     for (const value of ['Secret(abcd1234)', 'Sup3r(Secret)9', 'Sup3r(Secret9', 'getToken(abc12345def)', 'getToken("abcdef")', "getToken('abcdef')", 'f(a)(b)', 'f(a).', 'f(a)x', 'await', 'a.b', '(hunter2xyz)', '$ecret123!', 'x()[abcd1234efgh]']) {
       expect(isPlaceholder(value) && value !== 'await' && value !== 'a.b', value).toBe(false)
     }
+    // A name that starts with a capital and is called with a number, or has a digit in it, is a word dressed as a call
+    // (`isImplausibleCallee`); a lower-case callee and the known type names are code.
+    for (const value of ['Winter(2024)', 'Monkey(1)', 'Passw0rd()', 'Zx(9)', 'Winter(2024,x)', 'Foo.Bar(7)', 'Winter( 2024)', 'Uuid4()']) {
+      expect(isPlaceholder(value), value).toBe(false)
+      expect(isCodeReference(value), value).toBe(false)
+    }
+    for (const value of ['uuid4()', 'min(8)', 'randomBytes(32)', 'getToken(user)', 'z.string().min(8)', 'CharField(widget=x)', 'String(128)', 'Column(String(128), nullable=False)', 'Config()', 'Token(options)']) {
+      expect(isPlaceholder(value), value).toBe(true)
+      expect(isCodeReference(value), value).toBe(true)
+    }
     // A call cut at a space or a comma is code only while it holds names: not a digit, a symbol or a name with a digit in it.
     for (const value of ['Summer(2024!', 'Summer(2024', 'aec([e', 'pass(word!', 'Sup3r(Secret', 'Hunter(abc123']) expect(isPlaceholder(value), value).toBe(false)
     for (const value of ['getToken(user', 'Column(String(128)', 'a.b(c.d']) expect(isPlaceholder(value), value).toBe(true)
@@ -376,6 +408,10 @@ describe('redaction noise this release added is gone, and what must be caught st
     for (const line of [
       'password=$ecret123!',
       'password=Sup3r(Secret)9',
+      'password=Winter(2024)',
+      'password=Monkey(1)',
+      'password=Passw0rd()',
+      'password=Zx(9)',
       'password=<realkey12345>',
       'password=(hunter2xyz)',
       'PASSWORD=abc12',
@@ -416,7 +452,7 @@ describe('redaction noise this release added is gone, and what must be caught st
 
   test('every new or changed pattern stays linear on adversarial input', async () => {
     const size = 200_000
-    const values = ['(', 'a(', 'a()', 'a().', 'a()[', 'a[', '[', ']', 'a(b)(c)', '${1:-', '`', '/', '~/', '0', 'await ', 'new a(']
+    const values = ['(', 'a(', 'a()', 'a().', 'a()[', 'a[', '[', ']', 'a(b)(c)', '${1:-', '`', '/', '~/', '0', 'await ', 'new a(', 'A(1', 'A(1)', 'A1(', 'PWD=/', 'PWD=;']
     for (const value of values) {
       for (const input of [value.repeat(Math.ceil(size / value.length)), `password=${value.repeat(Math.ceil(size / value.length))}`, `password=a${value.repeat(Math.ceil(size / value.length))}`, `${'a'.repeat(size)}${value}`]) {
         const started = Date.now()

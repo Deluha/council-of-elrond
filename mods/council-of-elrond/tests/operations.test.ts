@@ -5,6 +5,7 @@ import {
   FORCE_SUFFIX,
   hasGitPart,
   isAutomaticDenial,
+  isCacheable,
   isForcePush,
   isOutOfRounds,
   isWipeOutcome,
@@ -616,5 +617,74 @@ describe('a call with a git part (DESIGN §16)', () => {
     expect(hasGitPart({ tool: 'Write', input: { file_path: `${ROOT}/a`, content: 'git push' } })).toBe(false)
     // Too long to split: read as text, the careful way.
     expect(hasGitPart({ tool: 'Bash', input: { command: `echo ${'x'.repeat(21_000)}; git push` } })).toBe(true)
+  })
+})
+
+describe('whether a call may be served from the approve cache (DESIGN §16)', () => {
+  const cacheable = (command: string): boolean => {
+    const call: Call = { tool: 'Bash', input: { command } }
+    const where = { ...CONTEXT, cwd: ROOT }
+    const classification = classify(call, SHIPPED_COMPILED, where)
+    return isCacheable(call, classification, operationOf(call, classification, where))
+  }
+
+  test('an ordinary reviewed call is cacheable', () => {
+    for (const command of ['rm -rf build', 'curl -X POST https://example.com/hook', 'mv a b', 'echo x > out.txt']) expect(cacheable(command), command).toBe(true)
+  })
+
+  test('a call any of whose parts matched a script rule is not, even when another rule decided the part', () => {
+    for (const command of [
+      'bash deploy.sh',
+      './deploy.sh',
+      // The redirect's rule and the path's tie at review, and the first of the two decides: the script rule matched all the same.
+      './deploy.sh > out.log',
+      'python3 migrate.py',
+      "python3 -c 'print(1)'",
+      'cat x | python3',
+      'eval "$CMD"',
+      'xargs rm < list.txt',
+      'rm -rf build && ./after.sh',
+    ]) {
+      expect(cacheable(command), command).toBe(false)
+    }
+    // The classification says it, whichever rule decided.
+    const call: Call = { tool: 'Bash', input: { command: './deploy.sh > out.log' } }
+    const classification = classify(call, SHIPPED_COMPILED, CONTEXT)
+    expect(classification.decided?.ruleId).not.toMatch(/^script-/)
+    expect(classification.isScript).toBe(true)
+  })
+
+  test('a call that runs a project runner or make is not, gated or not, in a compound or behind a wrapper', () => {
+    for (const command of [
+      'make deploy && curl -X POST https://example.com/hook',
+      'npm run release && rm -rf build',
+      'rm -rf build; yarn build',
+      'pnpm test && rm -rf dist',
+      'nice -n 5 make && rm -rf build',
+      'npx tsc && rm -rf build',
+      'cd sub && cargo run && rm -rf build',
+      '(just deploy; rm -rf build)',
+    ]) {
+      expect(cacheable(command), command).toBe(false)
+    }
+  })
+
+  test('a call with a git part, too many parts, an ask rule after the review, or too long to split is not', () => {
+    expect(cacheable('git reset --hard HEAD~1')).toBe(false)
+    expect(cacheable('git status && rm -rf build')).toBe(false)
+    expect(cacheable(`rm -rf build; ${'echo x; '.repeat(400)}`)).toBe(false)
+    const call: Call = { tool: 'Bash', input: { command: 'rm -rf build' } }
+    const classification = classify(call, SHIPPED_COMPILED, CONTEXT)
+    const operation = operationOf(call, classification, CONTEXT)
+    expect(isCacheable(call, classification, operation)).toBe(true)
+    expect(isCacheable(call, classification, { ...operation, hasTooManyParts: true })).toBe(false)
+    const alsoAsk = classification.decided as NonNullable<typeof classification.decided>
+    expect(isCacheable(call, { ...classification, alsoAsk }, operation)).toBe(false)
+  })
+
+  test('a file tool is cacheable when the rules say review; its text is what runs', () => {
+    const call: Call = { tool: 'Write', input: { file_path: `${ROOT}/.github/workflows/ci.yml`, content: 'x' } }
+    const classification = classify(call, SHIPPED_COMPILED, CONTEXT)
+    expect(isCacheable(call, classification, operationOf(call, classification, CONTEXT))).toBe(true)
   })
 })

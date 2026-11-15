@@ -239,14 +239,15 @@ describe('a cut script or SQL file is never approved by a model alone (DESIGN §
     expect((await auditLines(w)).at(-1)).toMatchObject({ verdict: 'approve', decision: 'unavailable', outcome: 'refused' })
   })
 
-  test('a script within the limit with an approve runs, unasked, and is remembered', async ($, on) => {
+  test('a script within the limit with an approve runs, unasked, and is not remembered: the same call is reviewed again, since the script may have changed', async ($, on) => {
     const w = world(on, { replies: [APPROVE] })
     await withScript($, w, 'rm -rf build\necho done\n')
     expect(await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh' })).toEqual({ result: 'ran' })
     const requests = w.modelRequests.length
     expect(await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh' })).toEqual({ result: 'ran' })
     expect(w.asked).toEqual([])
-    expect(w.modelRequests).toHaveLength(requests)
+    // Reviewed again: the script file may have been edited between the two calls.
+    expect(w.modelRequests.length).toBeGreaterThan(requests)
   })
 
   test('a revise or a block of a cut script stands as it is', async ($, on) => {

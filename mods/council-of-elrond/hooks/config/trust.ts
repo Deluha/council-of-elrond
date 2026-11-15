@@ -59,7 +59,9 @@ export const FIELD_TRUST: Readonly<Record<FieldName, FieldTrust>> = {
  * let through to the person, and after the review of one they review, `review`
  * reviews a call the shipped rules let through and changes nothing else. So an
  * unconfirmed file never takes away a review, a preview, the council or a
- * question the shipped rules give (DESIGN §16).
+ * question the shipped rules give (DESIGN §16). Once the file is confirmed,
+ * though, every one of its rules decides before the shipped non-block rules, so
+ * confirming changes what all of them do: the listing shows them all (DESIGN §16).
  */
 export const TIER_TRUST: Readonly<Record<Tier, 'always' | 'needs-trust'>> = {
   allow: 'needs-trust',
@@ -69,10 +71,25 @@ export const TIER_TRUST: Readonly<Record<Tier, 'always' | 'needs-trust'>> = {
 }
 
 /**
- * What confirming a file would switch on, by kind, each item whole (every field the schema allows on it, so
- * the listing cannot leave one out). Every value is from the file: shown only cleaned, never cut or redacted.
+ * What of a file applies now and only adds to the shipped rules (`always` fields, every rule that is not an `allow`
+ * rule), each item whole. Confirming does not switch these on, but it lets the rules among them decide before the shipped ones.
+ */
+export type AppliedSummary = {
+  rules: Rule[]
+  protectedPaths: string[]
+  protectedBranches: string[]
+  productionPatterns: string[]
+  bigOperations: string[]
+}
+
+/**
+ * What a file holds, in two groups, each item whole (every field the schema allows on it, so the listing cannot
+ * leave one out): what applies now and only adds (`applied`), and what confirming switches on (the rest). Every
+ * value is from the file: shown only cleaned, never cut or redacted.
  */
 export type TrustSummary = {
+  applied: AppliedSummary
+  /** What confirming switches on: the allow rules. */
   rules: Rule[]
   disabledRules: string[]
   /** How many entries; never the entries, which may be exact secrets. */
@@ -82,7 +99,24 @@ export type TrustSummary = {
   patterns: GollumPattern[]
 }
 
-export type TrustCounts = { rules: number; disabled: number; allowlist: number; models: number; checks: number; patterns: number; total: number }
+/** `rules` etc. count what confirming switches on; `appliedRules` and `appliedLists` what applies now (a rule of another tier; an entry of a list). `total` is all of them. */
+export type TrustCounts = {
+  rules: number
+  disabled: number
+  allowlist: number
+  models: number
+  checks: number
+  patterns: number
+  appliedRules: number
+  appliedLists: number
+  total: number
+}
+
+/** What confirming switches on, in all (the settings that wait). */
+export const heldCount = (counts: TrustCounts): number => counts.rules + counts.disabled + counts.allowlist + counts.models + counts.checks + counts.patterns
+
+/** Whether confirming a file changes anything: a setting waits for it, or a rule of the file would decide first. */
+export const isConfirmable = (counts: TrustCounts): boolean => heldCount(counts) > 0 || counts.appliedRules > 0
 
 export type Split = {
   /** The tightening part: applied whatever the trust. */
@@ -101,6 +135,9 @@ export const countsOf = (summary: TrustSummary): TrustCounts => {
     models: summary.models.length,
     checks: summary.checks.length,
     patterns: summary.patterns.length,
+    appliedRules: summary.applied.rules.length,
+    appliedLists:
+      summary.applied.protectedPaths.length + summary.applied.protectedBranches.length + summary.applied.productionPatterns.length + summary.applied.bigOperations.length,
   }
   return { ...parts, total: Object.values(parts).reduce((sum, n) => sum + n, 0) }
 }
@@ -136,7 +173,15 @@ export function splitByTrust(overrides: Overrides): Split {
     }
   }
   const held = needs as unknown as Overrides
+  const kept = always as unknown as Overrides
   const summary: TrustSummary = {
+    applied: {
+      rules: (kept.rules ?? []).map(rule => ({ ...rule })),
+      protectedPaths: [...(kept.protectedPaths ?? [])],
+      protectedBranches: [...(kept.protectedBranches ?? [])],
+      productionPatterns: [...(kept.productionPatterns ?? [])],
+      bigOperations: [...(kept.bigOperations ?? [])],
+    },
     rules: (held.rules ?? []).map(rule => ({ ...rule })),
     disabledRules: [...(held.disableRules ?? [])],
     allowlist: held.gollum?.allowlist?.length ?? 0,
@@ -151,9 +196,22 @@ export function splitByTrust(overrides: Overrides): Split {
 export type RulesFile = {
   /** The file's real path (the key of the trust record). */
   path: string
+  /**
+   * `nothing`: no rule of the file and no setting that waits, so there is nothing to confirm. `untrusted`: confirming it
+   * would change something (a setting waits, or a rule of it would decide first), and nobody has.
+   */
   state: 'nothing' | 'option' | 'confirmed' | 'untrusted'
   /** SHA-256 of the exact text read, in hex; set once it was worked out (not for `nothing` or `option`). */
   hash?: string
+  /** State `nothing`, yet the file holds settings (lists that only add): nobody can confirm it, so the mod does not rewrite it either. */
+  holdsSettings?: boolean
+}
+
+/** Whether a file holds any setting at all: a rule, a list, a model, a pattern, a check. Only `schemaVersion` and empty lists are none. */
+export function hasSettings(overrides: Overrides): boolean {
+  const isFilled = (value: unknown): boolean =>
+    Array.isArray(value) ? value.length > 0 : isRaw(value) ? Object.values(value).some(isFilled) : typeof value === 'string' ? value !== '' : value !== undefined && value !== null
+  return Object.entries(overrides).some(([key, value]) => key !== 'schemaVersion' && isFilled(value))
 }
 
 /** The project checks of the files whose settings are being held back: they are not run, and the council says so. */
@@ -163,8 +221,13 @@ export const ignoredChecksOf = (loaded: readonly { needsTrust?: { isIgnored: boo
 /** The part of those held back because the file has errors (not because it waits for confirmation). */
 export const brokenChecksOf = (loaded: readonly { broken?: { checks: number } | undefined }[]): number => loaded.reduce((sum, one) => sum + (one.broken?.checks ?? 0), 0)
 
-/** Whether a file is held back: its needs-trust settings are ignored. */
-export const isHeldBack = (loaded: { file?: RulesFile | undefined }): boolean => loaded.file?.state === 'untrusted'
+/**
+ * Whether the mod leaves a file alone: nobody confirmed it (its needs-trust settings are ignored, or it holds settings nobody can
+ * confirm). Only a file that is not there, one that is confirmed or trusted by the option, and one with no setting at all, is
+ * written by the mod, and trusted afterwards.
+ */
+export const isHeldBack = (loaded: { file?: RulesFile | undefined }): boolean =>
+  loaded.file?.state === 'untrusted' || (loaded.file?.state === 'nothing' && loaded.file.holdsSettings === true)
 
 // The trust record: the plugin's own store holds one value, the files a person confirmed, each by path and content hash.
 
@@ -243,8 +306,11 @@ export const MAX_VALUE_CHARS = 400
 // What a terminal can be made to act on or to hide: C0 and C1 controls, DEL, and the Unicode line and paragraph separators.
 const CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g
 
-// What changes how text reads without showing: direction marks and overrides, isolates, zero-width and joining characters, the byte order mark.
-const HIDDEN = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g
+// What changes how text reads without showing: direction marks and overrides, isolates, zero-width and joining characters, the byte order mark,
+// the soft hyphen, the combining grapheme joiner, the Hangul and braille fillers, the invisible operators (U+206A to U+206F), variation
+// selectors, tag characters, and every Unicode space but the plain one (a space that is not one, in a word or a path, reads like one).
+const HIDDEN =
+  /[\u00a0\u00ad\u034f\u061c\u115f\u1160\u1680\u2000-\u200f\u202a-\u202f\u205f-\u2064\u2066-\u206f\u2800\u3000\u3164\ufe00-\ufe0f\ufeff\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/gu
 
 /** A value from a file with controls replaced by a space and invisible or direction-changing characters removed. */
 export const cleanText = (value: string): string => value.replace(CONTROLS, ' ').replace(HIDDEN, '')

@@ -78,7 +78,8 @@ describe("no re-entry from the mod's own calls", () => {
   // A project rule that blocks AskUserQuestion: were the mod's own $.ui.ask gated, it would be refused.
   const blockAsking = { rules: [{ id: 'block-ask', tier: 'block', tools: ['AskUserQuestion'], reason: 'test' }] }
 
-  test("no re-entry from the mod's own calls: its questions never reach the gate", async ($, on) => {
+  // The file's block rule is unconfirmed unless the option trusts it, and a mod that leaves an unconfirmed file alone offers no rule to add (DESIGN §16).
+  test("no re-entry from the mod's own calls: its questions never reach the gate", { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { answer: ALLOW_ONCE })
     rulesWith(w, blockAsking)
     const call = { tool: 'Bash', command: 'sudo ls' } as const

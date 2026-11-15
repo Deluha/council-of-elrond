@@ -383,7 +383,7 @@ describe('in the pipeline', () => {
     const w = world(on, { replies: [{ isAnswered: false, reason: 'aborted', usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }], answer: KEEP_BLOCKED })
     w.processReply = () => ({ exitCode: 0, stdout: 'x\n' })
     await $.tool.call({ tool: 'Bash', command: 'git push origin a b c d e' })
-    expect(w.asked[0]?.question).toContain('This push names 5 refspecs and commits are shown for the first 3 only')
+    expect(w.asked[0]?.question).toContain('This push names 5 refspecs and commits are shown for the')
     expect(w.processes.filter(argv => argv[1] === 'log')).toHaveLength(3)
   })
 

@@ -42,6 +42,8 @@ export type ShellPart = {
   isUnresolved?: boolean
   /** Set when the part hands a command line to another program in a form that could not be read (a key sequence, a file of commands). */
   isUnreadable?: boolean
+  /** Set when the part types or pastes into another terminal (a multiplexer, a window system's input tool): it can answer a prompt or type a command as the person. */
+  isTerminalInput?: boolean
 }
 
 export type Split = {
@@ -168,9 +170,11 @@ const WRAPPERS: ReadonlyMap<string, Spec> = new Map(Object.entries({
     chdir: ['-R', '--root', '-w', '--wd'],
     flags: ['-m', '-u', '-i', '-n', '-p', '-C', '-U', '-T', '-f', '-r', '-c', '--mount', '--uts', '--ipc', '--net', '--pid', '--cgroup', '--user', '--time', '--fork', '--kill-child', '--map-root-user', '--map-current-user', '--map-auto', '--keep-caps', '--mount-proc', '--help', '--version', '-h', '-V'],
   }),
+  // `-S` and `-G` take their value glued or after `=` only: a word after them is the command. `-W` takes one.
   nsenter: specOf({
-    values: ['-t', '-S', '-G', '--target', '--setuid', '--setgid'],
-    flags: ['-a', '-m', '-u', '-i', '-n', '-p', '-C', '-T', '-U', '-r', '-w', '-F', '-Z', '-e', '-W', '--all', '--mount', '--uts', '--ipc', '--net', '--pid', '--cgroup', '--time', '--user', '--root', '--wd', '--wdns', '--no-fork', '--follow-context', '--preserve-credentials', '--env', '-h', '-V', '--help', '--version'],
+    values: ['-t', '-W', '--target', '--wdns'],
+    optional: ['-S', '-G', '--setuid', '--setgid'],
+    flags: ['-a', '-m', '-u', '-i', '-n', '-p', '-C', '-T', '-U', '-r', '-w', '-F', '-Z', '-e', '--all', '--mount', '--uts', '--ipc', '--net', '--pid', '--cgroup', '--time', '--user', '--root', '--wd', '--no-fork', '--follow-context', '--preserve-credentials', '--env', '-h', '-V', '--help', '--version'],
     movesDir: true,
   }),
   // chrt and taskset take one positional (priority, mask or list) before the
@@ -195,9 +199,9 @@ const WRAPPERS: ReadonlyMap<string, Spec> = new Map(Object.entries({
     flags: ['--noprofile', '--quiet', '--debug', '--trace', '--tracelog', '--private', '--private-tmp', '--private-dev', '--private-cache', '--private-lib', '--noroot', '--nonewprivs', '--seccomp', '--nosound', '--no3d', '--novideo', '--nodbus', '--nou2f', '--notv', '--nodvd', '--nogroups', '--disable-mnt', '--allusers', '--x11', '--apparmor', '--appimage', '--writable-etc', '--writable-var', '--writable-run-user', '--writable-var-log', '--machine-id', '--keep-dev-shm', '--keep-var-tmp', '--overlay', '--overlay-tmpfs', '--overlay-clean', '--help', '--version'],
   }),
   'systemd-run': specOf({
-    values: ['-u', '--unit', '-p', '--property', '-E', '--setenv', '-M', '--machine', '-H', '--host', '--description', '--slice', '--uid', '--gid', '--nice', '--service-type', '--timer-property', '--on-active', '--on-boot', '--on-startup', '--on-unit-active', '--on-unit-inactive', '--on-calendar', '--on-clock-change', '--on-timezone-change', '--job-mode'],
+    values: ['-u', '--unit', '-p', '--property', '-E', '--setenv', '-M', '--machine', '-H', '--host', '--description', '--slice', '--uid', '--gid', '--nice', '--service-type', '--timer-property', '--on-active', '--on-boot', '--on-startup', '--on-unit-active', '--on-unit-inactive', '--on-calendar', '--on-clock-change', '--on-timezone-change', '--job-mode', '--expand-environment'],
     chdir: ['-D', '--working-directory', '--root-directory'],
-    flags: ['--user', '--system', '--scope', '--no-block', '--wait', '--pty', '-t', '--pipe', '-P', '--shell', '-S', '--no-ask-password', '--collect', '-q', '--quiet', '--remain-after-exit', '-r', '--same-dir', '-d', '--send-sighup', '--ignore-failure', '--no-pager', '--no-wall', '-h', '--help', '--version', '--slice-inherit', '--expand-environment'],
+    flags: ['--user', '--system', '--scope', '--no-block', '--wait', '--pty', '-t', '--pipe', '-P', '--shell', '-S', '--no-ask-password', '--collect', '-q', '--quiet', '--remain-after-exit', '-r', '--same-dir', '-d', '--send-sighup', '--ignore-failure', '--no-pager', '--no-wall', '-h', '--help', '--version', '--slice-inherit'],
   }),
   eatmydata: specOf({}),
   proxychains: specOf({ values: ['-f'], flags: ['-q'] }),
@@ -486,6 +490,14 @@ type Option = {
   isUnknown: boolean
 }
 
+/** Whether an option word of pnpm is `-c` or `--shell-mode`, alone, by a unique prefix, or in a cluster of its flag letters. */
+function isShellModeOption(spec: Spec, word: string, name: string | undefined): boolean {
+  if (name === '-c' || name === '--shell-mode') return true
+  if (word.startsWith('--') || !word.startsWith('-')) return false
+  const letters = [...spec.flags].filter(flag => /^-[A-Za-z]$/.test(flag)).map(flag => flag[1] as string)
+  return [...word.slice(1)].every(letter => letters.includes(letter)) && word.includes('c')
+}
+
 /** The long option a written name stands for: the exact name, else the one it is a unique prefix of. */
 function longOption(spec: Spec, typed: string): string | undefined {
   const all = [...spec.values, ...spec.flags, ...spec.optional].filter(name => name.startsWith('--'))
@@ -585,6 +597,9 @@ function envStringWords(text: string): string[] {
 
 const MAX_BRACE_ELEMENTS = 16
 
+/** At most this many `env -S` strings in one command are spliced into env's own words; more is not read for sure (review). */
+const MAX_ENV_SPLICES = 8
+
 /**
  * A word that is one brace list of plain elements (`{rm,-rf,/x}`, `r{m,m}`):
  * the words the shell makes of it, or undefined when it is not that (nested,
@@ -607,10 +622,12 @@ function coreOf(input: readonly string[]): Core {
   const optionValues: string[] = []
   let unresolved: string[] | undefined
   let movesDir = false
+  let envSplices = 0
   // A call whose options were not all read: its words as they stand are classified
   // again, and where it runs is not known either.
-  const markUnresolved = (rest: string[]) => {
-    unresolved ??= rest
+  // The words are made only the first time: a crafted run of unknown options must not copy the rest for each.
+  const markUnresolved = (rest: () => string[]) => {
+    unresolved ??= rest()
     movesDir = true
   }
   // Skip leading assignments, plain keywords, function-definition headers and
@@ -662,6 +679,8 @@ function coreOf(input: readonly string[]): Core {
       let j = k + 1
       let isGlobalUnknown = false
       let isMoved = false
+      // pnpm's `-c` / `--shell-mode`: the words after the options are one shell command line.
+      let isShellMode = false
       const globalValues: string[] = []
       while (j < words.length && !runner.subs.has(words[j] as string)) {
         const global = words[j] as string
@@ -673,6 +692,7 @@ function coreOf(input: readonly string[]): Core {
         if (!global.startsWith('-') || global === '-' || global === '--') break
         const read = readOption(runner, words, j, true)
         if (read.isUnknown) isGlobalUnknown = true
+        if (name === 'pnpm' && isShellModeOption(runner, global, read.name)) isShellMode = true
         if (read.name !== undefined && runner.chdir.has(read.name)) isMoved = true
         if (read.attached !== undefined) globalValues.push(...read.attached)
         // An option not known, followed by the subcommand: it took no value (the way that finds the command).
@@ -703,6 +723,7 @@ function coreOf(input: readonly string[]): Core {
           if (!option.startsWith('-') || option === '-') break
           const read = readOption(runner, words, k, true)
           if (read.isUnknown) isUnknown = true
+          if (name === 'pnpm' && isShellModeOption(runner, option, read.name)) isShellMode = true
           if (read.attached !== undefined) optionValues.push(...read.attached)
           if (read.name !== undefined) {
             if (runner.chdir.has(read.name)) movesDir = true
@@ -710,7 +731,11 @@ function coreOf(input: readonly string[]): Core {
           }
           k = read.next
         }
-        if (isUnknown || (hasSpec && !hasSeparator)) markUnresolved([name, sub, ...words.slice(j + 1)])
+        // What follows is one shell string: it is read as a script, once, and not stripped of wrappers again (a chain of them would copy the rest each time).
+        const isString = isShellMode && k < words.length
+        if (isString) nestedScripts.push(words.slice(k).join(' '))
+        if (isUnknown || (hasSpec && !hasSeparator)) markUnresolved(() => [name, sub, ...words.slice(j + 1)])
+        if (isString) break
         continue
       }
     }
@@ -738,7 +763,7 @@ function coreOf(input: readonly string[]): Core {
         }
         k = read.next
       }
-      if (isUnknown) markUnresolved([name, ...words.slice(start + 1)])
+      if (isUnknown) markUnresolved(() => [name, ...words.slice(start + 1)])
       continue
     }
 
@@ -764,7 +789,7 @@ function coreOf(input: readonly string[]): Core {
         if (!option.startsWith('-') || option === '-') break
         if (PID_WRAPPERS.has(canonical) && PID_OPTION.test(option)) isPidForm = true
         const read = readOption(spec, words, k, false)
-        if (read.isUnknown) markUnresolved([name, ...words.slice(start + 1)])
+        if (read.isUnknown) markUnresolved(() => [name, ...words.slice(start + 1)])
         if (read.attached !== undefined) optionValues.push(...read.attached)
         if (read.name !== undefined) {
           if (spec.chdir.has(read.name)) movesDir = true
@@ -773,6 +798,14 @@ function coreOf(input: readonly string[]): Core {
           // is a command line, and its words are read as the rest of env's own.
           if (canonical === 'env' && (read.name === '-S' || read.name === '--split-string')) {
             const raw = read.value ?? ''
+            // Past the bound the string is no longer spliced (that copies every word after it, and a crafted command
+            // made it quadratic): it is read alone, and the part is reviewed as one whose options were not all read.
+            if (++envSplices > MAX_ENV_SPLICES) {
+              markUnresolved(() => [name, ...words.slice(start + 1)])
+              nestedScripts.push(raw)
+              k = read.next
+              continue
+            }
             splits.push({ raw, rest: words.slice(read.next) })
             words = [...words.slice(0, k), ...envStringWords(raw), ...words.slice(read.next)]
             continue
@@ -854,17 +887,26 @@ type Inline = {
   scripts: string[]
   /** Part of what it runs could not be read: the call is reviewed. */
   isUnreadable: boolean
+  /** It types or pastes into another terminal. */
+  isInput: boolean
 }
 
-const inline = (...scripts: (string | undefined)[]): Inline => ({ scripts: scripts.filter((script): script is string => script !== undefined && script !== ''), isUnreadable: false })
-const UNREADABLE: Inline = { scripts: [], isUnreadable: true }
-const merge = (parts: readonly Inline[]): Inline => ({ scripts: parts.flatMap(part => part.scripts), isUnreadable: parts.some(part => part.isUnreadable) })
+const inline = (...scripts: (string | undefined)[]): Inline => ({ scripts: scripts.filter((script): script is string => script !== undefined && script !== ''), isUnreadable: false, isInput: false })
+const UNREADABLE: Inline = { scripts: [], isUnreadable: true, isInput: false }
+const INPUT: Inline = { scripts: [], isUnreadable: false, isInput: true }
+const merge = (parts: readonly Inline[]): Inline => ({
+  scripts: parts.flatMap(part => part.scripts),
+  isUnreadable: parts.some(part => part.isUnreadable),
+  isInput: parts.some(part => part.isInput),
+})
+/** The same, with the command lines it also runs. */
+const withScripts = (base: Inline, ...scripts: (string | undefined)[]): Inline => merge([base, inline(...scripts)])
 
 /** The command a program makes of its trailing words: one word is a shell string as written, several are an argument vector. */
 const commandOf = (rest: readonly string[]): string | undefined =>
   rest.length === 0 ? undefined : rest.map((word, index) => (index === 0 && rest.length === 1 ? word : quoted(word))).join(' ')
 
-type TmuxKind = 'shell' | 'if' | 'tmux' | 'set-hook' | 'keys' | 'bind' | 'source' | 'menu' | 'none'
+type TmuxKind = 'shell' | 'if' | 'tmux' | 'set-hook' | 'keys' | 'bind' | 'source' | 'menu' | 'paste' | 'prompt' | 'choose' | 'set' | 'display' | 'detach' | 'none'
 type TmuxCommand = { name: string; alias: string; values: ReadonlySet<string>; kind: TmuxKind }
 
 const tmuxCommand = (name: string, alias: string, kind: TmuxKind = 'none', values: ReadonlySet<string> = new Set()): TmuxCommand => ({ name, alias, values, kind })
@@ -874,13 +916,15 @@ const tmuxCommand = (name: string, alias: string, kind: TmuxKind = 'none', value
  * take a value. tmux resolves a written name by an exact alias or name, else by
  * a prefix of a name that no other name shares: the same here.
  */
+const CHOOSE_VALUES = setOf('-F', '-f', '-K', '-O', '-t')
+
 const TMUX_COMMANDS: readonly TmuxCommand[] = [
   tmuxCommand('attach-session', 'attach'), tmuxCommand('bind-key', 'bind', 'bind', setOf('-N', '-T')), tmuxCommand('break-pane', 'breakp'),
-  tmuxCommand('capture-pane', 'capturep'), tmuxCommand('choose-buffer', ''), tmuxCommand('choose-client', ''), tmuxCommand('choose-tree', ''),
+  tmuxCommand('capture-pane', 'capturep'), tmuxCommand('choose-buffer', '', 'choose', CHOOSE_VALUES), tmuxCommand('choose-client', '', 'choose', CHOOSE_VALUES), tmuxCommand('choose-tree', '', 'choose', CHOOSE_VALUES),
   tmuxCommand('clear-history', 'clearhist'), tmuxCommand('clear-prompt-history', 'clearphist'), tmuxCommand('clock-mode', ''),
-  tmuxCommand('command-prompt', ''), tmuxCommand('confirm-before', 'confirm', 'tmux', setOf('-c', '-p', '-t')), tmuxCommand('copy-mode', ''),
-  tmuxCommand('customize-mode', ''), tmuxCommand('delete-buffer', 'deleteb'), tmuxCommand('detach-client', 'detach'),
-  tmuxCommand('display-menu', 'menu', 'menu'), tmuxCommand('display-message', 'display'), tmuxCommand('display-panes', 'displayp'),
+  tmuxCommand('command-prompt', '', 'prompt', setOf('-I', '-p', '-t', '-T')), tmuxCommand('confirm-before', 'confirm', 'tmux', setOf('-c', '-p', '-t')), tmuxCommand('copy-mode', ''),
+  tmuxCommand('customize-mode', ''), tmuxCommand('delete-buffer', 'deleteb'), tmuxCommand('detach-client', 'detach', 'detach', setOf('-E', '-s', '-t')),
+  tmuxCommand('display-menu', 'menu', 'menu'), tmuxCommand('display-message', 'display', 'display', setOf('-c', '-d', '-t')), tmuxCommand('display-panes', 'displayp'),
   tmuxCommand('display-popup', 'popup', 'shell', setOf('-b', '-c', '-d', '-e', '-h', '-s', '-S', '-t', '-T', '-w', '-x', '-y')),
   tmuxCommand('find-window', 'findw'), tmuxCommand('has-session', 'has'),
   tmuxCommand('if-shell', 'if', 'if', setOf('-t')), tmuxCommand('join-pane', 'joinp'), tmuxCommand('kill-pane', 'killp'), tmuxCommand('kill-server', ''),
@@ -891,7 +935,7 @@ const TMUX_COMMANDS: readonly TmuxCommand[] = [
   tmuxCommand('move-pane', 'movep'), tmuxCommand('move-window', 'movew'),
   tmuxCommand('new-session', 'new', 'shell', setOf('-c', '-e', '-f', '-F', '-n', '-s', '-t', '-x', '-y')),
   tmuxCommand('new-window', 'neww', 'shell', setOf('-c', '-e', '-F', '-n', '-t')),
-  tmuxCommand('next-layout', 'nextl'), tmuxCommand('next-window', 'next'), tmuxCommand('paste-buffer', 'pasteb'),
+  tmuxCommand('next-layout', 'nextl'), tmuxCommand('next-window', 'next'), tmuxCommand('paste-buffer', 'pasteb', 'paste', setOf('-b', '-s', '-t')),
   tmuxCommand('pipe-pane', 'pipep', 'shell', setOf('-t')), tmuxCommand('previous-layout', 'prevl'), tmuxCommand('previous-window', 'prev'),
   tmuxCommand('refresh-client', 'refresh'), tmuxCommand('rename-session', 'rename'), tmuxCommand('rename-window', 'renamew'),
   tmuxCommand('resize-pane', 'resizep'), tmuxCommand('resize-window', 'resizew'),
@@ -900,7 +944,7 @@ const TMUX_COMMANDS: readonly TmuxCommand[] = [
   tmuxCommand('select-layout', 'selectl'), tmuxCommand('select-pane', 'selectp'), tmuxCommand('select-window', 'selectw'),
   tmuxCommand('send-keys', 'send', 'keys', setOf('-c', '-N', '-t')), tmuxCommand('send-prefix', ''), tmuxCommand('server-access', ''),
   tmuxCommand('set-buffer', 'setb'), tmuxCommand('set-environment', 'setenv'), tmuxCommand('set-hook', '', 'set-hook', setOf('-t')),
-  tmuxCommand('set-option', 'set'), tmuxCommand('set-window-option', 'setw'), tmuxCommand('show-buffer', 'showb'), tmuxCommand('show-environment', 'showenv'),
+  tmuxCommand('set-option', 'set', 'set', setOf('-t')), tmuxCommand('set-window-option', 'setw', 'set', setOf('-t')), tmuxCommand('show-buffer', 'showb'), tmuxCommand('show-environment', 'showenv'),
   tmuxCommand('show-hooks', ''), tmuxCommand('show-messages', 'showmsgs'), tmuxCommand('show-options', 'show'), tmuxCommand('show-prompt-history', 'showphist'),
   tmuxCommand('show-window-options', 'showw'), tmuxCommand('source-file', 'source', 'source'),
   tmuxCommand('split-window', 'splitw', 'shell', setOf('-c', '-e', '-F', '-l', '-p', '-t')), tmuxCommand('start-server', 'start'),
@@ -916,8 +960,9 @@ function tmuxCommandsNamed(typed: string): readonly TmuxCommand[] {
 }
 
 /** The options and the positional words of a tmux command's arguments, read as getopt does. */
-function tmuxOptions(args: readonly string[], valued: ReadonlySet<string>): { flags: ReadonlySet<string>; rest: string[] } {
+function tmuxOptions(args: readonly string[], valued: ReadonlySet<string>): { flags: ReadonlySet<string>; values: ReadonlyMap<string, string>; rest: string[] } {
   const flags = new Set<string>()
+  const values = new Map<string, string>()
   let i = 0
   for (; i < args.length; i++) {
     const option = args[i] as string
@@ -931,12 +976,16 @@ function tmuxOptions(args: readonly string[], valued: ReadonlySet<string>): { fl
     for (let c = 1; c < option.length; c++) {
       flags.add(option[c] as string)
       if (!valued.has(`-${option[c]}`)) continue
+      values.set(option[c] as string, c === option.length - 1 ? (args[i + 1] ?? '') : option.slice(c + 1))
       if (c === option.length - 1) i++
       break
     }
   }
-  return { flags, rest: args.slice(i) }
+  return { flags, values, rest: args.slice(i) }
 }
+
+/** tmux options that hold a command line, or a format that runs one with `#(...)`. */
+const TMUX_RUNNING_OPTIONS = ['default-command', 'default-shell', 'lock-command', 'status-left', 'status-right']
 
 const KEY_ENTER = /^(?:Enter|C-m|C-j|KPEnter)$/
 
@@ -963,12 +1012,14 @@ function tmuxOne(command: readonly string[], depth: number): Inline {
   // An ambiguous prefix is refused by tmux; it is reviewed if any command it could be runs something.
   if (named.length > 1) return named.some(candidate => candidate.kind !== 'none') ? UNREADABLE : inline()
   const found = named[0] as TmuxCommand
-  const { flags, rest } = tmuxOptions(args, found.values)
+  const { flags, values, rest } = tmuxOptions(args, found.values)
   const asTmux = (text: string | undefined): Inline => (text === undefined || text === '' ? inline() : inline(`tmux ${text}`))
   switch (found.kind) {
     case 'shell':
       // run-shell -C takes a tmux command, not a shell command.
-      return found.name === 'run-shell' && flags.has('C') ? asTmux(rest[0]) : inline(commandOf(rest))
+      if (found.name === 'run-shell' && flags.has('C')) return asTmux(rest[0])
+      // `pipe-pane -I` feeds what the command prints into the pane as typed input.
+      return withScripts(found.name === 'pipe-pane' && flags.has('I') ? INPUT : inline(), commandOf(rest))
     case 'if':
       return merge([flags.has('F') ? inline() : inline(rest[0]), asTmux(rest[1]), asTmux(rest[2])])
     case 'tmux':
@@ -979,19 +1030,43 @@ function tmuxOne(command: readonly string[], depth: number): Inline {
       // A binding only registers its command (a reload of a config file is the usual one): what it would run is read, a file it would load is not a finding.
       return rest.length > 1 ? inline(...tmuxList(rest.slice(1), depth + 1).scripts) : inline()
     case 'keys': {
-      if (flags.has('X')) return inline()
-      if (flags.has('H')) return UNREADABLE
+      // Every form sends something to a pane; `-X` sends a copy-mode command, `-H` hexadecimal bytes.
+      if (flags.has('X')) return INPUT
+      if (flags.has('H')) return merge([INPUT, UNREADABLE])
       // Each run of keys up to an Enter is typed into a shell: a single word is a command line, several are keys this cannot read.
       const segments: string[][] = [[]]
       for (const key of rest) {
         if (KEY_ENTER.test(key)) segments.push([])
         else (segments[segments.length - 1] as string[]).push(key)
       }
-      return merge(
-        segments
+      return merge([
+        INPUT,
+        ...segments
           .filter(keys => keys.length > 0)
-          .map(keys => (keys.length === 1 ? inline(keys[0]) : { scripts: [keys.join(' ')], isUnreadable: true })),
-      )
+          .map(keys => (keys.length === 1 ? inline(keys[0]) : { ...inline(keys.join(' ')), isUnreadable: true })),
+      ])
+    }
+    case 'paste':
+      return INPUT
+    case 'prompt':
+      // Types into the tmux prompt; its template is a tmux command, run when the prompt is answered.
+      return merge([INPUT, asTmux(rest[0])])
+    case 'choose':
+      // A template is a tmux command run on the choice; it is read, and the call is reviewed all the same.
+      return rest.length > 0 ? merge([UNREADABLE, asTmux(rest[0])]) : inline()
+    case 'set': {
+      // Options that run a command (a new pane's, a lock's, a status line's `#(...)`), or any option whose value does.
+      const name = (rest[0] ?? '').replace(/\[\d*\]$/, '')
+      // tmux takes an exact option name, else a unique prefix: `status` is an option of its own.
+      const isRunning = name !== 'status' && name.length >= 4 && TMUX_RUNNING_OPTIONS.some(option => option.startsWith(name))
+      return isRunning || rest.slice(1).some(value => value.includes('#(')) ? UNREADABLE : inline()
+    }
+    case 'display':
+      return rest.some(word => word.includes('#(')) ? UNREADABLE : inline()
+    case 'detach': {
+      // `detach-client -E` replaces the client with a shell command.
+      const command = values.get('E')
+      return command === undefined ? inline() : withScripts(UNREADABLE, command)
     }
     case 'source':
     case 'menu':
@@ -1004,13 +1079,15 @@ function tmuxOne(command: readonly string[], depth: number): Inline {
 /** The command lines a `tmux` call runs, from its words. */
 function tmuxInline(coreWords: readonly string[]): Inline {
   let i = 1
-  // tmux's own options come first; `-c` there is a shell command too.
+  let own = inline()
+  // tmux's own options come first; `-c` there is a shell command too, and `-f` names a file of commands it runs at start.
   for (; i < coreWords.length && (coreWords[i] as string).startsWith('-'); i++) {
     const option = coreWords[i] as string
-    if (option === '-c') return inline(coreWords[i + 1])
+    if (option === '-c') return withScripts(own, coreWords[i + 1])
+    if (/^-[A-Za-z0-9]*f/.test(option)) own = merge([own, UNREADABLE])
     if (['-L', '-S', '-f', '-T'].includes(option)) i++
   }
-  return tmuxList(coreWords.slice(i))
+  return merge([own, tmuxList(coreWords.slice(i))])
 }
 
 /** `screen [options] command args`, `screen -X stuff 'text'`: the command line it starts or types. */
@@ -1029,7 +1106,8 @@ function screenInline(coreWords: readonly string[]): Inline {
       if (letter === 'X') {
         const rest = word.length > c + 1 ? [word.slice(c + 1), ...coreWords.slice(i + 1)] : coreWords.slice(i + 1)
         const [action, ...args] = rest
-        if (action === 'stuff') return inline(args[0])
+        if (action === 'stuff') return withScripts(INPUT, args[0])
+        if (action === 'paste' || action === 'readbuf' || action === 'process') return INPUT
         if (action === 'screen' || action === 'exec') {
           // `screen [-opts] [n] cmd args`: the options and a window number come first.
           let at = 0
@@ -1065,8 +1143,8 @@ function zellijInline(coreWords: readonly string[]): Inline {
     return inline(commandOf(rest.slice(j)))
   }
   const [action, ...args] = rest
-  if (action === 'write-chars') return inline(args[0])
-  if (action === 'write') return UNREADABLE
+  if (action === 'write-chars') return withScripts(INPUT, args[0])
+  if (action === 'write') return merge([INPUT, UNREADABLE])
   if (action === 'new-pane' || action === 'new-tab') return inline(commandOf(afterSeparator()))
   return inline()
 }
@@ -1144,6 +1222,33 @@ function parallelInline(coreWords: readonly string[]): Inline {
   return inline(commandOf(end < 0 ? rest : rest.slice(0, end)))
 }
 
+/** The programs that type into another window's terminal, and the words after which they do. */
+const INPUT_WORDS: Readonly<Record<string, readonly string[]>> = {
+  xdotool: ['type', 'key', 'keydown'],
+  ydotool: ['type', 'key'],
+}
+
+/** `kitty @ send-text|send-key`, `wezterm cli send-text`, `xdotool type|key|keydown`, `ydotool type|key`, `wtype`, `osascript` with `keystroke`. */
+function isTerminalInputTool(coreWords: readonly string[]): boolean {
+  const [program, ...rest] = coreWords
+  switch (program) {
+    case 'kitty':
+    case 'kitten':
+      return rest.includes('@') && rest.some(word => word === 'send-text' || word === 'send-key')
+    case 'wezterm':
+      return rest.includes('cli') && rest.includes('send-text')
+    case 'xdotool':
+    case 'ydotool':
+      return rest.some(word => INPUT_WORDS[program]?.includes(word) === true)
+    case 'wtype':
+      return true
+    case 'osascript':
+      return rest.some(word => /\bkeystroke\b|\bkey code\b/.test(word))
+    default:
+      return false
+  }
+}
+
 /** The command lines a program runs for what it is given: a shell's `-c`, `eval`, `su -c`, a multiplexer, a runner, `find -exec`. */
 function inlineOf(coreWords: readonly string[]): Inline {
   const program = coreWords[0]
@@ -1157,6 +1262,7 @@ function inlineOf(coreWords: readonly string[]): Inline {
   if (program === 'find') return findInline(coreWords)
   if (program === 'entr') return entrInline(coreWords)
   if (program === 'parallel') return parallelInline(coreWords)
+  if (isTerminalInputTool(coreWords)) return INPUT
   return inline(inlineScriptOf(coreWords))
 }
 
@@ -1301,7 +1407,7 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
         out.isCut = true
       } else {
         const { wrappers, coreWords, nestedScripts, unresolved, movesDir, optionValues } = coreOf(words)
-        const { scripts, isUnreadable } = inlineOf(coreWords)
+        const { scripts, isUnreadable, isInput } = inlineOf(coreWords)
         const part: ShellPart = {
           text,
           words,
@@ -1317,6 +1423,7 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
           movesDir,
           optionValues,
           ...(isUnreadable && { isUnreadable }),
+          ...(isInput && { isTerminalInput: true }),
         }
         out.parts.push(part)
         // A runner whose inner command was not found for sure: the words as

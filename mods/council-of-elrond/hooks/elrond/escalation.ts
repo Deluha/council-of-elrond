@@ -44,8 +44,50 @@ const MAX_QUESTION_CHARS = 2_500
 
 const PREVIEW_LINES = 15
 
-/** A row of the dialog, the gutter included, is at most this many characters: a longer line wraps onto rows that carry the gutter too. */
-const MAX_ROW_CHARS = 100
+/** Over the cap, a reviewer's reason is cut to at most this many characters, and every reason together to the budget. */
+const REASON_CHARS = 240
+const REASONS_BUDGET = 1_200
+
+/** Over the cap, the call keeps at least its first and its last this many lines, whatever else goes. */
+const CALL_KEPT_LINES = 4
+
+/**
+ * A row of the dialog, the gutter included, is at most this many display columns: a longer line wraps onto rows that carry the
+ * gutter too. Narrower than a typical pane, so the dialog is less likely to re-wrap a row on its own, without the gutter.
+ */
+const MAX_ROW_COLUMNS = 72
+
+/** East Asian Wide and Fullwidth characters (and emoji), which a terminal draws two columns wide. */
+const WIDE_RANGES: readonly (readonly [number, number])[] = [
+  [0x1100, 0x115f],
+  [0x2e80, 0x303e],
+  [0x3041, 0x33ff],
+  [0x3400, 0x4dbf],
+  [0x4e00, 0x9fff],
+  [0xa000, 0xa4cf],
+  [0xa960, 0xa97f],
+  [0xac00, 0xd7a3],
+  [0xf900, 0xfaff],
+  [0xfe10, 0xfe19],
+  [0xfe30, 0xfe6f],
+  [0xff00, 0xff60],
+  [0xffe0, 0xffe6],
+  [0x1b000, 0x1b16f],
+  [0x1f300, 0x1f64f],
+  [0x1f680, 0x1f6ff],
+  [0x1f900, 0x1f9ff],
+  [0x1fa70, 0x1faff],
+  [0x20000, 0x3fffd],
+]
+
+/** Display columns of one character: a combining mark 0, a wide or fullwidth one 2, any other 1. */
+function columnsOf(char: string): number {
+  if (/^[\p{Mn}\p{Me}]$/u.test(char)) return 0
+  const code = char.codePointAt(0) ?? 0
+  return WIDE_RANGES.some(([from, to]) => code >= from && code <= to) ? 2 : 1
+}
+
+const widthOf = (value: string): number => Array.from(value).reduce((sum, char) => sum + columnsOf(char), 0)
 
 /**
  * One line of the dialog's own, from text the call or a reviewer supplied: no control character, so it cannot start another
@@ -53,13 +95,27 @@ const MAX_ROW_CHARS = 100
  */
 const oneLine = (value: string): string => cleanText(value).trim()
 
-/** A cleaned line after the gutter, wrapped into rows of at most MAX_ROW_CHARS characters; every row starts with the gutter. */
+/**
+ * A cleaned line after the gutter, wrapped into rows of at most MAX_ROW_COLUMNS display columns, gutter included; every row
+ * starts with the gutter. A character that does not fit goes to the next row, and a combining mark stays with its base.
+ */
 function wrapRows(gutter: string, line: string): string[] {
-  const width = Math.max(1, MAX_ROW_CHARS - gutter.length)
-  const chars = Array.from(line)
+  const room = Math.max(2, MAX_ROW_COLUMNS - widthOf(gutter))
   const rows: string[] = []
-  for (let at = 0; at < chars.length; at += width) rows.push(`${gutter}${chars.slice(at, at + width).join('')}`)
-  return rows.length === 0 ? [gutter] : rows
+  let row = ''
+  let used = 0
+  for (const char of line) {
+    const columns = columnsOf(char)
+    if (used + columns > room && row !== '') {
+      rows.push(`${gutter}${row}`)
+      row = ''
+      used = 0
+    }
+    row += char
+    used += columns
+  }
+  if (row !== '' || rows.length === 0) rows.push(`${gutter}${row}`)
+  return rows
 }
 
 /** A line of an excerpt (its wrapped rows and the characters it holds), or the dialog's own marker for what was left out. */
@@ -85,27 +141,57 @@ const entryText = (entry: Entry, mode: Mode): string => (entry.kind === 'text' ?
 
 const excerptText = (entries: readonly Entry[], mode: Mode): string => entries.map(entry => entryText(entry, mode)).join('\n')
 
+/** The cost of the marker line that says what was dropped, worked out for the widest numbers. */
+const markerCostOf = (mode: Mode): number => entryText({ kind: 'marker', lines: 99_999, chars: 99_999 }, mode).length + 1
+
 /**
- * The excerpt with lines dropped from its end until `excess` characters are saved, the first line always kept; what was dropped
- * is said by one marker line at the end (joined to the marker already there, if the dropping reached it).
+ * The entries between the first `head` and the last `tail` lines of text, as `[from, to)`: what may be dropped. Empty (`[0, 0]`)
+ * when the excerpt has no more than `head + tail` lines. The dialog's own marker line sits inside, or beside, what is kept.
  */
-function dropFromEnd(entries: readonly Entry[], excess: number, mode: Mode): Entry[] {
-  const kept = [...entries]
-  // The marker that will say so costs its own length: worked out for the widest numbers.
-  const markerCost = entryText({ kind: 'marker', lines: 99_999, chars: 99_999 }, mode).length + 1
+function middleOf(entries: readonly Entry[], head: number, tail: number): [number, number] {
+  const at = entries.flatMap((entry, index) => (entry.kind === 'text' ? [index] : []))
+  if (at.length <= head + tail) return [0, 0]
+  return [(at[head - 1] ?? 0) + 1, at[at.length - tail] ?? 0]
+}
+
+/** `entries[from..to)` replaced by one marker line that says how much that was; a marker next to it is joined to it. */
+function dropRange(entries: readonly Entry[], from: number, to: number): Entry[] {
+  const before = entries.slice(0, from)
+  const after = entries.slice(to)
   const dropped = { lines: 0, chars: 0 }
-  let saved = 0
-  while (kept.length > 1 && saved - markerCost < excess) {
-    const last = kept.pop() as Entry
-    saved += entryText(last, mode).length + 1
-    dropped.lines += last.kind === 'text' ? 1 : last.lines
-    dropped.chars += last.chars
+  const take = (entry: Entry): void => {
+    dropped.lines += entry.kind === 'text' ? 1 : entry.lines
+    dropped.chars += entry.chars
   }
-  if (dropped.lines === 0 && dropped.chars === 0) return kept
-  const end = kept.at(-1)
-  if (end?.kind === 'marker') kept[kept.length - 1] = { kind: 'marker', lines: end.lines + dropped.lines, chars: end.chars + dropped.chars }
-  else kept.push({ kind: 'marker', ...dropped })
-  return kept
+  entries.slice(from, to).forEach(take)
+  const previous = before.at(-1)
+  if (previous?.kind === 'marker') take(before.pop() as Entry)
+  const next = after[0]
+  if (next?.kind === 'marker') take(after.shift() as Entry)
+  return [...before, { kind: 'marker', ...dropped }, ...after]
+}
+
+/** The excerpt cut to its first and last line, one marker line between them. */
+const firstAndLast = (entries: readonly Entry[]): Entry[] => {
+  const [from, to] = middleOf(entries, 1, 1)
+  return from >= to ? [...entries] : dropRange(entries, from, to)
+}
+
+/**
+ * The excerpt with lines dropped from its middle until `excess` characters are saved: the first `head` and the last `tail`
+ * lines are never dropped, and the dropping starts next to the end that is kept (the marker line says how much went).
+ */
+function dropMiddle(entries: readonly Entry[], excess: number, head: number, tail: number, mode: Mode): Entry[] {
+  const [from, to] = middleOf(entries, head, tail)
+  if (from >= to) return [...entries]
+  const markerCost = markerCostOf(mode)
+  let saved = 0
+  let at = to
+  while (at > from && saved - markerCost < excess) {
+    at--
+    saved += entryText(entries[at] as Entry, mode).length + 1
+  }
+  return dropRange(entries, at, to)
 }
 
 /** Each value cut to its share of `room` characters, in proportion to its length, ending in the dialog's marker for what was left out. */
@@ -130,8 +216,9 @@ export const optionsOf = (mode: Mode = 'plain', withAllowlist = false): string[]
 
 /**
  * The question as the dialog shows it. `patterns`: the call's (the shipped ones and a confirmed project file's). Over the
- * size cap, the end of the call excerpt goes first, then the end of the preview's, then each reviewer's reason and each
- * secret's snippet is cut to its share: the dialog's own lines and every reviewer's verdict line stay.
+ * size cap, in this order: each reviewer's reason is cut to its share of a fixed budget (at most REASON_CHARS), the preview to
+ * its first and last line, the middle of the call excerpt (its first and last CALL_KEPT_LINES lines stay), then what is
+ * still over comes out of the reasons and each secret's snippet. The dialog's own lines and every reviewer's verdict line stay.
  */
 export function questionText(question: Question, mode: Mode = 'plain', patterns: readonly SecretPattern[] = SECRET_PATTERNS): string {
   const gutter = text('ask.gutter', {}, mode)
@@ -170,16 +257,23 @@ export function questionText(question: Question, mode: Mode = 'plain', patterns:
   let reasons = opinions.map(opinion => ('problem' in opinion ? opinion.problem : opinion.reason))
   let snippets = secrets.map(secret => secret.snippet)
   let joined = build(reasons, snippets)
+  // Over the cap, in this order: what a reviewer wrote (model prose) is cut first, each reason to its share of a fixed budget; then
+  // the preview to its first and last line; then the middle of the call, never its first and last lines.
   if (joined.length > MAX_QUESTION_CHARS) {
-    call = dropFromEnd(call, joined.length - MAX_QUESTION_CHARS, mode)
+    const limit = Math.min(REASON_CHARS, Math.floor(REASONS_BUDGET / Math.max(1, reasons.length)))
+    reasons = reasons.map(reason => cutShares([reason], limit, mode)[0] as string)
     joined = build(reasons, snippets)
   }
   if (joined.length > MAX_QUESTION_CHARS && preview !== undefined) {
-    preview = dropFromEnd(preview, joined.length - MAX_QUESTION_CHARS, mode)
+    preview = firstAndLast(preview)
     joined = build(reasons, snippets)
   }
   if (joined.length > MAX_QUESTION_CHARS) {
-    // What is left is the dialog's own lines and what reviewers said: each reason gives up its share of the excess.
+    call = dropMiddle(call, joined.length - MAX_QUESTION_CHARS, CALL_KEPT_LINES, CALL_KEPT_LINES, mode)
+    joined = build(reasons, snippets)
+  }
+  if (joined.length > MAX_QUESTION_CHARS) {
+    // What is left is the dialog's own lines, the call's ends and what reviewers said: each reason gives up its share of the excess.
     const total = reasons.reduce((sum, reason) => sum + reason.length, 0)
     reasons = cutShares(reasons, total - (joined.length - MAX_QUESTION_CHARS), mode)
     joined = build(reasons, snippets)

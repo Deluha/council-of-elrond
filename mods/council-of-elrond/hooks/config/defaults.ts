@@ -78,6 +78,13 @@ const ASK: readonly Rule[] = [
     check: 'claude-session',
     reason: 'Starts a nested Claude Code session, or changes its MCP servers or configuration, which can run without this protection.',
   },
+  {
+    id: 'terminal-input',
+    tier: 'ask',
+    tools: SHELL,
+    check: 'terminal-input',
+    reason: 'Sends keystrokes or pasted text to another terminal, which can answer a prompt or type a command as the person.',
+  },
 ]
 
 const REVIEW: readonly Rule[] = [

@@ -125,6 +125,53 @@ describe('a call with a git part is never served from the cache (DESIGN §16)', 
   })
 })
 
+describe('a call that runs a script or a project runner is never served from the cache (DESIGN §16)', () => {
+  // Each is reviewed (the call's text is not what runs), approved, and then asked for again with the same words.
+  const RUNS: readonly (readonly [string, string])[] = [
+    ['a shell script', 'bash deploy.sh'],
+    ['a script by its path', './deploy.sh'],
+    ['a script by its path whose redirect decides the rule', './deploy.sh > out.log'],
+    ['a script file of an interpreter', 'python3 migrate.py'],
+    ['inline code', "python3 -c 'print(1)'"],
+    ['code through eval', 'eval "$CMD"'],
+    ['make with a review for another reason', 'make deploy && curl -X POST https://example.com/hook'],
+    ['a package script with a review for another reason', 'npm run release && rm -rf build'],
+    ['a runner and a delete', 'npx tsc && rm -rf build'],
+  ]
+
+  for (const [name, command] of RUNS) {
+    test(`${name}: reviewed again on repeat, and its approve is not written to the cache (${command})`, async ($, on) => {
+      const w = world(on, { replies: [APPROVE] })
+      const state = watchState(on)
+      const call = { tool: 'Bash', command } as const
+      await $.tool.call(call)
+      const first = w.modelRequests.length
+      expect(first).toBeGreaterThan(0)
+      expect(lastOf(state.written).cache).toEqual([])
+      // The script is edited in the meantime: the same words are another run, and a reviewer reads them again.
+      await $.tool.call(call)
+      expect(w.modelRequests).toHaveLength(first * 2)
+      expect((await auditLines(w)).map(line => line.cached)).toEqual([undefined, undefined])
+    })
+  }
+
+  test('even a cache that holds its key does not serve it', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    const state = watchState(on)
+    const held: CouncilSession = { ...INITIAL_SESSION, cache: [await fingerprintOf('Bash', { command: 'bash deploy.sh' }, placeScopeOf('', ROOT))] }
+    state.readAs = n => (n === 3 ? held : undefined)
+    expect(await $.tool.call({ tool: 'Bash', command: 'bash deploy.sh' })).toEqual({ result: 'ran' })
+    expect(w.modelRequests).toHaveLength(1)
+    expect((await auditLines(w))[0]?.cached).toBeUndefined()
+  })
+
+  test('a call with no script, no runner and no git part is still cached: one request for three', async ($, on) => {
+    const w = world(on, { replies: [APPROVE] })
+    for (const call of [REVIEWED, REVIEWED, { ...REVIEWED }]) await $.tool.call(call)
+    expect(w.modelRequests).toHaveLength(1)
+  })
+})
+
 describe('state is read afresh before the cache and the rounds are consulted (DESIGN §16, §13.4 f)', () => {
   test('an approve that landed after the snapshot is served from the cache', async ($, on) => {
     const w = world(on, { replies: [APPROVE] })

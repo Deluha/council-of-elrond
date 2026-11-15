@@ -190,9 +190,14 @@ const TABLE = {
   },
   'notice.appendFailed': { plain: 'Council: the start notice could not be added to the conversation ({problem})' },
   'notice.rulesUntrusted': {
-    plain: 'Council: the project rules file has settings that are ignored until you confirm them: {summary}. Run /council trust to see them and confirm, or set trustProjectRules to always in the plugin configuration if you control which repositories this host opens. Its block, ask and review rules apply meanwhile and only add to what the shipped rules decide; so do its protected paths and the like.',
+    plain: 'Council: the project rules file has settings that are ignored until you confirm them: {summary}. Run /council trust to see them and confirm, or set trustProjectRules to always in the plugin configuration if you control which repositories this host opens. Its block, ask and review rules apply meanwhile and only add to what the shipped rules decide; so do its protected paths and the like. Once you confirm the file, all of its rules decide before the shipped ones.',
   },
   'notice.rulesUntrustedShort': { plain: 'Council: project rules file not confirmed; some settings ignored (run /council trust)' },
+  // A file with rules that apply now and only add, and nothing that waits: confirming it changes which rules decide.
+  'notice.rulesUnconfirmed': {
+    plain: 'Council: the project rules file has rules that apply now and only add to what the shipped rules decide: {summary}. If you confirm it, its rules decide before the shipped ones. Run /council trust to see them and confirm, or set trustProjectRules to always in the plugin configuration if you control which repositories this host opens.',
+  },
+  'notice.rulesUnconfirmedShort': { plain: 'Council: project rules file not confirmed; its rules only add for now (run /council trust)' },
   'notice.trustNotSaved': {
     plain: 'Council: the rules file was changed, but the trust record could not be saved ({problem}); its settings that need confirming are ignored until you run /council trust',
   },
@@ -213,6 +218,9 @@ const TABLE = {
   // Counts only: nothing from the rules file reaches the model.
   'relay.rulesUntrusted': {
     plain: 'The council-of-elrond plugin found a project rules file with settings that need the user to confirm them: {summary}. They are ignored until the user runs /council trust, and a big operation whose project checks are among them is refused meanwhile, because the checks are not run. Tell the user this in your next reply, once. Do not edit the rules file to change it: it is a protected path. If this client cannot show the output of /council trust, the user can set the trustProjectRules plugin option to always, or confirm in a terminal.',
+  },
+  'relay.rulesUnconfirmed': {
+    plain: 'The council-of-elrond plugin found a project rules file with rules ({summary}) that apply now and only add to what the shipped rules decide. If the user confirms the file with /council trust, its rules decide before the shipped ones. Tell the user this in your next reply, once. Do not edit the rules file to change it: it is a protected path. If this client cannot show the output of /council trust, the user can set the trustProjectRules plugin option to always, or confirm in a terminal.',
   },
   'relay.rulesPartial': {
     plain: 'The council-of-elrond plugin found a project rules file with {n} error(s). Only what can make the gate stricter in it is applied (block, ask and review rules, protected paths and the like), added to the shipped rules; everything else in it is ignored, and a big operation whose project checks it names is refused meanwhile, because the checks are not run. Tell the user this in your next reply, once; /council rules lists the errors. Do not edit the rules file to change it: it is a protected path.',
@@ -351,10 +359,16 @@ const TABLE = {
   'trust.count.models': { plain: '{n} model choice(s)' },
   'trust.count.checks': { plain: '{n} project check(s)' },
   'trust.count.patterns': { plain: '{n} secret pattern(s)' },
+  // What applies now and only adds, counted apart from what confirming switches on.
+  'trust.count.appliedRules': { plain: '{n} block, ask or review rule(s)' },
+  'trust.count.appliedLists': { plain: '{n} protected path, branch, production pattern or big operation entr(y/ies)' },
   'trust.state.confirmed': { plain: 'Project rules file: trusted (you confirmed this content); its settings are in force.' },
   'trust.state.option': { plain: 'Project rules file: trusted by the trustProjectRules option (always).' },
   'trust.state.untrusted': {
-    plain: 'Project rules file: not trusted. Ignored until you run /council trust: {summary}. Its block, ask and review rules apply and only add to what the shipped rules decide, as do its protected paths and the like. No allow rule or allowlist entry is offered for it meanwhile, and a big operation whose project checks are among the ignored settings is refused.',
+    plain: 'Project rules file: not trusted. Ignored until you run /council trust: {summary}. Its block, ask and review rules apply and only add to what the shipped rules decide, as do its protected paths and the like. Once you confirm the file, all of its rules decide before the shipped ones. No allow rule or allowlist entry is offered for it meanwhile, and a big operation whose project checks are among the ignored settings is refused.',
+  },
+  'trust.state.unconfirmed': {
+    plain: 'Project rules file: not confirmed. It has rules that apply now and only add to what the shipped rules decide ({summary}); nothing in it is ignored. Confirming it with /council trust lets its rules decide before the shipped ones. No allow rule or allowlist entry is offered for it meanwhile.',
   },
   'config.state.partial': {
     plain: 'Project rules file: partly applied: {n} error(s). Its block, ask and review rules, protected paths and the like apply and only add to what the shipped rules decide; everything else in it is ignored, and a big operation whose project checks it names is refused. /council rules lists the errors.',
@@ -363,10 +377,23 @@ const TABLE = {
     plain: 'Project rules file: ignored: not readable ({n} error(s)). The shipped rules are in force. /council rules lists the errors.',
   },
   'trust.usage': { plain: 'Usage: /council trust [<code>] | untrust. The code is 8 hex characters, shown by /council trust after it lists the file.' },
-  'trust.none': { plain: 'No rules file in this scope holds settings that wait for your confirmation.' },
+  'trust.none': { plain: 'No rules file in this scope is waiting for your confirmation.' },
   'trust.option': { plain: 'The trustProjectRules option is "always": every rules file is trusted, so there is nothing to confirm.' },
-  'trust.file': { plain: '{where}: {summary} are ignored until you confirm this content.' },
-  'trust.rule': { plain: '  rule {n}, held back:' },
+  'trust.file': { plain: '{where}: waiting for your confirmation. Ignored until you confirm this content: {summary}.' },
+  'trust.fileApplied': { plain: '{where}: waiting for your confirmation. Nothing in it is ignored; its rules apply now and only add to the shipped rules.' },
+  'trust.group.applied': { plain: 'Applies now and only adds to the shipped rules:' },
+  'trust.group.held': { plain: 'Switched on by confirming:' },
+  'trust.decideFirst': {
+    plain: 'After you confirm, these rules decide before the shipped ones, so a review rule here can replace a shipped question.',
+  },
+  'trust.rule': { plain: '  rule {n}:' },
+  'trust.protectedPath': { plain: '  protected path:' },
+  'trust.protectedBranch': { plain: '  protected branch:' },
+  'trust.productionPattern': { plain: '  production pattern:' },
+  'trust.bigOperation': { plain: '  big operation:' },
+  // Under a rule that names no command, path or input pattern, or names every tool: what that comes to.
+  'trust.matchesAll': { plain: '  This rule has no command, path or input pattern: it matches every call of the tools it names.' },
+  'trust.allTools': { plain: '  Its tools match every tool.' },
   'trust.disabled': { plain: '  switches off the shipped rule:' },
   'trust.allowlist': { plain: '  allowlists {n} secret(s) (the entries are not shown)' },
   'trust.model': { plain: '  uses a model for {slot}:' },
@@ -381,7 +408,7 @@ const TABLE = {
   'trust.markUnclean': { plain: ' [had control, invisible or direction-changing characters]' },
   'trust.moreItems': { plain: '  ... {n} more setting(s) are not listed' },
   'trust.moreFiles': { plain: '{n} more rules file(s) are not listed and cannot be confirmed from here.' },
-  'trust.why.items': { plain: 'it holds {n} settings that wait, and at most {max} can be listed' },
+  'trust.why.items': { plain: 'it holds {n} settings to list, and at most {max} can be listed' },
   'trust.why.secret': { plain: '{n} value(s) look like a secret and are not shown' },
   'trust.why.long': { plain: '{n} value(s) are longer than {max} characters' },
   'trust.why.unclean': { plain: '{n} value(s) hold control, invisible or direction-changing characters' },
@@ -393,6 +420,7 @@ const TABLE = {
     plain: 'Its code is {code}. To confirm exactly this content, type: /council trust {code}. Any change to the file makes it untrusted again.',
   },
   'trust.confirmedFile': { plain: '{where}: confirmed. Now in force: {summary}.' },
+  'trust.confirmedRules': { plain: '{where}: confirmed. Its rules now decide before the shipped ones: {summary}.' },
   'trust.noMatch': {
     plain: 'Nothing was confirmed: no rules file in this scope has the code {code} now (it may have changed since). Run /council trust and read what it lists.',
   },
@@ -408,7 +436,7 @@ const TABLE = {
   },
   'trust.untrustNone': { plain: 'No rules file in this scope had a trust record.' },
   'trust.writeRefused': {
-    plain: 'the rules file has settings waiting for your confirmation (/council trust), so the mod does not change it',
+    plain: 'the rules file has not been confirmed (/council trust), so the mod does not change it',
   },
   'trust.untrustOption': { plain: 'The trustProjectRules option is "always", so rules files stay trusted until it is changed.' },
 

@@ -553,6 +553,9 @@ function extractOutsideRepo(part: ShellPart, context: CheckContext): boolean {
 /** A part that hands a command line to another program in a form that could not be read. */
 const unreadableCommand = (part: ShellPart): boolean => part.isUnreadable === true
 
+/** A part that types or pastes into another terminal. */
+const terminalInput = (part: ShellPart): boolean => part.isTerminalInput === true
+
 export function runCheck(check: CheckName, part: ShellPart, context: CheckContext): boolean {
   switch (check) {
     case 'rm-outside-repo':
@@ -581,6 +584,8 @@ export function runCheck(check: CheckName, part: ShellPart, context: CheckContex
       return claudeSession(part)
     case 'unreadable-command':
       return unreadableCommand(part)
+    case 'terminal-input':
+      return terminalInput(part)
     case 'extract-outside-repo':
       return extractOutsideRepo(part, context)
   }

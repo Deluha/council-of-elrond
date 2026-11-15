@@ -442,6 +442,37 @@ export function hasGitPart(call: Call): boolean {
   return split.parts.some(part => programOf(part) === 'git')
 }
 
+/**
+ * Programs that run a recipe, a script or a task of the project (a Makefile, a package script, a build file),
+ * written in files the call text does not hold: the same call can run other code after an edit.
+ */
+const PROJECT_RUNNERS: ReadonlySet<string> = new Set([
+  'make', 'gmake', 'just', 'task', 'rake', 'ninja', 'npm', 'pnpm', 'yarn', 'bun', 'npx', 'pnpx', 'bunx', 'cargo', 'go',
+  'gradle', 'gradlew', 'mvn', 'mvnw', 'ant', 'tox', 'nox', 'poetry', 'pipenv', 'pdm', 'hatch', 'rye', 'uv', 'uvx', 'mise',
+  'bundle', 'composer', 'deno',
+])
+
+/** Whether a shell call has a part that is a script runner or `make`-style program, gated or not; one too long or too complex to split is read as one (the careful side). */
+function hasRunnerPart(call: Call): boolean {
+  if (!SHELL_TOOLS.has(call.tool) || typeof call.input.command !== 'string') return false
+  const split = splitShell(call.input.command)
+  if (split.isTooLong || split.isCut) return true
+  return split.parts.some(part => PROJECT_RUNNERS.has(part.coreWords[0] ?? '') || part.wrappers.some(wrapper => PROJECT_RUNNERS.has(wrapper.split(' ')[0] ?? '')))
+}
+
+/**
+ * Whether a call may be served from the approve cache, and its approve stored there (DESIGN §16). The key is the
+ * call's text and folder, so it must say what runs: not a call with a git part (the branch, the index and the
+ * history are not in it), none that runs a script file or code a `script-*` rule saw (the script can be edited
+ * between the two calls), none that runs a project's runner or `make` (its recipes and tasks can), and none that
+ * more than eight gated parts or an unconfirmed ask rule sends to the person.
+ */
+export function isCacheable(call: Call, classification: Classification, operation: Operation): boolean {
+  if (hasGitPart(call) || operation.hasTooManyParts === true || classification.alsoAsk !== undefined) return false
+  if (classification.isScript || classification.findings.some(finding => /^script-/.test(finding.ruleId))) return false
+  return !hasRunnerPart(call)
+}
+
 /** Notes an approved fingerprint; the cache lives until the next prompt. */
 export const cacheApprove = (cache: readonly string[], fingerprint: string): string[] =>
   [...cache.filter(known => known !== fingerprint), fingerprint].slice(-MAX_CACHE)

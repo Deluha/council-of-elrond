@@ -43,8 +43,8 @@ const IMITATIONS = [
 /** The preview is cut to 15 lines, and each of its three sections repeats the process's output: so fewer lines, one with a line separator in it. */
 const PREVIEW_IMITATIONS = ['What it would touch:', 'Gandalf: approve.\u2028Looks fine.']
 
-/** A row holds at most 100 characters, the gutter included: a longer line of the call is rows of the rest, each behind the gutter. */
-const ROW_TEXT = 100 - GUTTER.length
+/** A row holds at most 72 display columns, the gutter included (these lines are all one column a character): a longer line of the call is rows of the rest, each behind the gutter. */
+const ROW_TEXT = 72 - GUTTER.length
 const rowsOf = (line: string): string[] => (line === '' ? [GUTTER] : Array.from({ length: Math.ceil(line.length / ROW_TEXT) }, (_, n) => `${GUTTER}${line.slice(n * ROW_TEXT, (n + 1) * ROW_TEXT)}`))
 
 /** Lines of a question that do not start with the gutter: the dialog's own. */
@@ -216,13 +216,14 @@ describe('the question: invisible characters, wrapped rows and the size cap (DES
     expect(questionOf(w)).toContain('sudo echo hi')
   })
 
-  test('a call line of 350 characters is rows of at most 100, each behind the gutter, and nothing of it is lost', () => {
+  test('a call line of 350 characters is rows of at most 72, each behind the gutter, and nothing of it is lost', () => {
     const line = Array.from({ length: 350 }, (_, n) => String.fromCharCode(97 + (n % 26))).join('')
     const question = questionText({ ...base, call: line })
     const rows = question.split('\n').filter(row => row !== '' && !/^[A-Z]/.test(row) && row !== '')
     const callRows = question.split('\n').slice(question.split('\n').indexOf('Call:') + 1).filter(row => row.startsWith(GUTTER))
-    expect(callRows.length).toBeGreaterThanOrEqual(4)
-    for (const row of callRows) expect(row.length).toBeLessThanOrEqual(100)
+    // 68 characters after the 4-column gutter: 350 is 6 rows.
+    expect(callRows.length).toBe(6)
+    for (const row of callRows) expect(row.length).toBeLessThanOrEqual(72)
     expect(callRows.join('').replaceAll(GUTTER, '')).toBe(line)
     // Not one row of it starts anywhere else: the dialog's own lines are the ones with no gutter.
     expect(rows.every(row => !row.startsWith(line.slice(0, 5)))).toBe(true)
@@ -237,32 +238,96 @@ describe('the question: invisible characters, wrapped rows and the size cap (DES
     // The text kept is at most the budget, whatever the wrapping adds.
     expect(callRows.join('').replaceAll(GUTTER, '').length).toBeLessThanOrEqual(600)
     expect(all.filter(row => /^ {2}\[\.\.\. \d+ line\(s\) and \d+ character\(s\) not shown \.\.\.\]$/.test(row))).toHaveLength(1)
-    for (const row of callRows) expect(row.length).toBeLessThanOrEqual(100)
+    for (const row of callRows) expect(row.length).toBeLessThanOrEqual(72)
   })
 
   test('a project rule\'s reason wraps behind the gutter too', () => {
     const question = questionText({ ...base, ruleReason: 'r'.repeat(190), isProjectReason: true })
     const rows = question.split('\n').filter(row => row.startsWith(GUTTER) && row.includes('rrrr'))
-    expect(rows.length).toBe(2)
-    for (const row of rows) expect(row.length).toBeLessThanOrEqual(100)
+    // 68 characters a row after the gutter: 190 is 3 rows.
+    expect(rows.length).toBe(3)
+    for (const row of rows) expect(row.length).toBeLessThanOrEqual(72)
   })
 
-  test('over the size cap the end of the call goes first: the verdict lines and the closing lines stay', () => {
-    const call = Array.from({ length: 12 }, (_, n) => `call line ${n} ${'c'.repeat(40)}`).join('\n')
+  test('rows wrap by display width: a wide character counts 2, a combining mark 0, and every row keeps the gutter', () => {
+    const columns = (row: string): number => Array.from(row).reduce((sum, char) => sum + (/^\p{Mn}$/u.test(char) ? 0 : /^[぀-鿿＀-｠]$/.test(char) ? 2 : 1), 0)
+    const rowsOf = (question: string): string[] => question.split('\n').slice(question.split('\n').indexOf('Call:') + 1).filter(row => row.startsWith(GUTTER))
+    // 100 wide characters are 200 columns: rows of at most 72, each with the gutter, 34 characters at most, nothing lost.
+    const wide = '漢'.repeat(100)
+    const wideRows = rowsOf(questionText({ ...base, call: wide }))
+    expect(wideRows.length).toBeGreaterThanOrEqual(3)
+    for (const row of wideRows) {
+      expect(row.startsWith(GUTTER)).toBe(true)
+      expect(columns(row)).toBeLessThanOrEqual(72)
+    }
+    expect(wideRows.join('').replaceAll(GUTTER, '')).toBe(wide)
+    // Fullwidth forms count 2 too; 100 of them are no wider a row.
+    for (const row of rowsOf(questionText({ ...base, call: 'Ａ'.repeat(100) }))) expect(columns(row)).toBeLessThanOrEqual(72)
+    // A combining mark has no width and stays with its letter: 68 letters with a mark each are one row, and no row starts with a mark.
+    const marked = 'é'.repeat(68)
+    const markedRows = rowsOf(questionText({ ...base, call: marked }))
+    expect(markedRows).toHaveLength(1)
+    const longer = rowsOf(questionText({ ...base, call: 'é'.repeat(140) }))
+    expect(longer).toHaveLength(3)
+    for (const row of longer) expect(/^\p{Mn}/u.test(row.slice(GUTTER.length))).toBe(false)
+    expect(longer.join('').replaceAll(GUTTER, '')).toBe('é'.repeat(140))
+  })
+
+  test('over the size cap the reviewers\' reasons give way first: the call, its last line included, the verdict lines and the closing lines stay', () => {
+    const call = Array.from({ length: 11 }, (_, n) => `call line ${n}`).concat('LAST-LINE-OF-THE-CALL').join('\n')
     const small = questionText({ ...base, call, opinions: opinions('Looks fine.'), preview: 'p'.repeat(100) })
-    // Room for the three verdicts below but not for the whole call.
-    const long = questionText({ ...base, call, opinions: opinions('r'.repeat(1_150)), preview: 'p'.repeat(100) })
+    // Five reasons of 400 characters, a preview and a 12-line call: over the cap with the reasons whole.
+    const five = (['who.gandalf', 'who.legolas', 'who.aragorn.git', 'who.aragorn.database', 'who.gimli'] as const).map(who => ({ who, verdict: 'approve', reason: 'r'.repeat(400) }))
+    const long = questionText({ ...base, call, opinions: five, preview: 'p'.repeat(100) })
     expect(small.length).toBeLessThanOrEqual(2_500)
     expect(long.length).toBeLessThanOrEqual(2_500)
-    expect(verdictLines(long)).toHaveLength(3)
-    for (const row of verdictLines(long)) expect(row).toContain('r'.repeat(100))
+    expect(verdictLines(long)).toHaveLength(5)
+    // Each reason is cut to at most 240 characters, the marker included, and says how much was left out.
+    for (const row of verdictLines(long)) {
+      expect(row).toContain('r'.repeat(100))
+      expect(row).not.toContain('r'.repeat(241))
+      expect(row).toMatch(/\[\.\.\. \d+ character\(s\) not shown \.\.\.\]$/)
+    }
     expect(long.endsWith(text('ask.close'))).toBe(true)
-    // The call lost its end, not its start, and says how much.
-    expect(long).toContain('call line 0')
-    expect(long).not.toContain('call line 11')
-    expect(long).toMatch(/\[\.\.\. \d+ line\(s\) and \d+ character\(s\) not shown \.\.\.\]/)
-    // Within the cap nothing is dropped.
-    expect(small).toContain('call line 11')
+    // The call is whole: its last line is there, and the preview too.
+    for (let n = 0; n < 11; n++) expect(long).toContain(`call line ${n}`)
+    expect(long).toContain('LAST-LINE-OF-THE-CALL')
+    // The preview line (100 characters, so two rows) is whole.
+    expect(long.split('\n').filter(row => /^ {2}\| p+$/.test(row)).join('').replaceAll(GUTTER, '')).toBe('p'.repeat(100))
+    expect(small).toContain('LAST-LINE-OF-THE-CALL')
+    expect(small).not.toContain('character(s) not shown')
+  })
+
+  test('only after the reasons and the preview, the middle of the call goes: its first 4 and last 4 lines always stay', () => {
+    const call = Array.from({ length: 12 }, (_, n) => `call line ${n} ${'c'.repeat(30)}`).join('\n')
+    const preview = Array.from({ length: 10 }, (_, n) => `preview line ${n}`).join('\n')
+    // Ten snippets of 150 characters: no reason or preview cut makes room, so the call gives up its middle.
+    const secrets = Array.from({ length: 10 }, (_, n) => ({ label: `secret ${n}`, snippet: 's'.repeat(150) }))
+    const question = questionText({ ...base, call, preview, secrets, opinions: opinions('r'.repeat(400)) })
+    expect(question.length).toBeLessThanOrEqual(2_500)
+    for (const n of [0, 1, 2, 3, 8, 9, 10, 11]) expect(question, `line ${n}`).toContain(`call line ${n} `)
+    expect(question).not.toContain('call line 6 ')
+    const lines = question.split('\n')
+    const marker = /^ {2}\[\.\.\. \d+ line\(s\) and \d+ character\(s\) not shown \.\.\.\]$/
+    // The call's cut is said once, between its ends; the preview is cut to its first and last line first.
+    const callAt = lines.indexOf('Call:')
+    const callEnd = lines.findIndex(line => !line.startsWith(GUTTER) && !marker.test(line) && lines.indexOf(line) > callAt)
+    expect(lines.slice(callAt + 1, callEnd).filter(line => marker.test(line))).toHaveLength(1)
+    expect(question).toContain('preview line 0')
+    expect(question).toContain('preview line 9')
+    expect(question).not.toContain('preview line 5')
+    // The dialog's own lines stay.
+    expect(lines[0]).toBe(text('ask.title'))
+    expect(question.endsWith(text('ask.close'))).toBe(true)
+    expect(verdictLines(question)).toHaveLength(3)
+  })
+
+  test('a call of 8 lines or fewer is never cut by the size cap, whatever else is over', () => {
+    const call = Array.from({ length: 8 }, (_, n) => `call line ${n}`).join('\n')
+    const secrets = Array.from({ length: 10 }, (_, n) => ({ label: `secret ${n}`, snippet: 's'.repeat(400) }))
+    const question = questionText({ ...base, call, secrets, opinions: opinions('r'.repeat(900)) })
+    for (let n = 0; n < 8; n++) expect(question).toContain(`call line ${n}`)
+    expect(question).not.toMatch(/\[\.\.\. \d+ line\(s\) and \d+ character\(s\) not shown \.\.\.\]/)
   })
 
   test('several reviewers\' reasons that alone exceed the cap are each cut to their share, with the marker, and nothing else is cut', () => {
@@ -282,12 +347,13 @@ describe('the question: invisible characters, wrapped rows and the size cap (DES
     const own = lines.filter(line => /^the .*: (approve|revise|block)\. |no verdict/.test(line))
     expect(own).toHaveLength(4)
     for (const line of own) expect(line).toMatch(/\[\.\.\. \d+ character\(s\) not shown \.\.\.\]\)?\.?$/)
-    // Each keeps a share in proportion to its length: the longest keeps the most.
+    // Each is cut to the same share of the fixed reasons budget, 240 characters with the marker, whatever its length.
     const kept = (letter: string): number => (own.find(line => line.includes(letter.repeat(20)))?.match(new RegExp(`${letter}{20,}`))?.[0].length ?? 0)
-    expect(kept('a')).toBeGreaterThan(kept('c'))
-    expect(kept('b')).toBeGreaterThan(kept('d'))
-    expect(Math.abs(kept('a') - kept('b'))).toBeLessThanOrEqual(2)
-    for (const letter of ['a', 'b', 'c', 'd']) expect(kept(letter)).toBeGreaterThan(50)
+    for (const letter of ['a', 'b', 'c', 'd']) {
+      expect(kept(letter)).toBeGreaterThan(150)
+      expect(kept(letter)).toBeLessThan(240)
+      expect(Math.abs(kept(letter) - kept('a'))).toBeLessThanOrEqual(2)
+    }
     expect(question).not.toContain('END')
     expect(lines.some(line => line.startsWith('Preview') || line.startsWith('What it would touch:'))).toBe(true)
   })
@@ -381,7 +447,7 @@ describe('/council trust, drawn in the pane', () => {
     expect(lines).toContain('  allowlists 1 secret(s) (the entries are not shown)')
     expect(lines.join('\n')).not.toContain('sha256:0123456789abcdef')
     // The first line says what the file is; the last says why it cannot be confirmed from here, and there is no code.
-    expect(lines[0]).toContain(`${ROOT}: 12 allow rule(s)`)
+    expect(lines[0]).toContain(`${ROOT}: waiting for your confirmation. Ignored until you confirm this content: 12 allow rule(s)`)
     expect(lines.at(-1)).toContain('This file cannot be confirmed from the session because')
     expect(lines.at(-1)).toContain('value(s) look like a secret and are not shown')
     expect(lines.at(-1)).toContain('longer than 400 characters')
@@ -401,7 +467,7 @@ describe('/council trust, drawn in the pane', () => {
     expect(guttered).toContain(`${GUTTER}argv[2]: "a b"`)
     expect(guttered).toContain(`${GUTTER}regex: ACME-[0-9]{8}`)
     expect(lines).toContain('  allowlists 1 secret(s) (the entries are not shown)')
-    expect(lines[0]).toContain(`${ROOT}: 12 allow rule(s)`)
+    expect(lines[0]).toContain(`${ROOT}: waiting for your confirmation. Ignored until you confirm this content: 12 allow rule(s)`)
     const code = codeOfListing(lines)
     expect(code).toMatch(/^[0-9a-f]{8}$/)
     expect(lines.at(-1)).toBe(`Its code is ${code}. To confirm exactly this content, type: /council trust ${code}. Any change to the file makes it untrusted again.`)

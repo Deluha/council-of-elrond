@@ -68,6 +68,7 @@ export function combineClassifications(classifications: readonly Classification[
       ...winner,
       isProtected: classifications.some(candidate => candidate.isProtected),
       scriptPaths: [...new Set(classifications.flatMap(candidate => candidate.scriptPaths))],
+      isScript: classifications.some(candidate => candidate.isScript),
     },
     index,
   }

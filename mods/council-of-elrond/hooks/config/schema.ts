@@ -1,7 +1,7 @@
 import { globToRegExp, protectedMatcher, slashRegex, toolMatcher } from '../rules/globs.js'
 import type { ProtectedMatcher } from '../rules/globs.js'
 import { SHIPPED, WRITE_PROTECTED_PATHS } from './defaults.js'
-import { splitByTrust } from './trust.js'
+import { hasSettings, isConfirmable, splitByTrust } from './trust.js'
 import type { RulesFile, TrustCounts, TrustSummary } from './trust.js'
 import {
   BIG_CHECKS,
@@ -80,8 +80,13 @@ export type LoadedConfig = {
   errors: readonly string[]
   /** Set exactly when `errors` is not empty. A broken file is never confirmed and has nothing to confirm. */
   broken?: BrokenFile
-  /** What the file holds that takes effect only once its content is trusted; absent when it holds none. */
+  /**
+   * What confirming the file would change: the settings that take effect only once its content is trusted, and the rules of the file
+   * that would then decide before the shipped ones. Absent when confirming changes nothing (no rules, nothing that waits).
+   */
   needsTrust?: { summary: TrustSummary; counts: TrustCounts; isIgnored: boolean }
+  /** The file holds at least one setting (a rule, a list, a model, ...): set only for a file that parsed with no errors. */
+  hasSettings?: boolean
   /** How the file stands with trust, set by the caller that reads the trust record (register.ts). */
   file?: RulesFile
 }
@@ -649,9 +654,15 @@ export function loadConfig(fileText: string | undefined, shipped: Config = SHIPP
   const used = isTrusted ? inspected.overrides : split.always
   const merged = mergeConfig(shipped, used)
   const projectIds = new Set((used.rules ?? []).map(rule => rule.id))
-  const needsTrust = split.counts.total > 0 ? { needsTrust: { summary: split.summary, counts: split.counts, isIgnored: !isTrusted } } : {}
+  const needsTrust = isConfirmable(split.counts) ? { needsTrust: { summary: split.summary, counts: split.counts, isIgnored: !isTrusted } } : {}
   try {
-    return { compiled: compileConfig(merged, projectIds, isTrusted ? new Set() : projectIds), origin: 'shipped+project', errors: [], ...needsTrust }
+    return {
+      compiled: compileConfig(merged, projectIds, isTrusted ? new Set() : projectIds),
+      origin: 'shipped+project',
+      errors: [],
+      ...needsTrust,
+      ...(hasSettings(inspected.overrides) && { hasSettings: true }),
+    }
   } catch (error) {
     return ignoredConfig([`(file): ${error instanceof Error ? error.message : String(error)}`], shipped, checksNamed(raw))
   }

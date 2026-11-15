@@ -5,7 +5,7 @@ import { forcesCurrentBranch, mayMoveHead, runCheck } from './checks.js'
 import type { CheckContext } from './checks.js'
 import { touchesProtected } from './globs.js'
 import type { ProtectedMatcher } from './globs.js'
-import { relativeTo, resolve } from './paths.js'
+import { normalize, relativeTo, resolve } from './paths.js'
 import { splitShell } from './shell.js'
 import type { ShellPart } from './shell.js'
 
@@ -55,6 +55,11 @@ export type Classification = {
   isProtected: boolean
   /** Files a script-running part names, for reviewer context. */
   scriptPaths: readonly string[]
+  /**
+   * Some part matched a shipped `script-*` rule (not only the one that decided
+   * it): the call runs a file or code whose content the call text does not hold.
+   */
+  isScript: boolean
   /**
    * Rules of a project file nobody has confirmed that matched and did not
    * decide: they add no tier (an unconfirmed rule only adds to the shipped
@@ -159,7 +164,7 @@ function isProtectedPath(candidate: string, matchers: readonly ProtectedMatcher[
 const READERS: ReadonlySet<string> = new Set([
   'cat', 'head', 'tail', 'less', 'more', 'bat', 'ls', 'tree', 'stat', 'file', 'wc', 'du', 'find',
   'grep', 'egrep', 'fgrep', 'rg', 'ag', 'diff', 'cmp', 'sort', 'uniq', 'cut', 'jq', 'yq',
-  'md5sum', 'sha1sum', 'sha256sum', 'shasum', 'realpath', 'readlink', 'basename', 'dirname', 'test', '[', 'cd', 'pushd',
+  'md5sum', 'sha1sum', 'sha256sum', 'shasum', 'realpath', 'readlink', 'basename', 'dirname', 'test', '[', '[[', 'cd', 'pushd',
 ])
 
 const hasOption = (words: readonly string[], pattern: RegExp): boolean => words.some(word => pattern.test(word))
@@ -173,12 +178,73 @@ const hasOption = (words: readonly string[], pattern: RegExp): boolean => words.
 const WRITING_OPTIONS: Readonly<Record<string, (words: readonly string[]) => boolean>> = {
   find: words => hasOption(words, /^-(delete|exec|execdir|ok|okdir|fls|fprint\w*)$/),
   jq: words => hasOption(words, /^--in-?place/),
-  yq: words => hasOption(words, /^-[A-Za-z0-9]*i[A-Za-z0-9]*$|^--in-?place/),
+  // `-s` / `--split-exp` write one file per result.
+  yq: words => hasOption(words, /^-[A-Za-z0-9]*[is][A-Za-z0-9]*$|^--in-?place|^--sp/),
   sort: words => hasOption(words, /^-[A-Za-z0-9]*[oT]|^--(o|t)/),
   tree: words => hasOption(words, /^-[A-Za-z0-9]*o|^--o/),
   less: words => hasOption(words, /^-[A-Za-z0-9]*[oO]|^--(log|LOG)/),
   file: words => hasOption(words, /^-[A-Za-z0-9]*C|^--compile/),
   uniq: words => words.filter(word => !word.startsWith('-')).length > 1,
+}
+
+/** Global options of `git` that change nothing about what a read does but where it runs (`-C <path>`) and how it prints. */
+const GIT_READ_GLOBALS: ReadonlySet<string> = new Set(['--no-pager', '--no-optional-locks'])
+
+/** Subcommands of `git` that only read, with the options they take when they take any at all (`branch`, `remote`). */
+const GIT_READS: Readonly<Record<string, ReadonlySet<string> | undefined>> = {
+  status: undefined,
+  log: undefined,
+  diff: undefined,
+  show: undefined,
+  'rev-parse': undefined,
+  'ls-files': undefined,
+  describe: undefined,
+  blame: undefined,
+  'cat-file': undefined,
+  branch: new Set(['--show-current', '-a', '-r', '-v']),
+  remote: new Set(['-v']),
+}
+
+/** Long options of the git reads above that write a file or run a program: a word they are a unique prefix of (three characters at least) is not a read. */
+const GIT_WRITING_LONG = ['--output', '--ext-diff', '--textconv', '--filters', '--open-files-in-pager', '--exec']
+
+/**
+ * `git -C <path> <read>`: a read of what the path names. Only `-C <path>` (and two
+ * options that change how it prints) may come before the subcommand, and nothing
+ * may write a file or run a program: not `-c`, not an output file, not a filter.
+ */
+function isGitRead(part: ShellPart): boolean {
+  const words = part.words
+  if (words[0] !== 'git' || part.isUnresolved === true || part.isUnreadable === true) return false
+  let i = 1
+  let hasPath = false
+  while (i < words.length && (words[i] as string).startsWith('-')) {
+    const option = words[i] as string
+    if (option === '-C' && i + 1 < words.length) {
+      hasPath = true
+      i += 2
+    } else if (GIT_READ_GLOBALS.has(option)) i++
+    else return false
+  }
+  // Only the `-C <path>` form is a read of the path: a bare `git status` after a `cd` is judged as any program is.
+  if (!hasPath) return false
+  const sub = words[i]
+  if (sub === undefined || !Object.hasOwn(GIT_READS, sub)) return false
+  const rest = words.slice(i + 1)
+  const only = GIT_READS[sub]
+  if (only !== undefined) return rest.every(word => only.has(word))
+  return rest.every(word => {
+    if (!word.startsWith('--')) return !/^-[A-Za-z0-9]*O/.test(word)
+    const typed = word.split('=')[0] as string
+    return !(typed.length >= 3 && GIT_WRITING_LONG.some(name => name.startsWith(typed)))
+  })
+}
+
+/** Whether a part is a program that only reads what it is given (`READERS`), bare, with none of its options writing. */
+const isReaderPart = (part: ShellPart): boolean => {
+  const program = part.coreWords[0]
+  if (program === undefined || part.isUnresolved === true || part.isUnreadable === true) return false
+  return READERS.has(program) && !(WRITING_OPTIONS[program]?.(part.coreWords.slice(1)) ?? false)
 }
 
 /**
@@ -187,20 +253,22 @@ const WRITING_OPTIONS: Readonly<Record<string, (words: readonly string[]) => boo
  * a write:
  * - a read: the program is one of `READERS`, resolved (no unread wrapper
  *   option), none of its options writes, and the path is one of its operands,
- *   not a redirect target, an option value of a wrapper or an assignment;
+ *   not a redirect target, an option value of a wrapper or an assignment; or
+ *   `git -C <path>` with one of the reading subcommands (`isGitRead`);
  * - a run: the path is the program word written as a path, or the script an
  *   interpreter or a shell is given (the ordinary `script-file` or
  *   `script-shell` rule matches, and no code flag or piped code is read).
  * Anything else naming the path writes, or may.
  */
-function isReadOrRun(part: ShellPart, hits: readonly string[], matched: readonly CompiledRule[]): boolean {
-  if (part.isUnresolved === true || part.isUnreadable === true) return false
+function readOrRun(part: ShellPart, hits: readonly string[], matched: readonly CompiledRule[]): 'read' | 'run' | undefined {
+  if (part.isUnresolved === true || part.isUnreadable === true) return undefined
+  if (isGitRead(part) && !part.redirects.some(redirect => hits.some(hit => redirect.target.includes(hit)))) return 'read'
   const core = part.coreWords
   const program = core[0]
-  if (program === undefined) return false
+  if (program === undefined) return undefined
   // The words before the command (wrappers, assignments, their option values) must not be what names the path.
   const at = part.words.length - core.length
-  if (at < 0 || core.some((word, index) => part.words[at + index] !== word)) return false
+  if (at < 0 || core.some((word, index) => part.words[at + index] !== word)) return undefined
   const elsewhere = [...part.words.slice(0, at), ...part.optionValues, ...part.redirects.map(redirect => redirect.target)]
   const rest = core.slice(1)
   const isReader = READERS.has(program) && !(WRITING_OPTIONS[program]?.(rest) ?? false)
@@ -210,13 +278,25 @@ function isReadOrRun(part: ShellPart, hits: readonly string[], matched: readonly
   const firstOperand = rest.findIndex(word => !word.startsWith('-'))
   const script = isScriptRun && firstOperand >= 0 && rest.slice(0, firstOperand).every(word => word.startsWith('-')) ? rest[firstOperand] : undefined
   const isProgramOk = program.includes('/') || isReader || script !== undefined
-  return hits.every(hit => {
+  const isOk = hits.every(hit => {
     if (elsewhere.some(word => word.includes(hit))) return false
     const operands = rest.filter(word => word === hit).length
     if (hit === program && !isProgramOk) return false
     if (operands === 0) return hit === program
     return isReader || (hit === script && operands === 1 && !/[\s;&|<>$`()]/.test(hit))
   })
+  return !isOk ? undefined : isReader ? 'read' : 'run'
+}
+
+/**
+ * Whether what a reader prints goes on into a part that is not itself a reader (`ls <plugins> | xargs rm -rf`):
+ * the pipe chain after the part at `index` is followed to its end.
+ */
+function pipesIntoNonReader(subjects: readonly Subject[], index: number): boolean {
+  for (let next = index + 1; subjects[next]?.part?.isPiped === true; next++) {
+    if (!isReaderPart(subjects[next]?.part as ShellPart)) return true
+  }
+  return false
 }
 
 function subjectsOf(call: Call, context: ClassifyContext): { subjects: Subject[]; tooLong: boolean; cut: boolean } {
@@ -242,10 +322,37 @@ function subjectsOf(call: Call, context: ClassifyContext): { subjects: Subject[]
 
 const SCRIPT_RULES = /^script-/
 
-/** Where a `cd` or `pushd` part goes, or undefined for any other part. */
-function cdTargetOf(part: ShellPart | undefined, cwd: string, home?: string): string | undefined {
+/** An expansion the shell makes before it runs `cd`: a variable, a command substitution, an arithmetic one. */
+const EXPANSION = /\$\{[^}]*\}?|\$\(\(?|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?$!-]|\$|`[^`]*`?|`/g
+
+/**
+ * Where a `cd` target holding an expansion lands, when the text around the
+ * expansions says it is inside a protected or write-protected place
+ * (`$X/.claude/plugins/y`, `$D/.git`): that place, rooted at `/`, so that what
+ * later parts name is judged inside it. Otherwise it is not known.
+ */
+function protectedPlaceOf(target: string, places: readonly ProtectedMatcher[]): string | undefined {
+  for (const run of target.replace(EXPANSION, '\0').split('\0')) {
+    const path = normalize(`/${run}`)
+    if (path !== '/' && touchesProtected(path.slice(1), places)) return path
+  }
+  return undefined
+}
+
+/**
+ * Where a `cd` or `pushd` part goes, or undefined for any other part. With
+ * `places` (the protected and write-protected matchers), `$HOME` and `${HOME}`
+ * are expanded with the home folder first, and a target that still holds an
+ * expansion but whose literal text names a protected place lands there.
+ */
+function cdTargetOf(part: ShellPart | undefined, cwd: string, home?: string, places?: readonly ProtectedMatcher[]): string | undefined {
   if (part === undefined || (part.coreWords[0] !== 'cd' && part.coreWords[0] !== 'pushd')) return undefined
-  const target = part.coreWords.find((word, index) => index > 0 && !word.startsWith('-')) ?? home ?? '/'
+  const given = part.coreWords.find((word, index) => index > 0 && !word.startsWith('-')) ?? home ?? '/'
+  const target = places !== undefined && home !== undefined ? given.replace(/^\$\{?HOME\}?(?=\/|$)/, home) : given
+  if (/[$`]/.test(target) && places !== undefined) {
+    const place = protectedPlaceOf(target, places)
+    if (place !== undefined) return place
+  }
   return /[$`]|^-$/.test(target) ? '/' : resolve(target, cwd, home)
 }
 
@@ -280,7 +387,22 @@ type Step = {
  * were followed (a nested `cd` ignored) is returned too, so following them
  * only ever adds a place to look at.
  */
-export function cwdTracker(start: string, home?: string): (part: ShellPart | undefined) => Step {
+export function cwdTracker(start: string, home?: string, places?: readonly ProtectedMatcher[]): (part: ShellPart | undefined) => Step {
+  const followed = follow(start, home)
+  if (places === undefined) return followed
+  // With the places, a `cd` into `$HOME/...` or into a folder a protected path names is also followed as such; the old reading
+  // (an unknown target is `/`) is kept beside it, so the new reading only ever adds a folder to look at.
+  const plain = followed
+  const expanded = follow(start, home, places)
+  const union = (a: readonly string[], b: readonly string[]): string[] => [...new Set([...a, ...b])]
+  return part => {
+    const old = plain(part)
+    const now = expanded(part)
+    return { before: union(old.before, now.before), after: union(old.after, now.after), isUnknown: old.isUnknown }
+  }
+}
+
+function follow(start: string, home?: string, places?: readonly ProtectedMatcher[]): (part: ShellPart | undefined) => Step {
   const levels = new Map<number, string>([[0, start]])
   let top = start
   return part => {
@@ -288,10 +410,10 @@ export function cwdTracker(start: string, home?: string): (part: ShellPart | und
     const held = part.parentScope !== undefined ? levels.get(part.parentScope) : undefined
     const here = levels.get(part.scope) ?? held ?? top
     const legacyBefore = top
-    const moved = cdTargetOf(part, here, home)
+    const moved = cdTargetOf(part, here, home, places)
     const after = moved ?? here
     levels.set(part.scope, after)
-    if (!part.isNested) top = cdTargetOf(part, top, home) ?? top
+    if (!part.isNested) top = cdTargetOf(part, top, home, places) ?? top
     const legacyAfter = top
     const distinct = (a: string, b: string): string[] => (a === b ? [a] : [a, b])
     return { before: distinct(here, legacyBefore), after: distinct(after, legacyAfter), isUnknown: part.movesDir }
@@ -392,6 +514,7 @@ export function classifyBase(call: Call, config: CompiledConfig, context: Classi
   const unconfirmed: Finding[] = []
   const scriptPaths: string[] = []
   let isProtected = false
+  let isScript = false
 
   if (tooLong || cut) {
     findings.push({
@@ -406,10 +529,10 @@ export function classifyBase(call: Call, config: CompiledConfig, context: Classi
   // Each part is looked at where it runs. A folder the nesting levels give and
   // the folder that ignores a nested `cd` are both tried, and a part whose
   // wrapper moved it somewhere unknown is also tried at `/`: the strictest wins.
-  const track = cwdTracker(context.cwd, context.home)
+  const track = cwdTracker(context.cwd, context.home, [...config.protectedPaths, ...config.writeProtectedPaths])
   // An earlier part that can move HEAD (or runs something unread) makes the branch read before the call unsure for the parts after it.
   let isHeadMoved = false
-  for (const subject of subjects) {
+  for (const [index, subject] of subjects.entries()) {
     const part = subject.part
     const { after, isUnknown } = track(part)
     let best: { deciding: Finding; cwd: string } | undefined
@@ -418,6 +541,7 @@ export function classifyBase(call: Call, config: CompiledConfig, context: Classi
       const matches = config.rules.filter(rule => ruleMatches(rule, call, subject, inputJson, partContext))
       const project = matches.find(rule => rule.source === 'project' && rule.isUnconfirmed !== true)
       const shipped = matches.filter(rule => rule.source === 'shipped')
+      if (shipped.some(rule => SCRIPT_RULES.test(rule.id))) isScript = true
       const floor: Finding[] = shipped.filter(rule => rule.tier === 'block').map(rule => toFinding(rule, subject.label))
       for (const rule of matches.filter(rule => rule.isUnconfirmed === true)) {
         const finding = { ...toFinding(rule, subject.label), ...(part !== undefined && { part, cwd }) }
@@ -428,7 +552,9 @@ export function classifyBase(call: Call, config: CompiledConfig, context: Classi
       const protectedHit = words.some(candidate => isProtectedPath(candidate, config.protectedPaths, context, cwd))
       // A write-protected path asks for a write; a shell part that only reads it, or runs what it names, is judged by the ordinary rules.
       const writeHits = words.filter(candidate => isProtectedPath(candidate, config.writeProtectedPaths, context, cwd))
-      const isWriteHit = writeHits.length > 0 && (part === undefined || !isReadOrRun(part, writeHits, shipped))
+      const kind = writeHits.length > 0 && part !== undefined ? readOrRun(part, writeHits, shipped) : undefined
+      // A read whose output goes on into a program that may write is not only a read.
+      const isWriteHit = writeHits.length > 0 && (part === undefined || kind === undefined || (kind === 'read' && pipesIntoNonReader(subjects, index)))
       if (protectedHit || isWriteHit) {
         isProtected = true
         floor.push({
@@ -463,6 +589,7 @@ export function classifyBase(call: Call, config: CompiledConfig, context: Classi
       findings,
       isProtected,
       scriptPaths: [...new Set(scriptPaths)],
+      isScript,
       added: [],
     },
     unconfirmed,
