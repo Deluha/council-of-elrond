@@ -27,7 +27,8 @@ drift. The `/upgrade-types` skill in this repository walks through it.
    signature, or removed method.
 3. **Typecheck and test.** `tsc -p mods`, `claude plugin test mods/council-of-elrond`,
    `claude plugin validate --strict mods/council-of-elrond`, on the build you are upgrading to
-   (the pre-commit hook needs `COUNCIL_ALLOW_UNPINNED=1` for this brief only; see
+   (point `COUNCIL_CLAUDE` at the new build; the pre-commit hook needs `COUNCIL_ALLOW_UNPINNED=1`
+   for this brief only; see
    [DEVELOPMENT.md](DEVELOPMENT.md#the-pinned-build)).
 4. **Re-verify the binary-derived wording.** Search the installed binary for the strings in
    DESIGN.md §6.14 and ROADMAP API fact 13:
@@ -35,7 +36,7 @@ drift. The `/upgrade-types` skill in this repository walks through it.
    BIN=$(readlink -f "$(command -v claude)")
    grep -a -o "The user doesn't want to [a-z ]*" "$BIN" | sort -u
    grep -a -o -E "[a-z ]*(needs|requires) approval[^\"]{0,80}" "$BIN" | sort -u | head
-   grep -a -o -E "requested permissions? to (use|write|edit|read|run)[^\"]{0,80}|haven't granted it yet[^\"]{0,40}|permission to use [^\"]{0,60} has been denied" "$BIN" | sort -u | head
+   grep -a -o -E "requested permissions? to (use|write|edit|read|run)[^\"]{0,80}|haven't granted it yet[^\"]{0,40}|Permission to (use|edit|read) [^\"]{0,60} has been denied|Permission for this tool use was denied[^\"]{0,60}" "$BIN" | sort -u | head
    ```
    If the wording changed, update `hooks/elrond/operations.ts` (`outcomeOf`) and its tests.
 5. **Re-probe what the tests can't.** The behaviours established by live probes (DESIGN.md §1,
@@ -59,7 +60,9 @@ Versions are the `version` field in `mods/council-of-elrond/.claude-plugin/plugi
 1. Move CHANGELOG's "Unreleased" under the new version with the date. Credit security reporters.
 2. Bump `version` in `plugin.json`. The marketplace manifest reads it from there.
 3. Update the README's status line and the token-cost figures if a milestone changed them.
-4. Run the three checks, commit, then tag with Claude Code's own tool, which checks that
+4. Run [TERMINAL-CHECK.md](TERMINAL-CHECK.md) on the build to be released, in a terminal, and put
+   its record in the release notes (ROADMAP maintainer action MA3).
+5. Run the three checks, commit, then tag with Claude Code's own tool, which checks that
    `plugin.json` and the marketplace entry agree:
    ```sh
    claude plugin tag mods/council-of-elrond --dry-run
@@ -68,7 +71,7 @@ Versions are the `version` field in `mods/council-of-elrond/.claude-plugin/plugi
    It creates a `council-of-elrond--v0.6.0` tag. Pushing it runs `.github/workflows/release.yml`,
    which checks the tag against `plugin.json` and `CHANGELOG.md`, re-runs the gates and publishes
    the GitHub release with that version's changelog section as its body. Nothing is built.
-5. Users on the marketplace get it with `claude plugin marketplace update` and
+6. Users on the marketplace get it with `claude plugin marketplace update` and
    `claude plugin update`.
 
 **When is it 1.0.0?** When every condition in ROADMAP M7 holds: among them the eval results

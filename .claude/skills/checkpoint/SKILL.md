@@ -14,9 +14,9 @@ summary. Do these steps in order; stop and report at the first failure.
 Run from the repository root:
 
 ```sh
-claude plugin test mods/council-of-elrond
+"${COUNCIL_CLAUDE:-claude}" plugin test mods/council-of-elrond
 tsc -p mods
-claude plugin validate --strict mods/council-of-elrond
+"${COUNCIL_CLAUDE:-claude}" plugin validate --strict mods/council-of-elrond
 scripts/check-hygiene.sh
 ```
 

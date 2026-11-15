@@ -18,7 +18,8 @@ rest.
 | `.github/dependabot.yml` | Monthly updates for the actions the workflows use. There are no package dependencies. |
 | `.githooks/pre-commit` | Runs the hygiene script on every commit, and the three gates when anything under `hooks/`, `tests/`, `types/` or the manifest is staged. |
 | `.githooks/commit-msg` | Summary under 72 characters, imperative, no trailing full stop, blank line after it. |
-| `scripts/setup.sh` | One-time contributor setup: tool check, `git config core.hooksPath .githooks`, the gates once. |
+| `scripts/setup.sh` | One-time contributor setup: tool check, `git config core.hooksPath .githooks`, the gates once, on the pinned build. |
+| `scripts/pinned-claude.sh` | Sourced by `setup.sh` and the pre-commit hook: reads the Claude Code build CI pins from `.github/workflows/ci.yml` and checks the binary the gates would run on. |
 | `scripts/check-hygiene.sh` | Shared by the hook and CI: no generated files committed, no plugin-root `CLAUDE.md`, no session links or attribution trailers in files, no local paths or real emails, a warning on any well-formed fake token (the test fixtures build theirs from two halves, so there is none), and every relative markdown link resolves. |
 | `.claude-plugin/marketplace.json` | Makes the repository a plugin marketplace, so `claude plugin marketplace add Deluha/council-of-elrond` works. Validated in CI. |
 | `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md` | Shown by GitHub in the repository's community profile and when someone opens an issue or pull request. |
@@ -35,7 +36,7 @@ Repository → Settings. None of this can be committed as a file.
 
 **Branches → Rulesets** (or classic branch protection) for `main`:
 - Require a pull request before merging; one approval; dismiss stale approvals on new commits; require review from code owners.
-- Require status checks to pass: `Test, typecheck, validate` and `Hygiene` (the job names in `ci.yml`); require branches to be up to date.
+- Require status checks to pass: `Test, typecheck, validate` and `Hygiene` (the job names in `ci.yml`); require branches to be up to date. The roadmap makes the jobs required when the workflows are split by concern (ROADMAP, Later, L4); until then check them by eye before merging.
 - Require linear history. Block force pushes. Restrict deletions.
 - Optionally require signed commits.
 

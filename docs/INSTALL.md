@@ -24,7 +24,20 @@ ask and review rules apply at once and only add to what the shipped rules decide
 upgrading, run `/council trust` once per repository that has a rules file (it shows what would be
 switched on, with a code; type `/council trust <code>`), or set `trustProjectRules` to `always` on a
 host whose owner controls which repositories it opens. Until then a big operation whose project
-checks are held back is blocked. See [Trusting a project's rules file](../mods/council-of-elrond/README.md#trusting-a-projects-rules-file).
+checks are held back is blocked.
+
+Three more things change for an existing setup:
+
+- **Names and sizes in a rules file are limited.** A rule id, a check name and a pattern id are at
+  most 64 characters of `[A-Za-z0-9._-]`, and a regular expression at most 1,000 characters. A file
+  that breaks a limit is partly applied: its entries that can only tighten still hold, the rest is
+  ignored, and `/council rules` says so.
+- **A script that starts Claude Code asks.** A command that starts a nested session (`claude -p`
+  and the like), or installs, removes or reconfigures a plugin or an MCP server, is put to you.
+- **A repeated push or migration convenes the council each time,** and runs the project's checks
+  again: an approve of a big operation is never reused.
+
+See [Trusting a project's rules file](../mods/council-of-elrond/README.md#trusting-a-projects-rules-file).
 
 ## Try it for one session
 

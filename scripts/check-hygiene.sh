@@ -58,12 +58,21 @@ done
 
 # 4. Fake secrets in tests must not have a real provider's exact shape (push protection flags them).
 #    A warning, not a failure: the existing fixtures are known.
-echo "$files" | grep -E '^mods/council-of-elrond/tests/.*\.ts$' | while read -r f; do
+echo "$files" | grep -E '^(mods/council-of-elrond/tests/.*\.ts|docs/.*\.md)$' | while read -r f; do
   [ -f "$f" ] || continue
   grep -cE '\bghp_[A-Za-z0-9]{36}\b|\bsk-ant-[A-Za-z0-9_-]{80,}|\bxox[bpa]-[0-9]{10,}-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}' "$f" \
     | grep -vx 0 | sed "s|^|$f: |" | sed 's|$| well-formed fake token(s); may trip secret scanning|' \
     | while read -r line; do echo "hygiene (warning): $line" >&2; done
 done
+
+# 4b. The release workflow must pin the same Claude Code build as CI: the hooks read CI's pin.
+pin_of() { grep -o '@anthropic-ai/claude-code@[0-9][0-9.]*' "$1" 2>/dev/null | head -1; }
+if [ -f .github/workflows/ci.yml ] && [ -f .github/workflows/release.yml ]; then
+  ci_pin=$(pin_of .github/workflows/ci.yml); rel_pin=$(pin_of .github/workflows/release.yml)
+  if [ "$ci_pin" != "$rel_pin" ]; then
+    echo "release.yml pins '$rel_pin' but ci.yml pins '$ci_pin'" | report "Claude Code pin"
+  fi
+fi
 
 # 5. Relative links in markdown must resolve.
 md_files=$(echo "$files" | grep -E '\.md$')

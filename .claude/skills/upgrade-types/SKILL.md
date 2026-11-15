@@ -42,14 +42,16 @@ the mod relies on is unchanged. Classify the drift: **additive** (nothing the mo
 
 ## 4. Gates
 
-Run them on the build you are upgrading to. The pre-commit hook refuses a build other than the pin
-unless `COUNCIL_ALLOW_UNPINNED=1`, for this brief only; the full explanation is in
+Run them on the build you are upgrading to. Point `COUNCIL_CLAUDE` at that **new** build (or
+unset it if the new build is the installed `claude`): left pointing at the old pin, the gates
+would run on the old build. The pre-commit hook refuses a build other than the pin unless
+`COUNCIL_ALLOW_UNPINNED=1`; set it for this brief only. The full explanation is in
 `docs/DEVELOPMENT.md`, "The pinned build".
 
 ```sh
 tsc -p mods
-claude plugin test mods/council-of-elrond
-claude plugin validate --strict mods/council-of-elrond
+"${COUNCIL_CLAUDE:-claude}" plugin test mods/council-of-elrond
+"${COUNCIL_CLAUDE:-claude}" plugin validate --strict mods/council-of-elrond
 ```
 
 A `tsc` failure is the drift talking. Fix the mod to the new API; never edit the generated file.
@@ -60,10 +62,10 @@ The mod tells a user's refusal at the permission prompt from an ordinary tool er
 read from the binary (DESIGN.md §6.14; `outcomeOf` in `hooks/elrond/operations.ts`).
 
 ```sh
-BIN=$(readlink -f "$(command -v claude)")
+BIN=$(readlink -f "$(command -v "${COUNCIL_CLAUDE:-claude}")")
 grep -a -o "The user doesn't want to [a-z ]*" "$BIN" | sort -u
 grep -a -o -E "[a-z ]*(needs|requires) approval[^\"]{0,80}" "$BIN" | sort -u | head
-grep -a -o -E "requested permissions? to (use|write|edit|read|run)[^\"]{0,80}|haven't granted it yet[^\"]{0,40}|permission to use [^\"]{0,60} has been denied" "$BIN" | sort -u | head
+grep -a -o -E "requested permissions? to (use|write|edit|read|run)[^\"]{0,80}|haven't granted it yet[^\"]{0,40}|Permission to (use|edit|read) [^\"]{0,60} has been denied|Permission for this tool use was denied[^\"]{0,60}" "$BIN" | sort -u | head
 ```
 
 The patterns to compare against are `USER_REFUSAL` and `AUTOMATIC_DENIAL` in

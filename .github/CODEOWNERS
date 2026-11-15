@@ -4,17 +4,30 @@
 # Everything, by default.
 *                                               @Deluha
 
-# The safety boundary: the parser, the classifier, the shipped rules, and the
-# only file that touches the engine. Changes here are security-sensitive.
-/mods/council-of-elrond/hooks/rules/            @Deluha
-/mods/council-of-elrond/hooks/config/defaults.ts @Deluha
-/mods/council-of-elrond/hooks/register.ts       @Deluha
-/mods/council-of-elrond/hooks/redact.ts         @Deluha
-/mods/council-of-elrond/hooks/members/gollum.ts @Deluha
-/mods/council-of-elrond/hooks/members/galadriel.ts @Deluha
+# The safety boundary: the files whose changes are security-sensitive. The same
+# list is in CONTRIBUTING.md (step 6) and the pull request template.
+/mods/council-of-elrond/hooks/rules/                 @Deluha
+/mods/council-of-elrond/hooks/config/defaults.ts     @Deluha
+/mods/council-of-elrond/hooks/config/schema.ts       @Deluha
+/mods/council-of-elrond/hooks/config/trust.ts        @Deluha
+/mods/council-of-elrond/hooks/register.ts            @Deluha
+/mods/council-of-elrond/hooks/redact.ts              @Deluha
+/mods/council-of-elrond/hooks/audit.ts               @Deluha
+/mods/council-of-elrond/hooks/state.ts               @Deluha
+/mods/council-of-elrond/hooks/members/gollum.ts      @Deluha
+/mods/council-of-elrond/hooks/members/galadriel.ts   @Deluha
+/mods/council-of-elrond/hooks/members/shared.ts      @Deluha
+/mods/council-of-elrond/hooks/members/brief.ts       @Deluha
+/mods/council-of-elrond/hooks/elrond/operations.ts   @Deluha
+/mods/council-of-elrond/hooks/elrond/commands.ts     @Deluha
+/mods/council-of-elrond/hooks/elrond/suggest.ts      @Deluha
+/mods/council-of-elrond/hooks/elrond/chat.ts         @Deluha
+/mods/council-of-elrond/hooks/elrond/escalation.ts   @Deluha
+/mods/council-of-elrond/hooks/elrond/refusal.ts      @Deluha
 
 # Policy and automation.
 /.github/                                       @Deluha
 /.githooks/                                     @Deluha
+/scripts/                                       @Deluha
 /SECURITY.md                                    @Deluha
 /LICENSE                                        @Deluha

@@ -8,9 +8,9 @@ taken, and [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for how it works and
 
 ```sh
 cd council-of-elrond
-claude plugin test mods/council-of-elrond       # all tests
-tsc -p mods                                    # strict, against mods/types/claude-code.d.ts
-claude plugin validate --strict mods/council-of-elrond  # manifest, hooks, and every $ call the module makes
+"${COUNCIL_CLAUDE:-claude}" plugin test mods/council-of-elrond                # all tests
+tsc -p mods                                                                   # strict, against mods/types/claude-code.d.ts
+"${COUNCIL_CLAUDE:-claude}" plugin validate --strict mods/council-of-elrond   # manifest, hooks, and every $ call the module makes
 scripts/check-hygiene.sh                       # generated files, personal data, links
 ```
 
@@ -207,7 +207,7 @@ claude -p --plugin-dir /path/to/council-of-elrond/mods/council-of-elrond \
 - `/council …` output arrives as `system/ui_log` lines in stream-json; in plain `-p` it prints
   nothing. In `-p` nothing draws, so a start notice is appended for Claude. A `-p` prompt or
   command has origin `sdk`, which is not a person's, so `/council` returns no `context` there and
-  `off`, `shadow on`, `model` and `trust` (with or without a code) are refused; `untrust` is not,
+  `off`, `shadow on`, `model`, `reload` and `trust` (with or without a code) are refused; `untrust` is not,
   since it only tightens, and C4's chat lines are not read: those paths are covered by unit tests only
   (DESIGN §14.3).
 - Loading writes `.claude-plugin/types/` and `tsconfig.json` into the mod folder (gitignored),
@@ -221,14 +221,36 @@ The `/live-check` skill in this repository walks through this.
 
 ### Add a shipped rule
 
-1. Add it to `SHIPPED.rules` in `hooks/config/defaults.ts`: an `id`, a `tier`, `tools`, and a
-   `command`, `path` or `input` pattern, with a `reason` the user will read, and `member` and
-   `profile` for the review tier.
+1. Add it to the array for its tier in `hooks/config/defaults.ts` (`BLOCK`, `ASK` or `REVIEW`): an
+   `id`, a `tier`, `tools`, and either a `command`, `path` or `input` pattern or a `check:` naming
+   a code check in `hooks/rules/checks.ts` (and in `CHECKS`, `hooks/config/types.ts`), with a
+   `reason` the user will read, and `member` and `profile` for the review tier.
 2. Mind the floor: a block rule can't be disabled or lowered by a project rule, so block only what
    is never right. Prefer review for anything a project might legitimately do.
 3. Test it in `tests/rules.test.ts`: the call that should match, the near miss that should not,
    and the compound form.
-4. Document it in the README's "Tiers" list and in the CHANGELOG.
+4. Document it in the README's "Tiers" list and in the CHANGELOG, and update "Known gaps in shell
+   parsing" in the README if the rule closes or narrows one.
+5. Finish with the sweep against `main` (ROADMAP, section 3, step 3): no command may end up lower.
+
+### Add a wrapper or runner
+
+A wrapper (`timeout`, `nice`, `sudo`) or a runner (`npm exec`, `uv run`) carries another command;
+the parser must find it.
+
+1. Add a `Spec` for it to the tables in `hooks/rules/shell.ts` (`WRAPPERS`, the runner tables):
+   which options take a value, which are flags, which change the directory or root, and which
+   carry a command string. List them from the program's own help, not from memory: an option
+   listed with the wrong arity makes the parser take the wrong word for the command.
+2. An option the table does not list makes the part unresolved, which the shipped review rule
+   `shell-runner-unresolved` catches. Its pattern in `hooks/config/defaults.ts` repeats the program
+   names; the test "the review rule names every wrapper the parser reads" in
+   `tests/rules.test.ts` fails if the two drift apart.
+3. Test in `tests/rules.test.ts`: the inner command keeps its own tier through the wrapper (a
+   blocked command stays blocked), each value option in its spaced, attached and clustered forms,
+   a protected path named as an option's value still asks, and a harmless inner command stays
+   allowed.
+4. Finish with the sweep against `main`.
 
 ### Add a preview inspection
 

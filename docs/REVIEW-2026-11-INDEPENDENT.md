@@ -3,7 +3,9 @@
 > **Status: accepted 2026-11-13.** The maintainer accepted this review's recommendations. They are
 > recorded in [ROADMAP.md](../mods/council-of-elrond/ROADMAP.md) under "Amendments after the
 > independent review" and win over the decisions table there where they differ. This document stays
-> as the evidence and reasoning behind them.
+> as the evidence and reasoning behind them. Two further rounds reviewed the work this one led to:
+> [REVIEW-2026-11-ROUNDS-2-3.md](REVIEW-2026-11-ROUNDS-2-3.md). They found defects in it, so read
+> section 4's "fixed" as "fixed for the classes named, as far as this round saw".
 
 Date: 2026-11-13. It reviews [docs/REVIEW-2026-11.md](REVIEW-2026-11.md), the roadmap built from it
 (ROADMAP v2) and the repository as they stood after the maintainer accepted that roadmap.
@@ -92,7 +94,9 @@ listed in DESIGN §15 as they are fixed. They are not described here.
 - Every reviewer error, timeout or malformed reply ends as no verdict, never an approve.
 - One approve cannot outvote a block.
 - The block floor and the protected paths cannot be lowered by a project rule.
-- Chat approvals are parsed strictly, bound to one offer and spent once.
+- Chat approvals are parsed strictly, bound to one offer and spent once. *(Corrected by round 2:
+  an approval was also reusable for the same call text in another folder, until DESIGN §16 item 2
+  bound it to the folder.)*
 - No test is skipped.
 - The block rule and the reviewer route behaved live as the unit tests say.
 
