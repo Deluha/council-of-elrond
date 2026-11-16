@@ -208,10 +208,17 @@ describe('what the scan reads (DESIGN §16 item 15)', () => {
   })
 
   test('a long input is scanned within the size cap: the cost stays that of a scan of the cap, whatever the tool', async () => {
-    const started = Date.now()
-    const scan = await scanCall({ tool: 'WebSearch', input: { query: 'x'.repeat(1_000_000) } })
-    expect(scan.partial).toBe(true)
-    expect(Date.now() - started).toBeLessThan(2000)
+    // The ceiling guards a cost that grows with the text (tens of seconds), not a speed: the scan call alone is timed and
+    // the best of three runs counts, so a loaded machine does not fail it.
+    const input = { query: 'x'.repeat(1_000_000) }
+    let best = Infinity
+    for (let run = 0; run < 3 && best >= 2000; run++) {
+      const started = performance.now()
+      const scan = await scanCall({ tool: 'WebSearch', input })
+      best = Math.min(best, performance.now() - started)
+      expect(scan.partial).toBe(true)
+    }
+    expect(best).toBeLessThan(2000)
   })
 })
 
@@ -324,9 +331,63 @@ describe('redaction noise this release added is gone, and what must be caught st
   })
 
   test('(b) a short path or substitution, the shell\'s own PWD and OLDPWD: not secrets; the keyword in any other name is', async () => {
-    for (const line of ['export PWD=/tmp', 'OLDPWD=/work', 'pwd=`pwd`', 'PWD=/home/me/project', 'OLDPWD=/work/project/sub', 'export PWD=$(pwd)', '{"PWD": "/work/x"}', 'pwd=/tmp', 'token=~/x', 'token=/work', 'pwd=$PWD']) await quiet(line)
-    // PWD and OLDPWD are let go on a directory value only: a path, `.` or `..`, an expansion or a backtick substitution, with no `;`.
-    for (const line of ['PWD=./src', 'PWD=../x/y', 'PWD=~/work', 'PWD=${HOME}/work', 'OLDPWD=$HOME', 'export OLDPWD=/work/project', 'PWD="/home/me/my project"', 'PWD=.', 'PWD=..']) await quiet(line)
+    for (const line of ['export PWD=/tmp', 'OLDPWD=/work', 'pwd=`pwd`', 'PWD=/home/me/project', 'OLDPWD=/work/project/sub', 'export PWD=$(pwd)', 'pwd=/tmp', 'token=~/x', 'token=/work', 'pwd=$PWD', 'cd "$OLDPWD"']) await quiet(line)
+    // PWD and OLDPWD are let go only as a shell assignment of a path-shaped value (DESIGN §16 item 43): the name exactly,
+    // `=` after it with no quote before the `=`, a value of path characters with no `; ! : & ? #`, quote or space, and no
+    // segment that is a word of 6 or more letters and digits.
+    for (const line of [
+      'PWD=./src',
+      'PWD=../x/y',
+      'PWD=~/work',
+      'PWD=~',
+      'PWD=${HOME}/work',
+      'PWD=$HOME/src',
+      'OLDPWD=$HOME',
+      'export OLDPWD=/work/project',
+      'export PWD=/tmp',
+      'declare -x PWD=/work/project',
+      'env PWD=/work/project make',
+      'PWD="/work/project"',
+      'PWD=.',
+      'PWD=..',
+    ]) await quiet(line)
+    // A value that only starts like a path, a quoted key, a `:` in place of the `=`, a space or a `;` is a password keyword's.
+    for (const line of [
+      'PWD=/Pa55w0rd!',
+      'PWD=~secret9',
+      'PWD=~secret',
+      'PWD=./s3cr3t',
+      'PWD=../hunter2',
+      'PWD=/s3cr3t',
+      'PWD=/work/Pa55w0rd9',
+      'PWD=/a:b/c',
+      'PWD=/a?b/c',
+      'PWD=/a#b/c',
+      'PWD="/Pa55w0rd!"',
+      "PWD='/Pa55w0rd!'",
+      'PWD="/home/me/my project"',
+      '"PWD": "/Pa55w0rd!"',
+      '{"PWD": "/work/x"}',
+      "'PWD': '/work/x'",
+      'PWD: /work/x',
+      'OLDPWD=/Pa55w0rd!',
+      'OLDPWD=../hunter2',
+      'export PWD=/Pa55w0rd!',
+      'env PWD=/Pa55w0rd! make',
+      'PWD=/work/project;PWD=/home/me/Pa55w0rd',
+    ]) await loud(line)
+    // A `;` earlier on the line makes the name the keyword of a connection string, whatever the value (DESIGN §16 item 43).
+    for (const line of [
+      'Server=x;UID=sa;PWD=/Pa55w0rd!;',
+      'Server=x;UID=sa;PWD=/home/me/project;',
+      'Server=x;UID=sa;PWD=~/work',
+      'Server=x;UID=sa;OLDPWD=/work/project',
+      'cd /work; export PWD=/work/project',
+      'Server=x; PWD=/work/project',
+      'Server=db;UID=sa;PWD=MyStr0ngP@ssw0rd;',
+    ]) await loud(line)
+    // The line is the limit: a `;` on an earlier line is not in the way, and a short value is as quiet as on any name.
+    for (const line of ['Server=x;\nPWD=/work/project', 'echo a; echo b\nexport PWD=/tmp', 'Server=x;UID=sa;PWD=/tmp']) await quiet(line)
     // Anything else after PWD is the password keyword of an ODBC-style connection string, as it was on origin/main.
     for (const line of [
       'PWD=hunter2xyz',
@@ -337,6 +398,9 @@ describe('redaction noise this release added is gone, and what must be caught st
       'PWD="/x;PWD=Tr0ub4dor3"',
       'PWD=.hidden99',
     ]) await loud(line)
+    expect(redact('Server=x;UID=sa;PWD=/Pa55w0rd!;')).toBe('Server=x;UID=sa;PWD=[REDACTED secret];')
+    expect(redact('PWD=./s3cr3t')).toBe('PWD=[REDACTED secret]')
+    expect(redact('"PWD": "/Pa55w0rd!"')).toBe('"PWD": "[REDACTED secret]"')
     expect(redact('Server=db;UID=sa;PWD=MyStr0ngP@ssw0rd;')).toBe('Server=db;UID=sa;PWD=[REDACTED secret];')
     expect(redact('"PWD": "Tr0ub4dor&3"')).toBe('"PWD": "[REDACTED secret]"')
     // PWD must be the whole name, in capitals: `pwd` is a keyword anywhere else.
@@ -450,25 +514,47 @@ describe('redaction noise this release added is gone, and what must be caught st
     }
   })
 
+  // The ceiling guards quadratic growth in the length of the text, which costs tens of seconds at this size; it is not a
+  // speed. Only the redact and scan calls are timed, and a run is repeated (three at most) while it is over the ceiling, so
+  // one slow run on a loaded machine does not fail the test while a stall that is slow every time still does.
+  const timed = async (input: string): Promise<number> => {
+    let best = Infinity
+    for (let run = 0; run < 3 && best >= 1500; run++) {
+      const started = performance.now()
+      redact(input)
+      isPlaceholder(input)
+      isCodeReference(input)
+      await scanText(input)
+      best = Math.min(best, performance.now() - started)
+    }
+    return best
+  }
+
   test('every new or changed pattern stays linear on adversarial input', async () => {
     const size = 200_000
     const values = ['(', 'a(', 'a()', 'a().', 'a()[', 'a[', '[', ']', 'a(b)(c)', '${1:-', '`', '/', '~/', '0', 'await ', 'new a(', 'A(1', 'A(1)', 'A1(', 'PWD=/', 'PWD=;']
     for (const value of values) {
       for (const input of [value.repeat(Math.ceil(size / value.length)), `password=${value.repeat(Math.ceil(size / value.length))}`, `password=a${value.repeat(Math.ceil(size / value.length))}`, `${'a'.repeat(size)}${value}`]) {
-        const started = Date.now()
-        redact(input)
-        isPlaceholder(input)
-        isCodeReference(input)
-        await scanText(input)
-        expect(Date.now() - started, value).toBeLessThan(1500)
+        expect(await timed(input), value).toBeLessThan(1500)
       }
     }
     // A long run of calls and of nested parentheses.
     for (const input of [`password=${'a().'.repeat(size / 4)}`, `password=${'('.repeat(size)}`, `password=a${'('.repeat(size)}${')'.repeat(size)}`]) {
-      const started = Date.now()
-      redact(input)
-      await scanText(input)
-      expect(Date.now() - started, input.slice(0, 20)).toBeLessThan(1500)
+      expect(await timed(input), input.slice(0, 20)).toBeLessThan(1500)
+    }
+  })
+
+  test('the pattern for PWD after a semicolon, and the path test, stay linear on adversarial input (DESIGN §16 item 43)', async () => {
+    const size = 200_000
+    const values = [';PWD=/', ';PWD="', ';OLDPWD=', 'PWD=./a/', 'PWD=$(', 'PWD=`a b ', ';PWD', 'PWD=/a/b/c1d2e3/']
+    for (const value of values) {
+      for (const input of [value.repeat(Math.ceil(size / value.length)), `;${'a'.repeat(size)}${value}`, `${value}${'a/'.repeat(size / 2)}`]) {
+        expect(await timed(input), value).toBeLessThan(1500)
+      }
+    }
+    // Many names after one `;`, and a long line with the `;` far behind the name (the look back is bounded).
+    for (const input of [`;${'PWD'.repeat(size / 3)}`, `;${'PWD=a '.repeat(size / 6)}`, `;${'a'.repeat(size)}PWD=/work/x`]) {
+      expect(await timed(input), input.slice(0, 20)).toBeLessThan(1500)
     }
   })
 })

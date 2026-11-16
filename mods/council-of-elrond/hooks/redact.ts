@@ -66,6 +66,19 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     keep: 1,
     isNoise: (kept, value) => isAssignmentNoise(kept, value),
   },
+  {
+    id: 'connection-string-pwd',
+    kind: 'password',
+    level: 'low',
+    label: 'secret',
+    // `PWD` and `OLDPWD` are a directory in a shell assignment (the `assignment` pattern lets that go) and the password
+    // of an ODBC-style connection string (`Server=x;UID=sa;PWD=...`). With a `;` earlier on the same line (looked for up
+    // to 400 characters back, so each name costs a bounded amount) the name is read as the password keyword, whatever
+    // the value is. The same value forms as `assignment`; a plain word, number or short path is noise as there.
+    re: /\b((?:PWD|OLDPWD)(?<=;[^\n]{0,400}(?:PWD|OLDPWD))\\?["']?\s*=\s*\\?["']?)(?!\[REDACTED)((?<=")[^"\\\n]{4,1000}(?=\\?")|(?<=')[^'\\\n]{4,1000}(?=\\?')|[^\s"'&;,\\]{4,})/g,
+    keep: 1,
+    isNoise: (kept, value) => isPlainNoise(kept, value),
+  },
   { id: 'jwt', level: 'low', label: 'JWT', re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g },
   {
     id: 'authorization-header',
@@ -273,28 +286,63 @@ const PLAIN_WORD = /^[A-Za-z_.]+$/
 const SMALL_NUMBER = /^[0-9]{1,5}$/
 const PATH = /^(?:\/|~\/)[A-Za-z0-9._/-]*$/
 const BACKTICKS = /^`[^`]*`$/
-// What a directory variable's value starts like: an absolute or home path, `.` and `..` (alone or as a path start), an expansion.
-const DIRECTORY_START = /^(?:[/~$]|\.\.?(?:\/|$))/
+// What follows the name of a shell assignment: `=`, then a quote of the value if it has one. A quote before the `=` makes the name a key.
+const SHELL_ASSIGNMENT_REST = /^[ \t]*=[ \t]*\\?["']?$/
+// What a path may hold after its start: letters, digits and `. _ / ~ + @ % -`, and `$ { }` for an expansion. No `; ! : & ? #`, quote or space.
+const PATH_CHARACTERS = /^[A-Za-z0-9._/~+@%${}-]*$/
+const SUBSTITUTION_BODY = /^(?:\$\(|`)([A-Za-z0-9 ._/~+@%-]*)(?:\)|`)$/
 // A subscript cut at its quote by the bare value: `ENV[` of `ENV["TOKEN"]`.
 const OPEN_SUBSCRIPT = /^[A-Za-z_][A-Za-z0-9_.]*\[$/
 /** The shortest value the pattern read before the 4-character minimum. A path or a backtick substitution under it is no secret; a longer one is redacted as it always was. */
 const SHORT_VALUE = 6
 
 /**
- * A value `PWD` or `OLDPWD` may hold without being a password: a path, `.` or `..`, an expansion (`$NAME`, `${NAME}`, `$(...)`)
- * or a backtick substitution, with no `;` in it. Anything else after `PWD=` is the password keyword of an ODBC-style
- * connection string and is read as any other password.
+ * A path segment that reads as a word someone chose, not a name: once the punctuation a path holds is dropped, 6 or more
+ * characters with a letter and a digit in them (`s3cr3t`, `hunter2`, `Pa55w0rd`). This is the test for a literal
+ * (`looksLiteral`, 8 characters) with a lower length, because a directory name is rarely a short letter-and-digit mix.
  */
-const isDirectoryValue = (value: string): boolean => !value.includes(';') && (DIRECTORY_START.test(value) || BACKTICKS.test(value))
+const isLiteralSegment = (segment: string): boolean => {
+  const bare = segment.replace(/[._~+@%${}-]/g, '')
+  return bare.length >= 6 && /[A-Za-z]/.test(bare) && /[0-9]/.test(bare)
+}
 
 /**
- * An assignment match that is plainly not a secret, by its name and its value: the shell's `PWD` and `OLDPWD` with a directory value; a
- * plain word of letters, `_` and `.` under 6 characters (the 4-character minimum is for a value with a digit or any
- * other character); a bare number under 6 digits; a path (`/tmp`, `~/x`), a backtick substitution or the cut start of a
- * subscript (`ENV[`) under 6 characters.
+ * A value that is shaped like a directory and nothing else: `.` or `..`; a path starting `/`, `~/`, `./` or `../` (or
+ * `~` alone); an expansion start (`$NAME`, `${NAME}`, `$HOME/src`); or a whole `$(...)` or backtick substitution of plain
+ * words. Every character is a letter, a digit or one of `. _ / ~ + @ % -` (and `$ { }`), so no `; ! : & ? #`, quote or
+ * space; and no segment is a letter-and-digit word (`isLiteralSegment`). `~name` with no slash after it is not one: it
+ * may be a word that starts with a tilde.
  */
+function isPathShaped(value: string): boolean {
+  if (value === '.' || value === '..' || value === '~') return true
+  const substitution = SUBSTITUTION_BODY.exec(value)
+  if (substitution !== null) return (substitution[1] as string).split(/[\s/]+/).every(word => !isLiteralSegment(word))
+  const isStart = value.startsWith('/') || value.startsWith('~/') || value.startsWith('./') || value.startsWith('../') || value.startsWith('$')
+  return isStart && PATH_CHARACTERS.test(value) && value.split('/').every(segment => !isLiteralSegment(segment))
+}
+
+/**
+ * The shell's `PWD` and `OLDPWD` hold a directory: exempt only when all of these hold. The name is exactly `PWD` or
+ * `OLDPWD`; it is assigned with `=` and the name is not a quoted key (`"PWD": ...`, `PWD: ...` are not shell); and the value
+ * is path-shaped. Anything else after `PWD` is the password keyword of an ODBC-style connection string and is read as
+ * any other password. (A `;` earlier on the line is the `connection-string-pwd` pattern's.)
+ */
+function isShellDirectory(kept: string, value: string): boolean {
+  const name = /^[A-Za-z0-9_]*/.exec(kept)?.[0] ?? ''
+  return SHELL_OWN_VARIABLES.test(name) && SHELL_ASSIGNMENT_REST.test(kept.slice(name.length)) && isPathShaped(value)
+}
+
+/** An assignment match that is plainly not a secret, by its name and its value: the shell's own directory variables (`isShellDirectory`), or `isPlainNoise`. */
 function isAssignmentNoise(kept: string, value: string): boolean {
-  if (SHELL_OWN_VARIABLES.test(/^[A-Za-z0-9_]*/.exec(kept)?.[0] ?? '') && isDirectoryValue(value)) return true
+  return isShellDirectory(kept, value) || isPlainNoise(kept, value)
+}
+
+/**
+ * The part of the noise test that does not depend on the name: a plain word of letters, `_` and `.` under 6 characters
+ * (the 4-character minimum is for a value with a digit or any other character); a bare number under 6 digits; a path
+ * (`/tmp`, `~/x`), a backtick substitution or the cut start of a subscript (`ENV[`) under 6 characters.
+ */
+function isPlainNoise(kept: string, value: string): boolean {
   if (PLAIN_WORD.test(value)) return value.length < SHORT_VALUE
   // A bare number (`"token": 1234`); a quoted one is a string, which a person may have chosen as a password.
   if (SMALL_NUMBER.test(value)) return !/["']$/.test(kept)

@@ -56,6 +56,12 @@ export type Split = {
 
 export const MAX_COMMAND_CHARS = 20_000
 const MAX_PARTS = 200
+/**
+ * The most text one command may have scanned, nested scripts counted again each time (twenty times the longest command).
+ * A crafted command can make copies of itself that each make more; the parts bound alone does not stop the copies that
+ * make no part. Past it the parse is cut, as at MAX_PARTS: the call is reviewed, and what was found stays found.
+ */
+const MAX_SCANNED_CHARS = 20 * MAX_COMMAND_CHARS
 const MAX_DEPTH = 4
 
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh', 'ash', 'busybox'])
@@ -231,6 +237,29 @@ const WRAPPERS: ReadonlyMap<string, Spec> = new Map(Object.entries({
 
 /** The nsenter options whose separate next word may or may not be their value, by version. */
 const NSENTER_AMBIGUOUS: ReadonlySet<string> = new Set(['-S', '-G', '--setuid', '--setgid'])
+
+/**
+ * nsenter's command where every ambiguous option takes the next word as its value: the words from `from` (just after
+ * the first such option's value) on, with the options that follow skipped the same way, and `--` ended. One pass, so
+ * the cost does not grow with the number of options. What was glued to an option is added to `optionValues`.
+ */
+function nsenterCommandIfValues(spec: Spec, words: readonly string[], from: number, optionValues: string[]): string[] {
+  let i = from
+  while (i < words.length) {
+    const word = words[i] as string
+    if (word === '--') {
+      i++
+      break
+    }
+    if (!word.startsWith('-') || word === '-') break
+    const read = readOption(spec, words, i, false)
+    if (read.attached !== undefined) optionValues.push(...read.attached)
+    const value = words[read.next]
+    const isTakingNext = read.name !== undefined && NSENTER_AMBIGUOUS.has(read.name) && read.attached === undefined && value !== undefined && !value.startsWith('-')
+    i = isTakingNext ? read.next + 1 : read.next
+  }
+  return words.slice(i)
+}
 
 /** Other names a wrapper goes by, read with the table of the one it points to. */
 const WRAPPER_ALIASES: ReadonlyMap<string, string> = new Map([
@@ -453,6 +482,8 @@ type Builder = {
   isCut: boolean
   /** The last nesting level handed out. */
   lastScope: number
+  /** The characters of text scanned so far, nested scripts included. */
+  scanned: number
 }
 
 type Core = {
@@ -779,6 +810,9 @@ function coreOf(input: readonly string[]): Core {
     if (spec.movesDir) movesDir = true
     let isPidForm = false
     const splits: { raw: string; rest: string[] }[] = []
+    // The `env -S` strings past the bound, with the words between them, and where the words not yet added start.
+    let pastBound: string[] | undefined
+    let pastBoundFrom = 0
     const skipOptions = () => {
       while (k < words.length) {
         const option = words[k] as string
@@ -796,14 +830,17 @@ function coreOf(input: readonly string[]): Core {
         if (read.isUnknown) markUnresolved(() => [name, ...words.slice(start + 1)])
         if (read.attached !== undefined) optionValues.push(...read.attached)
         // nsenter's -S and -G: whether a separate word is the option's value depends on the installed util-linux,
-        // so neither reading is safe. The word is read as the program (below, as it stands), the part is also
-        // reviewed as one not read for sure, and the words after the word are read as the command too (here).
+        // so neither reading is safe. Reading B (the word is the program) is the one this loop goes on with: the
+        // word ends the options, so nothing after it is an nsenter option. Reading A (every such option takes the
+        // next word) is made here once, from the first such option: the command after all of them, as one nested
+        // script, whatever the number of them. The part is also reviewed as one not read for sure.
         if (canonical === 'nsenter' && read.name !== undefined && NSENTER_AMBIGUOUS.has(read.name) && read.attached === undefined) {
           const next = words[read.next]
           if (next !== undefined && !next.startsWith('-')) {
             markUnresolved(() => [name, ...words.slice(start + 1)])
-            const after = words.slice(read.next + 1)
-            if (after.length > 0) nestedScripts.push([name, ...after].map(quoted).join(' '))
+            const command = nsenterCommandIfValues(spec, words, read.next + 1, optionValues)
+            // Led by nsenter itself (and `--`, so nothing after it is read as its option): it moves the root, so the command is judged from `/` too.
+            if (command.length > 0) nestedScripts.push([name, '--', ...command].map(quoted).join(' '))
           }
         }
         if (read.name !== undefined) {
@@ -813,11 +850,15 @@ function coreOf(input: readonly string[]): Core {
           // is a command line, and its words are read as the rest of env's own.
           if (canonical === 'env' && (read.name === '-S' || read.name === '--split-string')) {
             const raw = read.value ?? ''
-            // Past the bound the string is no longer spliced (that copies every word after it, and a crafted command
-            // made it quadratic): it is read alone, and the part is reviewed as one whose options were not all read.
+            // Past the bound the strings are no longer spliced (that copies every word after them, and a crafted command
+            // made it quadratic): they are read together as one script, the first string and the words that follow it
+            // (a later string in place, as splicing would put it), and the part is reviewed as one whose options were
+            // not all read. One script for all of them, so the work does not grow with their number.
             if (++envSplices > MAX_ENV_SPLICES) {
               markUnresolved(() => [name, ...words.slice(start + 1)])
-              nestedScripts.push(raw)
+              if (pastBound === undefined) pastBound = [raw]
+              else pastBound.push(...words.slice(pastBoundFrom, k).map(quoted), raw)
+              pastBoundFrom = read.next
               k = read.next
               continue
             }
@@ -845,6 +886,8 @@ function coreOf(input: readonly string[]): Core {
     // chrt PRIORITY CMD, taskset MASK CMD: the same, unless it is a pid form.
     if (PID_WRAPPERS.has(canonical) && !isPidForm && k < words.length) k++
     for (const split of splits) nestedScripts.push([split.raw, ...split.rest.map(quoted)].join(' '))
+    // Led by `env`, so that its options between and after the strings are read as options and not as the program.
+    if (pastBound !== undefined) nestedScripts.push(['env', ...pastBound, ...words.slice(pastBoundFrom).map(quoted)].filter(word => word !== '').join(' '))
   }
   const coreWords = words.slice(k).map((word, index) =>
     index === 0 && word.includes('/') && SYSTEM_BIN.test(word) ? word.slice(word.lastIndexOf('/') + 1) : word,
@@ -1362,7 +1405,8 @@ function substitutionsIn(text: string, depth = 0): string[] {
 }
 
 function scan(command: string, depth: number, isNested: boolean, out: Builder, scope = 0, parentScope?: number): void {
-  if (depth > MAX_DEPTH) {
+  out.scanned += command.length
+  if (depth > MAX_DEPTH || out.scanned > MAX_SCANNED_CHARS) {
     out.isCut = true
     return
   }
@@ -1411,12 +1455,19 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
     isWordEscaped = false
   }
 
-  const endPart = (end: number) => {
+  const endPart = (end: number, isLineEnd = false) => {
     endWord()
+    // A redirect operator with no word after it in this part: nothing the part says is sure (a syntax error in a
+    // shell, and what the scanner would take for its target is the next part's own text). The call is reviewed.
+    if (pendingTarget !== undefined) {
+      out.isCut = true
+      pendingTarget = undefined
+    }
     const text = command.slice(partStart, end).trim()
     const owner = out.parts.length
     const isPiped = isPipeNext
-    isPipeNext = false
+    // A pipe at the end of a line goes on to the next line's command.
+    if (!isLineEnd || words.length > 0 || redirects.length > 0) isPipeNext = false
     if (words.length > 0 || redirects.length > 0) {
       if (out.parts.length >= MAX_PARTS) {
         out.isCut = true
@@ -1613,7 +1664,10 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
       const close = findClose(command, i + 2, '(', ')')
       const stop = close < 0 ? command.length : close
       nested(command.slice(i + 2, stop))
-      words.push('<(...)')
+      // The substitution is a word like any other: the target of a redirect that is waiting for one, else an argument.
+      word = '<(...)'
+      hasWord = true
+      endWord()
       i = stop
       continue
     }
@@ -1635,7 +1689,7 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
       continue
     }
     if (c === '\n') {
-      endPart(i)
+      endPart(i, true)
       if (pendingHeredocs.length > 0) i = takeHeredocs(i)
       partStart = i + 1
       continue
@@ -1649,8 +1703,11 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
     }
     if (c === '>' || c === '<' || (c === '&' && next === '>')) {
       if (hasWord && !isWordQuoted && /^\d+$/.test(word)) {
+        // A file descriptor number, not a word: nothing of it may stay for the word that follows (an escaped digit
+        // would make the next heredoc delimiter read as quoted).
         word = ''
         hasWord = false
+        isWordEscaped = false
       } else {
         endWord()
       }
@@ -1706,7 +1763,7 @@ export function splitShell(command: string): Split {
   if (command.length > MAX_COMMAND_CHARS) {
     return { parts: [], isTooLong: true, isCut: false }
   }
-  const out: Builder = { parts: [], isCut: false, lastScope: 0 }
+  const out: Builder = { parts: [], isCut: false, lastScope: 0, scanned: 0 }
   scan(command, 0, false, out)
   return { parts: out.parts, isTooLong: false, isCut: out.isCut }
 }

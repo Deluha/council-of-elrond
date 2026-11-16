@@ -2782,6 +2782,27 @@ describe('write-protected folders reached through a cd or a pipe (DESIGN §16 it
       expect(bash(command).tier, command).not.toBe('allow')
     }
   })
+
+  test('a git read of a write-protected folder that still asks for it: a redirect onto the path, -O, and the options that run a program', () => {
+    // Each of these must be the protected-path ask itself, not only "not an allow": another rule reviews a redirect or an
+    // inline option anyway, and a review would hide that the read test let the call through as a read.
+    for (const command of [
+      `git -C ${P}/x status > ${P}/x/out`,
+      `git -C ${P}/x log >> ${P}/x/out`,
+      `git -C ${P}/x diff -Ofile`,
+      `git -C ${P}/x log -O/tmp/o`,
+      `git -C ${P}/x diff -aOx`,
+      `git -C ${P}/x diff --open-files-in-pager=sh`,
+      `git -C ${P}/x diff --open=sh`,
+      `git -C ${P}/x log --exec=x`,
+      `git -C ${P}/x show --exe=x`,
+    ]) {
+      expect(bash(command).tier, command).toBe('ask')
+      expect(bash(command).decided?.ruleId, command).toBe('protected-path')
+    }
+    // The same reads without them are reads.
+    for (const command of [`git -C ${P}/x diff -a`, `git -C ${P}/x log --oneline -3`, `git -C ${P}/x diff --stat`]) expect(tierOf(command), command).toBe('allow')
+  })
 })
 
 describe('typing into another terminal asks (DESIGN §16 item 32)', () => {
@@ -2821,6 +2842,7 @@ describe('typing into another terminal asks (DESIGN §16 item 32)', () => {
       ['ydotool key 28:1', 'ask', TI],
       ['wtype hello', 'ask', TI],
       ["osascript -e 'tell application \"System Events\" to keystroke \"x\"'", 'ask', TI],
+      ["osascript -e 'tell application \"System Events\" to key code 36'", 'ask', TI],
       // Through wrappers, and inside a script string, as any rule.
       ['env X=1 tmux send-keys x', 'ask', TI],
       ['nice tmux paste-buffer', 'ask', TI],
@@ -2988,22 +3010,203 @@ describe('option arities, shell strings and a bound on env -S (DESIGN §16 items
   })
 })
 
+describe('what follows a redirect, a pipe or a part boundary is read on its own (DESIGN §16 item 41)', () => {
+  const onFeat = (command: string) => bash(command, { ...CONTEXT, currentBranch: 'feat' })
+  // The command that follows must keep the tier it has alone.
+  const followers: readonly (readonly [string, string, string])[] = [
+    ['rm -rf /home/me', 'block', RM],
+    ['git push --force origin main', 'block', 'force-push-protected-branch'],
+    ['sudo ls', 'ask', 'privileged'],
+    ['dd if=/dev/zero of=/dev/sda', 'block', 'raw-disk-write'],
+  ]
+
+  test('a process substitution used as a redirect target is the target: the next command keeps its program', () => {
+    const prefixes = [': < <(:)', 'cat < <(echo x)', 'wc -l < <(ls)', 'read F < <(echo /)', 'cat x > >(tee y)', 'diff <(ls a) <(ls b)', 'cat <<< <(ls)']
+    for (const prefix of prefixes) {
+      for (const separator of ['; ', ' && ', ' || ', ' | ', '\n', ' & ']) {
+        for (const [follower, tier, ruleId] of followers) {
+          const command = `${prefix}${separator}${follower}`
+          const result = onFeat(command)
+          expect(result.tier, command).toBe(tier)
+          expect(result.decided?.ruleId, command).toBe(ruleId)
+        }
+      }
+    }
+  })
+
+  test('the redirect is recorded with the substitution as its target, and the inner command is still a part', () => {
+    const parts = splitShell('cat x > >(tee y)').parts
+    expect(parts.map(part => part.core)).toEqual(['tee y', 'cat x'])
+    expect(parts[1]?.redirects).toEqual([{ op: '>', target: '<(...)' }])
+    expect(splitShell('wc -l < <(ls); rm -rf x').parts.map(part => part.core)).toEqual(['ls', 'wc -l', 'rm -rf x'])
+  })
+
+  test('the everyday loop over a substitution is allowed, and the command inside it still counts', () => {
+    expectCases([
+      ['while read f; do echo "$f"; done < <(ls)', 'allow'],
+      ['while read f; do echo "$f"; done < <(rm -rf /home/me)', 'block', RM],
+      ['done < <(rm -rf /home/me)', 'block', RM],
+      ['diff <(ls a) <(ls b)', 'allow'],
+      ['cat x > >(tee y)', 'review', 'shell-tee'],
+    ])
+  })
+
+  test('a redirect with no target in a part is reviewed, and does not take the next part\'s first word', () => {
+    for (const command of ['cat >', 'cat <', 'cat <<', 'cat <<<', 'cat 2>>', 'cat > ; ls', 'cat >\nls']) {
+      expect(tierOf(command), command).toBe('review')
+      expect(ruleOf(command), command).toBe('command-too-complex')
+    }
+    // The next part is read whole, whatever the redirect before it was missing.
+    for (const separator of [';', '\n', '&&', '||', '|']) {
+      for (const [follower, tier] of followers) {
+        const command = `cat > ${separator} ${follower}`
+        expect(onFeat(command).tier, command).toBe(tier)
+      }
+    }
+    expect(splitShell('cat > ; rm -rf /home/me').parts.map(part => part.core)).toEqual(['cat', 'rm -rf /home/me'])
+    // Everyday redirects are not a redirect without a target.
+    expectCases([
+      ['echo hi >&2', 'allow'],
+      ['echo hi 2>&1', 'allow'],
+      ['ls >/dev/null 2>&1', 'allow'],
+      ['exec 3>&-', 'allow'],
+      ['cat <&-', 'allow'],
+      ['cat <<EOF\nhi\nEOF', 'allow'],
+      ['cat <<< hi', 'allow'],
+    ])
+  })
+
+  test('an escaped digit before a heredoc is a word, not a descriptor: the delimiter keeps its quoting', () => {
+    expectCases([
+      ['cat \\2<<EOF\n$(rm -rf /home/me)\nEOF', 'block', RM],
+      ['cat 2<<EOF\n$(rm -rf /home/me)\nEOF', 'block', RM],
+      ["cat \\2<<'EOF'\n$(rm -rf /home/me)\nEOF", 'allow'],
+    ])
+  })
+
+  test('a pipe at the end of a line goes on to the next line', () => {
+    expectCases([
+      ['ls ~/.claude/plugins | xargs rm -rf', 'ask', 'protected-path'],
+      ['ls ~/.claude/plugins |\n xargs rm -rf', 'ask', 'protected-path'],
+      ['ls ~/.claude/plugins |\n\n xargs rm -rf', 'ask', 'protected-path'],
+      ['ls ~/.claude/plugins |\n# note\n xargs rm -rf', 'ask', 'protected-path'],
+    ])
+    expect(splitShell('ls |\n cat').parts.map(part => part.isPiped)).toEqual([false, true])
+    // A command after a line that ends without a pipe is not piped.
+    expect(splitShell('ls\n cat').parts.map(part => part.isPiped)).toEqual([false, false])
+    expect(splitShell('ls |\n cat\n echo').parts.map(part => part.isPiped)).toEqual([false, true, false])
+  })
+})
+
+describe('nsenter -S and -G repeated, and env -S past its bound (DESIGN §16 item 42)', () => {
+  const programs: readonly (readonly [string, string, string])[] = [
+    ['rm -rf /home/me', 'block', RM],
+    ['git push --force origin main', 'block', 'force-push-protected-branch'],
+    ['sudo ls', 'ask', 'privileged'],
+    ['claude -p hi', 'ask', 'claude-session'],
+  ]
+  const onFeat = (command: string) => bash(command, { ...CONTEXT, currentBranch: 'feat' })
+
+  test('any number of ambiguous nsenter options leaves the command after them at its own tier', () => {
+    for (const times of [1, 2, 4, 5, 8, 20]) {
+      for (const unit of ['-S 0 ', '-S 0 -G 0 ', '-t 1 -S 0 ', '--setuid 0 --setgid 0 ']) {
+        for (const [program, tier, ruleId] of programs) {
+          const command = `nsenter ${unit.repeat(times)}${program}`
+          const result = onFeat(command)
+          expect(result.tier, command).toBe(tier)
+          expect(result.decided?.ruleId, command).toBe(ruleId)
+        }
+      }
+    }
+  })
+
+  test('the two readings: the word as the program, and the option taking it', () => {
+    expectCases([
+      ['nsenter -S x rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 -S 0 ls', 'review', 'shell-runner-unresolved'],
+      ['nsenter -S 0 -S 0 -S 0 -S 0 -S 0 ls', 'review', 'shell-runner-unresolved'],
+      ['nsenter --setuid=0 -t 1 ls', 'allow'],
+      // Reading B only: the first word is the program, and what follows it is no option of nsenter's.
+      ['nsenter -S rm -rf /home/me', 'block', RM],
+      ['nsenter -S 0 -- rm -rf /home/me', 'block', RM],
+      // nsenter moves the root, so what it runs is judged from `/` too: a relative delete is outside the repository there.
+      ['nsenter -S x rm -rf build', 'block', RM],
+      ['nsenter -S 0 -S 0 -S 0 -S 0 -S 0 -S 0 rm -rf build', 'block', RM],
+    ])
+    // Reading A only (the word is not a program the rules know): the command after the values is read.
+    expect(splitShell('nsenter -S 0 -S 0 -S 0 -S 0 -S 0 -S 0 rm -rf x').parts.map(part => part.core)).toContain('rm -rf x')
+    // Reading B only: the nested script is not needed for what B reads as the program.
+    expect(splitShell('nsenter -S rm -rf x').parts.map(part => part.core)).toContain('rm -rf x')
+  })
+
+  const gap = 'env ' + '-S "" '.repeat(8)
+  test('past the eighth env -S string, the string is read with the words that follow it', () => {
+    expectCases([
+      [`${gap}-S rm -rf /home/me`, 'block', RM],
+      [`${gap}-S"rm" -rf /home/me`, 'block', RM],
+      [`${gap}--split-string=rm -rf /home/me`, 'block', RM],
+      [`${gap}-S git push --force origin main`, 'block', 'force-push-protected-branch'],
+      [`${gap}-S dd if=/dev/zero of=/dev/sda`, 'block', 'raw-disk-write'],
+      [`${gap}-S 'rm -rf /home/me'`, 'block', RM],
+      [`${gap}-S sudo ls`, 'ask', 'privileged'],
+      // Later strings are read in their place, however many empty ones come between.
+      [`${gap}${'-S "" '.repeat(5)}-S rm -rf /home/me`, 'block', RM],
+      [`${gap}-S "" -i -S rm -rf /home/me`, 'block', RM],
+    ])
+    expect(onFeat(`${gap}-S claude -p hi`).tier).toBe('ask')
+    // Eight are spliced and read (allow); the ninth is not, and the part is reviewed.
+    expect(tierOf(`${gap}ls`)).toBe('allow')
+    for (const command of [`${gap}-S ls`, `${gap}-S "" ls`]) {
+      expect(tierOf(command), command).toBe('review')
+      expect(ruleOf(command), command).toBe('shell-runner-unresolved')
+    }
+  })
+})
+
 describe('the classifier does not stall on crafted input', () => {
-  // About 1 ms before the quadratic splice, 38 s with it (DESIGN §16 item 34). A generous ceiling, since the suite runs beside other work: the point is linear against quadratic.
+  // About 1 ms before the quadratic splice, 38 s with it (DESIGN §16 item 34). The ceiling guards quadratic growth in the
+  // length of the command, not a speed: it is far above the linear time and far below the quadratic one. Only the classify
+  // call is timed (not the building of the command), and the best of three runs is taken, so a loaded machine does not
+  // fail the test on one slow run while a real quadratic stall, which is slow every time, still does.
   const SLOW_MS = 3000
   const time = (command: string): number => {
-    const started = Date.now()
-    bash(command)
-    return Date.now() - started
+    let best = Infinity
+    for (let run = 0; run < 3 && best >= SLOW_MS; run++) {
+      const started = performance.now()
+      bash(command)
+      best = Math.min(best, performance.now() - started)
+    }
+    return best
   }
 
   test('env -S, thousands of times in one command, is classified at once and is not an allow', () => {
     const command = `env ${'-Senv '.repeat(3000)}ls`
     expect(command.length).toBe(18_006)
-    const started = Date.now()
-    const result = bash(command)
-    expect(Date.now() - started).toBeLessThan(SLOW_MS)
-    expect(['review', 'ask', 'block']).toContain(result.tier)
+    expect(time(command)).toBeLessThan(SLOW_MS)
+    expect(['review', 'ask', 'block']).toContain(bash(command).tier)
+  })
+
+  test('a command whose nested copies make more copies is cut by the bound on the text scanned, and is not an allow', () => {
+    const nested = "env -S '".repeat(2498)
+    const split = splitShell(nested)
+    expect(split.isCut).toBe(true)
+    expect(['review', 'ask', 'block']).toContain(bash(nested).tier)
+    // A long ordinary command is far under the bound.
+    expect(splitShell(`echo ${'a '.repeat(9000)}`).isCut).toBe(false)
+  })
+
+  test('repeated nsenter options and env -S strings past the bound at 20,000 characters, and their tiers', () => {
+    const repeated = `nsenter ${'-S 0 '.repeat(3990)}rm -rf /home/me`
+    expect(repeated.length).toBeLessThanOrEqual(20_000)
+    expect(time(repeated)).toBeLessThan(SLOW_MS)
+    expect(bash(repeated).tier).toBe('block')
+    const alternating = `nsenter ${'-S 0 -G 0 '.repeat(1990)}rm -rf /home/me`
+    expect(time(alternating)).toBeLessThan(SLOW_MS)
+    expect(bash(alternating).tier).toBe('block')
+    const strings = `env ${'-S "" '.repeat(3300)}-S rm -rf /home/me`
+    expect(strings.length).toBeLessThanOrEqual(20_000)
+    expect(time(strings)).toBeLessThan(SLOW_MS)
+    expect(bash(strings).tier).toBe('block')
   })
 
   test('a run of unknown wrapper options, and the other shapes the last round added, at 20,000 characters', () => {

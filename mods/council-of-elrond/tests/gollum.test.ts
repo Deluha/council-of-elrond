@@ -150,6 +150,7 @@ describe('compound names, more formats and low patterns', () => {
       'mysql-password': 'mysql x ',
       'curl-user-password': 'curl -u a:',
       'connection-string-empty-user': 'redis://:',
+      'connection-string-pwd': ';PWD=',
     }
     const size = 200_000
     for (const pattern of SECRET_PATTERNS) {
@@ -162,11 +163,17 @@ describe('compound names, more formats and low patterns', () => {
         `${prefix}${'a'.repeat(size)}`,
         `${'a'.repeat(size)}${prefix}`,
       ]
+      // The ceiling guards quadratic growth in the text (tens of seconds at this size), not a speed. Only the redact and
+      // scan calls are timed, and the best of three runs counts, so a loaded machine does not fail one slow run.
       for (const [index, input] of inputs.entries()) {
-        const started = Date.now()
-        redact(input)
-        await scanText(input)
-        expect(Date.now() - started, `${pattern.id} input ${index}`).toBeLessThan(1000)
+        let best = Infinity
+        for (let run = 0; run < 3 && best >= 1000; run++) {
+          const started = performance.now()
+          redact(input)
+          await scanText(input)
+          best = Math.min(best, performance.now() - started)
+        }
+        expect(best, `${pattern.id} input ${index}`).toBeLessThan(1000)
       }
     }
   })
@@ -414,9 +421,14 @@ describe('shapes the redaction missed', () => {
     const unit = ['password="', 'password=\'', 'password="a b ', 'curl -u ', 'curl -u a:', 'mysql x -p ', 'mysql --password ', 'authorization: token ', 'x-api-key: ']
     for (const prefix of unit) {
       for (const input of [prefix.repeat(Math.ceil(size / prefix.length)), `${prefix}${'a '.repeat(size / 2)}`, `${prefix}${'"'.repeat(size)}`, `${'a'.repeat(size)}${prefix}`]) {
-        const started = Date.now()
-        redact(input)
-        expect(Date.now() - started, prefix).toBeLessThan(1000)
+        // Best of three, the redact call alone: the ceiling guards quadratic growth, not a speed.
+        let best = Infinity
+        for (let run = 0; run < 3 && best >= 1000; run++) {
+          const started = performance.now()
+          redact(input)
+          best = Math.min(best, performance.now() - started)
+        }
+        expect(best, prefix).toBeLessThan(1000)
       }
     }
   })

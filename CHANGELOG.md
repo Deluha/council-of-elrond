@@ -41,8 +41,8 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   version 4 or 5 record is read as 6, so rounds and lockouts survive.
 
 ### Looser than 0.5.0
-- A value assigned to `PWD` or `OLDPWD` that is a directory (a path, `.`, `..`, an expansion or a backtick
-  substitution, with no `;`) is not redacted, whatever its length; any other value after `PWD` still is.
+- A shell assignment of a directory to `PWD` or `OLDPWD` (a path-shaped value: see "Secrets and redaction" below) is
+  not redacted, whatever its length; any other value after `PWD` still is.
 - The secrets scan no longer flags a plain subscript lookup (`token = tokens[0]`); redaction already left it readable.
 - `watch -d` takes no separate value, so a read of a plugin folder run under it passes as the read it is, where 0.5.0
   took the command for `-d`'s value and reviewed it.
@@ -221,8 +221,16 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   read both ways, as the option's value and as the program: the part is reviewed and the strictest reading wins. Three
   option tables were wrong (`systemd-run --expand-environment`, `nsenter -W`, and `pnpm -c`/`--shell-mode`, whose
   words are one shell string) and hid a command from the rules; they are corrected. More than eight `env -S` strings
-  in one command are not spliced but read alone, and the part is reviewed, so a crafted chain no longer stalls the
-  classifier.
+  in one command are not spliced but read together with the words that follow them, as one script, and the part is
+  reviewed, so a crafted chain no longer stalls the classifier and the command it holds keeps its own tier. However
+  many `-S` or `-G` options `nsenter` is given, the command after them is read once as well as the word after the
+  first of them, and the strictest reading wins. The text one command makes the parser scan, nested copies counted
+  again, is bounded: past the bound the call is reviewed.
+- **A process substitution used as a redirect target no longer hides the command that follows it.** The substitution
+  is the redirect's target, and the command after it, whatever separates them, is read with its own program. A redirect
+  with no target at the end of a part, and an escaped digit before a here-document, no longer carry over to what comes
+  next; a call that ends in a redirect with no target is reviewed. A pipe at the end of a line goes on to the next
+  line's command.
 - **A program name computed at run time is reviewed** (`shell-dynamic-program`): a variable, `${...}`, a substitution,
   a glob, a bracket or a brace list in the program position; a flat literal brace list is read as the command it
   expands to. An unquoted `$IFS` is read as a space. A command substitution inside unquoted `$(( … ))` is classified.
@@ -323,9 +331,14 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   capitalised callee that is no known type with a digit in its name or a digit-led argument). A value of 4 or 5
   characters counts only when it holds a digit or a character other than letters, `_` and `.`; a plain word needs 6.
   Not secrets: a bare number under 6 digits, a path or a backtick substitution under 6 characters, and a `PWD` or
-  `OLDPWD` assigned a directory. Ordinary code that only names a secret (`{ token: token }`, `this.token = token`,
+  `OLDPWD` assigned a directory in the shell's form. Ordinary code that only names a secret (`{ token: token }`, `this.token = token`,
   `z.string().min(8)`) is left readable and not asked about; any other value after a secret keyword is redacted, even
   one the scan does not flag. A code value is left as written in reviewer prompts, refusals and the audit log.
+- **`PWD` and `OLDPWD` are left readable only as a shell assignment of a directory.** The name must be exactly `PWD` or
+  `OLDPWD`, written with `=` and not as a quoted key, and the value must be shaped like a path (a start of `/`, `~/`,
+  `./`, `../`, an expansion or a plain substitution; letters, digits and `. _ / ~ + @ % -` only; no `; ! : & ? #`, quote
+  or space; no segment that is a word of 6 or more letters and digits). Any other value is the password keyword of a
+  connection string and is redacted and reported, and so is any value after a `;` earlier on the same line.
 - **Secrets are redacted before a cut, not after**: a script, a `.sql` file, the changes a push would send, the
   read-only preview and a file's diff are redacted whole, then cut, so a secret across the cut cannot show a piece of
   itself.

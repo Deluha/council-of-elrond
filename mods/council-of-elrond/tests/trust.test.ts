@@ -1205,6 +1205,18 @@ describe('the mod\'s own writes to the rules file', () => {
     expect(w.files.get(RULES)).toBeDefined()
     expect(w.stored[STORE]).toBeUndefined()
   })
+
+  test('with the option at always a file of lists alone is not held back: the rule is offered and written, nothing recorded', { options: { trustProjectRules: 'always' } }, async ($, on) => {
+    // Without the option the same file is left alone (the test above); with it nobody has anything to confirm, so it is written as any file is.
+    const existing = fileOf({ schemaVersion: 1, protectedPaths: ['infra/**'] })
+    const w = world(on, { answers: [ALLOW_ONCE, 'Add the rule'] })
+    w.files.set(RULES, existing)
+    await $.tool.call(SUDO)
+    expect(w.asked).toHaveLength(2)
+    expect(w.files.get(RULES)).not.toBe(existing)
+    expect(JSON.parse(w.files.get(RULES) ?? '')).toMatchObject({ protectedPaths: ['infra/**'], rules: [{ tier: 'allow' }] })
+    expect(w.stored[STORE]).toBeUndefined()
+  })
 })
 
 describe('several repositories under one root: each file stands alone', () => {
