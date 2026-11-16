@@ -484,6 +484,9 @@ P1, S3.
     gate `balanced` and 1.0.0, not this tag, and nothing in the release claims a rate;
   - if M1.1c slipped (OD10 unanswered), the notes and the threat model say that reads of
     credential files are not gated in 0.6.0;
+  - confirm with the maintainer that this reading is wanted: `env -S` given a one-word string
+    followed by a command is read as env reads it (the word is the program), where `origin/main`
+    blocked on the command after it (DESIGN §16 item 42);
   - the maintainer pushes the tag (MA4); the release workflow is green; a fresh machine installs
     with the one-line command.
 
@@ -584,11 +587,20 @@ the policy table and declares them. Findings F1 to F5 and §2.5; decisions D2 to
     runners; a user-switching wrapper with the command after the user; more package runners; the
     remote-control commands of terminal emulators (the same class as typing into another
     terminal).
+  - Found by the fourth review: more terminal-multiplexer and terminal-emulator forms that type
+    into another terminal or run an unread command: hooks set as options, format-string
+    commands, more `screen -X` forms, emulator remote-control verbs (DESIGN §16 item 32,
+    `isTerminalInput` and `command-unreadable` in `hooks/rules/shell.ts`).
 - [ ] **M4.2 Reads of protected paths** (M, **loosens**, approved; finding F1, AM5; was M3.2).
   For shell commands, a part that only reads a protected path classifies as the file tools do.
   The reader list and the "reader piped to a writer" rule that the hardening pull request built
   for write-protected folders (DESIGN §16) are the base. Anything not on the list still asks.
   Credential files are the exception (M1.1c).
+  - Found by the fourth review: a reader of a write-protected folder that feeds a writer through
+    a command substitution, a loop or a subshell is not followed; only a top-level pipe is
+    (DESIGN §16 item 30, `pipesIntoNonReader` in `hooks/rules/classify.ts`).
+  - Found by the fourth review: `cd` into a protected folder by a glob, a substitution or a
+    default expansion is not followed (DESIGN §16 item 29, `cwdTracker`/`cdTargetOf`).
 - [ ] **M4.3 Recursive delete under the temp directory** (S, **loosens**, approved; finding F3,
   AM5). It asks instead of blocking.
 - [ ] **M4.4 Text written to a file** (S, **loosens**, approved; finding F4, AM5). The production
@@ -777,9 +789,28 @@ AM1 says none of them is an exception to the freeze.
   script is unseen, with a note in the prompt).
 - **L32** The cache keyed also by the content of files the call depends on, in place of the
   blanket "a call that runs a script is not cached".
+  - Found by the fourth review: the cache still serves calls whose behaviour lives in a file they
+    read (apply, upgrade and compose-style commands, `-f file` forms) and misses many project
+    runners, while inline code is never cached; both directions need a decision (DESIGN §16 item
+    35, `isCacheable` in `elrond/operations.ts`).
 
 Declined: a fourth model member (the dependency reviewer, 7.4 e), and achievements and sounds
 (2026-11-13).
+
+### Found by the fourth review, not scheduled
+
+Gaps no brief above covers. Classes only, no example inputs (R11). Each names its DESIGN §16 item
+and the code it concerns; a session that takes one writes it a brief first.
+
+- The "matches every call" note in the trust listing depends on a rule having no matcher, not on
+  what its pattern matches (DESIGN §16 item 28, `trust.matchesAll`).
+- The capital-callee redaction rule raises findings on ORM type calls not in its known-type list;
+  relaxing it loosens, so it is the maintainer's decision (DESIGN §16 item 37, `hooks/redact.ts`).
+- The dialog's display-width table misses some wide ranges (DESIGN §16 item 39, the row-width code
+  in the dialog).
+- `cleanText` misses some invisible code points (DESIGN §16 item 28, `cleanText`).
+- The 6-character segment rule of the `PWD` exemption redacts ordinary directories named with
+  letters and digits (DESIGN §16 item 43); loosening it is the maintainer's decision.
 
 ## 6. Open decisions
 
@@ -809,7 +840,7 @@ never decides one of these; it applies the default.
 | OD18 | Should a confirmed file's project rules be able to lower a shipped decision at all (a confirmed review rule can replace a shipped ask), or only add, as an unconfirmed file's do | Only add, for every file: it loosens nothing and removes the need for the listing's warning | Today: a confirmed file's rules decide first, and the trust listing says so | nothing | before 1.0 |
 | OD19 | `/council off` and the secrets scan on an allowed call | Keep: an allowed call holding a high-confidence secret is refused even under bypass | Kept | nothing | any time |
 | OD20 | Redaction noise that remains (a templated variable reference; an unquoted command substitution cut at a space), and `/council rules` and `/council test` showing a project reason unmarked | Fix in one small brief after 0.6.0 | As is | nothing | any time |
-| OD21 | The development-process proposal (P0 Phase 1): the ask-first list, the hard rules, the task workflows | The maintainer reviews the proposal | Phase 2 does not start | P0 | now |
+| OD21 | The development-process proposal (P0 Phase 1): the ask-first list, the hard rules, the task workflows | The maintainer reviews the proposal | Answered 2026-11-15 by MA10 (proposal approved; Phase 2 built) | P0 | now |
 | OD22 | The scope of "typing into another terminal": is reading another pane's screen in scope, and are terminal emulators' remote-control commands | Reading is out of scope for 0.6.0; remote control joins M4.1 | Sending keys asks; reading is allowed | M4.1 in part | before 1.0 |
 | OD23 | AM3's numbers | Keep | As written; they may change only before M2's data is read | M2.4 | before M2.2 runs |
 | OD24 | A static check for runaway regexes (L30), and claiming a round for tools keyed by name before OD5 is decided (M1.10 does it) | Never for the first; accept the second | No static check; M1.10 as written | nothing | any time |
