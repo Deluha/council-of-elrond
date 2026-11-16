@@ -299,7 +299,7 @@ function pipesIntoNonReader(subjects: readonly Subject[], index: number): boolea
   return false
 }
 
-function subjectsOf(call: Call, context: ClassifyContext): { subjects: Subject[]; tooLong: boolean; cut: boolean } {
+function subjectsOf(call: Call, context: ClassifyContext): { subjects: Subject[]; tooLong: boolean; cut: boolean; exhausted: boolean } {
   if (SHELL_TOOLS.has(call.tool)) {
     const command = typeof call.input.command === 'string' ? call.input.command : ''
     const split = splitShell(command)
@@ -307,6 +307,7 @@ function subjectsOf(call: Call, context: ClassifyContext): { subjects: Subject[]
       subjects: split.parts.map(part => ({ label: part.text, part, candidates: pathWordsOf(part), protectedWords: protectedWordsOf(part) })),
       tooLong: split.isTooLong,
       cut: split.isCut,
+      exhausted: split.isExhausted,
     }
   }
   const field = FILE_PATH_FIELDS[call.tool]
@@ -315,9 +316,9 @@ function subjectsOf(call: Call, context: ClassifyContext): { subjects: Subject[]
     const absolute = resolve(given, context.cwd, context.home)
     const path = relativeTo(absolute, context.root) ?? absolute
     const candidates = context.realPath !== undefined ? [given, context.realPath] : [given]
-    return { subjects: [{ label: path, path, candidates }], tooLong: false, cut: false }
+    return { subjects: [{ label: path, path, candidates }], tooLong: false, cut: false, exhausted: false }
   }
-  return { subjects: [{ label: call.tool, candidates: [] }], tooLong: false, cut: false }
+  return { subjects: [{ label: call.tool, candidates: [] }], tooLong: false, cut: false, exhausted: false }
 }
 
 const SCRIPT_RULES = /^script-/
@@ -509,7 +510,7 @@ export function classifyBase(call: Call, config: CompiledConfig, context: Classi
     production: config.production,
   }
   const inputJson = JSON.stringify(call.input)
-  const { subjects, tooLong, cut } = subjectsOf(call, context)
+  const { subjects, tooLong, cut, exhausted } = subjectsOf(call, context)
   const findings: Finding[] = []
   const unconfirmed: Finding[] = []
   const scriptPaths: string[] = []
@@ -579,6 +580,18 @@ export function classifyBase(call: Call, config: CompiledConfig, context: Classi
     if (SCRIPT_RULES.test(best.deciding.ruleId) && subject.part !== undefined) {
       scriptPaths.push(...pathWordsOf(subject.part).filter(word => /[./]/.test(word)))
     }
+  }
+
+  // The readings the parser adds beside the text used up their own budget and were not all read: the call is refused. It
+  // comes after the parts, so a block a part found names its own rule (`strictest` keeps the first of equals).
+  if (exhausted) {
+    findings.push({
+      tier: 'block',
+      ruleId: 'command-too-complex-to-read',
+      source: 'shipped',
+      reason: 'The command repeats wrapper options or split strings more often than the parser reads; it is refused. Write the command plainly.',
+      subject: call.tool,
+    })
   }
 
   const decided = strictest(findings)

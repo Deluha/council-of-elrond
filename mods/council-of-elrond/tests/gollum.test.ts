@@ -129,7 +129,10 @@ describe('compound names, more formats and low patterns', () => {
     }
   })
 
-  test('every shipped pattern scans and redacts adversarial input in linear time', async () => {
+  // The runner's own limit for a test is 5 s and this one takes about 3 s idle (every pattern, several shapes of 200,000
+  // characters): the limit of the test is raised so the runner never fails it for being slow as a whole. The ceiling each
+  // input is held to, below, is what the test asserts and is not raised.
+  test('every shipped pattern scans and redacts adversarial input in linear time', { timeoutMs: 30_000 }, async () => {
     const prefixes: Record<string, string> = {
       'private-key': '-----BEGIN RSA PRIVATE KEY-----\n',
       'aws-access-key': 'AKIA',
@@ -151,7 +154,8 @@ describe('compound names, more formats and low patterns', () => {
       'curl-user-password': 'curl -u a:',
       'connection-string-empty-user': 'redis://:',
       'connection-string-pwd': ';PWD=',
-      'connection-string-pwd-continued': 'PWD=/aaaa;U=',
+      // A `;` and 60 characters with no `=`: the look-ahead of the continued pattern at its worst.
+      'connection-string-pwd-continued': `PWD=/aaaa;${'U'.repeat(60)}`,
     }
     const size = 200_000
     for (const pattern of SECRET_PATTERNS) {

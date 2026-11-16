@@ -50,23 +50,30 @@ export type Split = {
   parts: ShellPart[]
   /** The command was longer than MAX_COMMAND_CHARS and was not parsed. */
   isTooLong: boolean
-  /** The part or depth limit cut the parse short. */
+  /** The part or depth limit cut the parse short (the command's own text; the call is reviewed). */
   isCut: boolean
+  /**
+   * The readings this parser adds beside the text (the `nsenter` option read as taking a value, a spliced `env -S` string
+   * read again, the strings past the splice bound, and what is nested in them) used up their own budget and were not all
+   * read: the call is refused, never reviewed.
+   */
+  isExhausted: boolean
 }
 
 export const MAX_COMMAND_CHARS = 20_000
 /** The parts a command's own text may make (nested scripts it writes included); past it the parse is cut and the call is reviewed. */
 const MAX_PARTS = 200
-/** The parts the copies of spliced `env -S` strings may make, apart from the above, so that copies can never use up the room of the text the command holds. */
-const MAX_COPY_PARTS = 200
-/**
- * The most text the copies of spliced `env -S` strings may have scanned in one command (twenty times the longest command).
- * A crafted command can make copies of itself that each make more. Only these copies are counted and cut: a script the
- * command's own text holds (a `-c` string, a substitution, a subshell, a heredoc body, a past-bound `env -S` string) is
- * always scanned, whatever the copies before it used. Past the bound the call is reviewed, and what was found stays found.
- */
-const MAX_SCANNED_CHARS = 20 * MAX_COMMAND_CHARS
 const MAX_DEPTH = 4
+/**
+ * The budgets of the extra readings: what this parser reads beside the command's own text (the `nsenter -S` option read
+ * as taking a value, the second reading of a spliced `env -S` string, the strings past the splice bound, and every script
+ * nested inside one of those). They are never shared with the text's own: the text keeps `MAX_PARTS` and `MAX_DEPTH`
+ * exactly as before, and an extra neither uses them up nor is read through them. When an extra budget is used up the call
+ * is refused (`isExhausted`), never reviewed: a bound that lowered a block to a review is how three earlier versions failed.
+ */
+const MAX_EXTRA_CHARS = 20 * MAX_COMMAND_CHARS
+const MAX_EXTRA_PARTS = 400
+const MAX_EXTRA_DEPTH = 4
 
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh', 'ash', 'busybox'])
 
@@ -241,29 +248,6 @@ const WRAPPERS: ReadonlyMap<string, Spec> = new Map(Object.entries({
 
 /** The nsenter options whose separate next word may or may not be their value, by version. */
 const NSENTER_AMBIGUOUS: ReadonlySet<string> = new Set(['-S', '-G', '--setuid', '--setgid'])
-
-/**
- * nsenter's command where every ambiguous option takes the next word as its value: the words from `from` (just after
- * the first such option's value) on, with the options that follow skipped the same way, and `--` ended. One pass, so
- * the cost does not grow with the number of options. What was glued to an option is added to `optionValues`.
- */
-function nsenterCommandIfValues(spec: Spec, words: readonly string[], from: number, optionValues: string[]): string[] {
-  let i = from
-  while (i < words.length) {
-    const word = words[i] as string
-    if (word === '--') {
-      i++
-      break
-    }
-    if (!word.startsWith('-') || word === '-') break
-    const read = readOption(spec, words, i, false)
-    if (read.attached !== undefined) optionValues.push(...read.attached)
-    const value = words[read.next]
-    const isTakingNext = read.name !== undefined && NSENTER_AMBIGUOUS.has(read.name) && read.attached === undefined && value !== undefined && !value.startsWith('-')
-    i = isTakingNext ? read.next + 1 : read.next
-  }
-  return words.slice(i)
-}
 
 /** Other names a wrapper goes by, read with the table of the one it points to. */
 const WRAPPER_ALIASES: ReadonlyMap<string, string> = new Map([
@@ -486,20 +470,28 @@ type Builder = {
   isCut: boolean
   /** The last nesting level handed out. */
   lastScope: number
-  /** The characters of copies (a spliced `env -S` string read again, and what is nested in such a copy) scanned so far. */
-  scanned: number
-  /** Parts made by the command's own text, and by copies: each has its own bound. */
+  /** The parts the command's own text made: bound by `MAX_PARTS`, as on `origin/main`, and by nothing else. */
   ownParts: number
-  copyParts: number
+  /** The extra readings (see `MAX_EXTRA_CHARS`): the characters scanned, the parts made, and whether one budget ran out. */
+  extraScanned: number
+  /** The most characters the extras may scan: `MAX_EXTRA_CHARS`, less when a test asks. */
+  maxExtraChars: number
+  extraParts: number
+  isExhausted: boolean
 }
 
 type Core = {
   wrappers: string[]
   coreWords: string[]
-  /** Scripts that are the first reading of text the part holds (a `-c` string, a past-bound `env -S` string, an `nsenter` reading). */
+  /** Scripts the part's own text holds (the value of a wrapper or runner's `-c` option, a shell string): read as the text's own. */
   nestedScripts: string[]
-  /** Scripts that read again a string already spliced into the part: copies, charged to the bound on copies. */
-  copyScripts: string[]
+  /**
+   * The readings this parser adds: the shell scanner's second reading of each spliced `env -S` string, and both readings
+   * (env's and the shell's) of the strings past the splice bound. Read as extras, with budgets of their own.
+   */
+  extraScripts: string[]
+  /** An `nsenter` option whose separate next word may or may not be its value was met: the part is also read as if every one takes it. */
+  isAmbiguous: boolean
   /**
    * The words from a wrapper or runner whose options could not be read for
    * sure (one the tables do not know): they are classified again as they stand,
@@ -590,14 +582,124 @@ function readOption(spec: Spec, words: readonly string[], k: number, takesUnknow
   return { next: k + 1, isUnknown: false }
 }
 
+/** `env -S` splits on these six blanks (the C locale's `isspace`), not on every character a regular expression's `\s` holds. */
+const ENV_BLANKS = ' \t\n\v\f\r'
+const ENV_VARIABLE = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}/
+const ENV_LITERAL_ESCAPES = '#$"\'\\'
+const ENV_CONTROL_ESCAPES: Readonly<Record<string, string>> = { f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' }
+
 /**
- * The words `env -S` makes of its string: split on blanks, with quotes and the
- * escapes `env` reads (`\_` is a separator outside quotes and a blank inside
- * double quotes, `\c` ends the string, `#` at the start of a word begins a
- * comment). `\f \n \r \t \v` are read as separators, the way that exposes more
- * of what follows.
+ * The words GNU `env -S` makes of its string, as `env` 9.4 does (checked with harmless `printf` calls):
+ * - outside quotes: blanks separate; `\_` is a separator; `\c` ends the string; `\f \n \r \t \v` are those characters
+ *   (not separators); `\# \$ \" \' \\` are the character; a `#` that starts a word begins a comment to the end;
+ *   `${NAME}` is expanded (kept as written here: its value is not known) and a bare `$` is an error;
+ * - inside single quotes: only `\\` and `\'` are escapes, every other backslash is a backslash, `$` is plain;
+ * - inside double quotes: as outside, but `\_` is a blank character, `\c` is an error, and a `#` is plain;
+ * - any other backslash sequence, a backslash at the end, an unterminated quote and a bare `$` are errors: `env` runs
+ *   nothing. `isSure` is then false; the words are still read on (leniently: an unknown escape is its character, a bare
+ *   `$` is itself, an unterminated quote runs to the end), so that the part is reviewed with the most the string could say.
  */
-function envStringWords(text: string): string[] {
+function envSplit(text: string): { words: string[]; isSure: boolean } {
+  const words: string[] = []
+  let word = ''
+  let hasWord = false
+  let quote = ''
+  let isSure = true
+  const end = () => {
+    if (hasWord) words.push(word)
+    word = ''
+    hasWord = false
+  }
+  let skip = 0
+  const variable = (at: number): void => {
+    const found = ENV_VARIABLE.exec(text.slice(at, at + 80))
+    if (found === null) {
+      isSure = false
+      word += '$'
+    } else word += found[0]
+    skip = found === null ? 0 : found[0].length - 1
+    hasWord = true
+  }
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] as string
+    if (c === '\\') {
+      const e = text[++i]
+      if (quote === "'") {
+        // Only `\\` and `\'` are escapes in single quotes; any other backslash is literal and what follows it is read again.
+        if (e === '\\' || e === "'") word += e
+        else {
+          word += '\\'
+          i--
+        }
+        hasWord = true
+        continue
+      }
+      if (e === undefined) {
+        isSure = false
+        word += '\\'
+        hasWord = true
+        continue
+      }
+      if (e === 'c') {
+        if (quote === '"') {
+          isSure = false
+          word += 'c'
+          hasWord = true
+          continue
+        }
+        end()
+        return { words, isSure }
+      }
+      if (e === '_') {
+        if (quote === '"') {
+          word += ' '
+          hasWord = true
+        } else end()
+      } else if (Object.hasOwn(ENV_CONTROL_ESCAPES, e)) {
+        word += ENV_CONTROL_ESCAPES[e]
+        hasWord = true
+      } else {
+        if (!ENV_LITERAL_ESCAPES.includes(e)) isSure = false
+        word += e
+        hasWord = true
+      }
+      continue
+    }
+    if (quote !== '') {
+      if (c === quote) quote = ''
+      else if (c === '$' && quote === '"') {
+        variable(i)
+        i += skip
+      } else word += c
+      continue
+    }
+    if (c === "'" || c === '"') {
+      quote = c
+      hasWord = true
+    } else if (ENV_BLANKS.includes(c)) {
+      end()
+    } else if (c === '#' && !hasWord) {
+      break
+    } else if (c === '$') {
+      variable(i)
+      i += skip
+    } else {
+      word += c
+      hasWord = true
+    }
+  }
+  if (quote !== '') isSure = false
+  end()
+  return { words, isSure }
+}
+
+/**
+ * The reading of the first versions of this parser (it handled a backslash before it looked at the quote state, and split on
+ * every blank a regular expression's `\s` holds, `\f \n \r \t \v` included): not what `env` does, but it exposes more of what
+ * follows in the strings where the two differ, so it is read as a further extra beside `envSplit`, and only then. Its result
+ * is never the only reading of a string.
+ */
+function envLooseWords(text: string): string[] {
   const out: string[] = []
   let word = ''
   let hasWord = false
@@ -640,6 +742,130 @@ function envStringWords(text: string): string[] {
   return out
 }
 
+/**
+ * The wrappers and the options of each that take a value, as `origin/main` read them (before the tables above were
+ * corrected). Only `mainEnvStrings` uses it: it finds the `env -S` strings that `origin/main`'s walk found, however its
+ * options were misread, because a string env's own splitting leaves unread must still be read as it was.
+ */
+const MAIN_WRAPPERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['sudo', new Set(['-u', '-g', '-h', '-p', '-C', '-D', '-r', '-t', '-U', '-T', '--user', '--group'])],
+  ['doas', new Set(['-u', '-C'])],
+  ['env', new Set(['-u', '-C', '-S', '--unset', '--chdir', '--split-string'])],
+  ['nice', new Set(['-n', '--adjustment'])],
+  ['ionice', new Set(['-c', '-n', '-p', '-t'])],
+  ['nohup', new Set()],
+  ['time', new Set(['-f', '-o'])],
+  ['command', new Set()],
+  ['builtin', new Set()],
+  ['exec', new Set(['-a'])],
+  ['timeout', new Set(['-s', '-k', '--signal', '--kill-after'])],
+  ['stdbuf', new Set(['-i', '-o', '-e'])],
+  ['unbuffer', new Set()],
+  ['caffeinate', new Set(['-t', '-w'])],
+  ['chroot', new Set(['--userspec', '--groups'])],
+  ['setsid', new Set()],
+  ['flock', new Set(['-w', '--timeout', '-E', '--conflict-exit-code'])],
+  ['strace', new Set(['-o', '-p', '-e', '-s', '-S', '-u'])],
+  ['ltrace', new Set(['-o', '-p', '-e', '-s'])],
+  ['watch', new Set(['-n', '--interval', '-d', '--differences'])],
+  ['unshare', new Set(['--map-user', '--map-group'])],
+  ['nsenter', new Set(['-t', '--target', '-S', '--setuid', '-G', '--setgid'])],
+  ['chrt', new Set([])],
+  ['taskset', new Set(['-c', '-p'])],
+  ['numactl', new Set(['-N', '--cpunodebind', '-m', '--membind', '-C', '--physcpubind'])],
+  ['setarch', new Set([])],
+  ['eatmydata', new Set()],
+  ['proxychains', new Set(['-f'])],
+  ['proxychains4', new Set(['-f'])],
+  ['xvfb-run', new Set(['-n', '-s', '-e', '-f'])],
+  ['retry', new Set(['-t', '-d'])],
+  ['gosu', new Set()],
+  ['runuser', new Set(['-u', '-g', '-G', '-c', '--user', '--group'])],
+  ['setpriv', new Set(['--reuid', '--regid', '--groups', '--inh-caps', '--ambient-caps', '--bounding-set'])],
+  ['run0', new Set(['--uid', '--gid', '-u', '-g', '--setenv', '--chdir', '-D'])],
+  ['chpst', new Set(['-u', '-U', '-e', '-/', '-n', '-l', '-L'])],
+  ['pkexec', new Set(['--user'])],
+])
+const MAIN_TWO_WORD_RUNNERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['npm', new Set(['exec', 'x'])], ['pnpm', new Set(['exec', 'dlx'])], ['yarn', new Set(['exec', 'dlx'])], ['poetry', new Set(['run'])],
+  ['pipenv', new Set(['run'])], ['pdm', new Set(['run'])], ['rye', new Set(['run'])], ['hatch', new Set(['run'])], ['uv', new Set(['run'])],
+  ['bundle', new Set(['exec'])], ['composer', new Set(['exec'])], ['conda', new Set(['run'])], ['mamba', new Set(['run'])], ['micromamba', new Set(['run'])],
+])
+const MAIN_ONE_WORD_RUNNERS: ReadonlySet<string> = new Set(['npx', 'bunx', 'pnpx', 'uvx'])
+
+/**
+ * The `env -S` and `--split-string` strings that `origin/main`'s walk over a part's words found: its wrappers (each with
+ * the options that take a value in the table above) and runners stripped in turn, an `env` taking `-S` and
+ * `--split-string` strings anywhere among its options, the first word that is no option ending them. Each is read alone
+ * as an extra, so that what that reading found stays found whatever env's own splitting does with the string before it
+ * (`env -S x watch env -S 'rm -rf /'`: for env `x` is the program; for main the walk went on). One pass over the words.
+ */
+function mainEnvStrings(words: readonly string[]): string[] {
+  const found: string[] = []
+  let k = 0
+  for (;;) {
+    while (k < words.length && (isAssignment(words[k] as string) || KEYWORDS.has(words[k] as string))) k++
+    const word = words[k]
+    if (word === undefined) break
+    const name = word.includes('/') && SYSTEM_BIN.test(word) ? word.slice(word.lastIndexOf('/') + 1) : word
+    const subs = MAIN_TWO_WORD_RUNNERS.get(name)
+    if (subs !== undefined && subs.has(words[k + 1] ?? '')) {
+      k += 2
+      while (k < words.length) {
+        const option = words[k] as string
+        if (option === '--') {
+          k++
+          break
+        }
+        if (!option.startsWith('-')) break
+        k += option.includes('=') ? 1 : 2
+      }
+      continue
+    }
+    if (MAIN_ONE_WORD_RUNNERS.has(name)) {
+      k++
+      while (k < words.length) {
+        const option = words[k] as string
+        if (option === '--') {
+          k++
+          break
+        }
+        if (option === '-c' || option === '--call') {
+          k += 2
+          continue
+        }
+        if (!option.startsWith('-')) break
+        k += option === '-p' || option === '--package' ? 2 : 1
+      }
+      continue
+    }
+    const takesValue = MAIN_WRAPPERS.get(name)
+    if (takesValue === undefined) break
+    k++
+    while (k < words.length) {
+      const option = words[k] as string
+      if (option === '--') {
+        k++
+        break
+      }
+      if (name === 'env' && (isAssignment(option) || option === '-' || option === '-i' || option === '--ignore-environment')) {
+        k++
+        continue
+      }
+      if (name === 'env' && (option === '-S' || option === '--split-string' || option.startsWith('--split-string='))) {
+        found.push(option.includes('=') ? option.slice(option.indexOf('=') + 1) : (words[k + 1] ?? ''))
+        k += option.includes('=') ? 1 : 2
+        continue
+      }
+      if (!option.startsWith('-') || option === '-') break
+      k += takesValue.has(option) ? 2 : 1
+    }
+    if (name === 'timeout' && k < words.length) k++
+    if ((name === 'chroot' || name === 'flock') && k < words.length && !(words[k] as string).startsWith('-')) k++
+  }
+  return found
+}
+
 const MAX_BRACE_ELEMENTS = 16
 
 /** At most this many `env -S` strings in one command are spliced into env's own words; more is not read for sure (review). */
@@ -658,19 +884,45 @@ function braceWords(word: string): string[] | undefined {
   return elements.map(element => `${match[1]}${element}${match[3]}`)
 }
 
-/** Strips assignments, keywords, wrappers and git's global options. */
-function coreOf(input: readonly string[]): Core {
+/**
+ * Strips assignments, keywords, wrappers and git's global options. With `isReadingA` an `nsenter` option whose separate
+ * next word may or may not be its value takes it (the other of the two readings; `Core.isAmbiguous` says there is one).
+ */
+function coreOf(input: readonly string[], isReadingA = false): Core {
   let words = input
   let k = 0
   const wrappers: string[] = []
   const nestedScripts: string[] = []
-  const copyScripts: string[] = []
+  const extraScripts: string[] = []
   const optionValues: string[] = []
   let unresolved: string[] | undefined
   let movesDir = false
+  let isAmbiguous = false
   let envSplices = 0
-  // The `env -S` strings past the bound, with the words between them, and where the words not yet added start.
-  let pastBound: string[] | undefined
+  // Each `env -S` string read alone, as a script, as `origin/main` read it: an extra. Each time it stands (a crafted command
+  // that repeats one makes main's parts run out, and so ours: the same count, in the extras' budget). The strings main's own
+  // walk over the words found (`mainEnvStrings`) are read first, whatever env's splitting leaves of them; the loop below
+  // reads the others (an attached `-Sx` is a string for env and was a flag for main) and not again those already read.
+  // The second reading of `nsenter` has the same words and the same walk, so it makes none.
+  const aloneToRead = new Map<string, number>()
+  const readAlone = (text: string) => {
+    if (text === '') return
+    const left = aloneToRead.get(text) ?? 0
+    if (left > 0) aloneToRead.set(text, left - 1)
+    else extraScripts.push(text)
+  }
+  if (!isReadingA) {
+    for (const alone of mainEnvStrings(input)) {
+      if (alone === '') continue
+      aloneToRead.set(alone, (aloneToRead.get(alone) ?? 0) + 1)
+      extraScripts.push(alone)
+    }
+  }
+  // The `env -S` strings past the bound, each as env reads it and as a shell reads it, with the words between them, and where the words not yet added start.
+  let pastEnv: string[] | undefined
+  let pastShell: string[] | undefined
+  let pastLoose: string[] | undefined
+  let hasPastLoose = false
   let pastBoundFrom = 0
   // A call whose options were not all read: its words as they stand are classified
   // again, and where it runs is not known either.
@@ -840,18 +1092,20 @@ function coreOf(input: readonly string[]): Core {
         const read = readOption(spec, words, k, false)
         if (read.isUnknown) markUnresolved(() => [name, ...words.slice(start + 1)])
         if (read.attached !== undefined) optionValues.push(...read.attached)
-        // nsenter's -S and -G: whether a separate word is the option's value depends on the installed util-linux,
-        // so neither reading is safe. Reading B (the word is the program) is the one this loop goes on with: the
-        // word ends the options, so nothing after it is an nsenter option. Reading A (every such option takes the
-        // next word) is made here once, from the first such option: the command after all of them, as one nested
-        // script, whatever the number of them. The part is also reviewed as one not read for sure.
+        // nsenter's -S and -G: whether a separate word is the option's value depends on the installed util-linux, and one
+        // version holds for every link of a chain, so there are two readings of the whole part and no more. Reading B (the
+        // word is the program) is this loop: the word ends the options, and the part is reviewed as one not read for
+        // sure. Reading A (every such option takes the next word) is the same loop run once more with `isReadingA`: the
+        // caller makes one extra part of it for the part, whatever the number of options and links.
         if (canonical === 'nsenter' && read.name !== undefined && NSENTER_AMBIGUOUS.has(read.name) && read.attached === undefined) {
           const next = words[read.next]
           if (next !== undefined && !next.startsWith('-')) {
+            if (isReadingA) {
+              k = read.next + 1
+              continue
+            }
+            isAmbiguous = true
             markUnresolved(() => [name, ...words.slice(start + 1)])
-            const command = nsenterCommandIfValues(spec, words, read.next + 1, optionValues)
-            // Led by nsenter itself (and `--`, so nothing after it is read as its option): it moves the root, so the command is judged from `/` too.
-            if (command.length > 0) nestedScripts.push([name, '--', ...command].map(quoted).join(' '))
           }
         }
         if (read.name !== undefined) {
@@ -861,21 +1115,40 @@ function coreOf(input: readonly string[]): Core {
           // is a command line, and its words are read as the rest of env's own.
           if (canonical === 'env' && (read.name === '-S' || read.name === '--split-string')) {
             const raw = read.value ?? ''
+            const split = envSplit(raw)
+            // Each string is also read alone as a script, as `origin/main` read it: an extra (the splice below and the readings
+            // past the bound add to it and never stand for it, and it can neither use up the room of the text nor be cut by it).
+            if (!isReadingA) readAlone(raw)
             // Past the bound the strings are no longer spliced (that copies every word after them, and a crafted command
-            // made it quadratic): they are read together as one script, the first string and the words that follow it
-            // (a later string in place, as splicing would put it), and the part is reviewed as one whose options were
-            // not all read. One script for all of them, so the work does not grow with their number.
+            // made it quadratic): they are read together, in order, with the words between and after them, as two scripts
+            // (extras): the env reading (each string split as env splits it, each word quoted) and the shell reading (the
+            // raw strings, as the earlier versions read them), and the part is reviewed as one whose options were not
+            // all read. Two scripts for all of them, so the work does not grow with their number.
+            // A further reading, the first versions' (`envLooseWords`), made only when it differs from env's own.
+            const loose = envLooseWords(raw)
+            const isLooseDifferent = loose.length !== split.words.length || loose.some((word, index) => word !== split.words[index])
             if (++envSplices > MAX_ENV_SPLICES) {
               markUnresolved(() => [name, ...words.slice(start + 1)])
-              // Read as env reads it (`envStringWords`: its blanks, quotes, `\_`, `\c` and `#` comment), and each word quoted, so the shell scanner does not read the string again its own way.
-              if (pastBound === undefined) pastBound = envStringWords(raw).map(quoted)
-              else pastBound.push(...words.slice(pastBoundFrom, k).map(quoted), ...envStringWords(raw).map(quoted))
+              const between = words.slice(pastBoundFrom, k).map(quoted)
+              if (pastEnv === undefined || pastShell === undefined || pastLoose === undefined) {
+                pastEnv = split.words.map(quoted)
+                pastShell = [raw]
+                pastLoose = loose.map(quoted)
+              } else {
+                pastEnv.push(...between, ...split.words.map(quoted))
+                pastShell.push(...between, raw)
+                pastLoose.push(...between, ...loose.map(quoted))
+              }
+              if (isLooseDifferent) hasPastLoose = true
               pastBoundFrom = read.next
               k = read.next
               continue
             }
+            // A string env cannot read (an error in it) runs nothing in env; the part is reviewed, and the shell's reading below is the one that tells what the text says.
+            if (!split.isSure) markUnresolved(() => [name, ...words.slice(start + 1)])
+            if (isLooseDifferent) extraScripts.push([...loose, ...words.slice(read.next)].map(quoted).join(' '))
             splits.push({ raw, rest: words.slice(read.next) })
-            words = [...words.slice(0, k), ...envStringWords(raw), ...words.slice(read.next)]
+            words = [...words.slice(0, k), ...split.words, ...words.slice(read.next)]
             continue
           }
         }
@@ -897,13 +1170,17 @@ function coreOf(input: readonly string[]): Core {
     }
     // chrt PRIORITY CMD, taskset MASK CMD: the same, unless it is a pid form.
     if (PID_WRAPPERS.has(canonical) && !isPidForm && k < words.length) k++
-    // The second reading of a spliced string (the shell scanner's, beside env's own that is in the part): a copy of text the part holds, charged to the bound on copies.
-    for (const split of splits) copyScripts.push([split.raw, ...split.rest.map(quoted)].join(' '))
+    // The second reading of a spliced string (the shell scanner's, beside env's own that is in the part): an extra.
+    for (const split of splits) extraScripts.push([split.raw, ...split.rest.map(quoted)].join(' '))
   }
-  // Led by `env`, so that its options between and after the strings are read as options and not as the program. The
-  // first reading of the strings past the bound, so it is not a copy. One script for the whole call, however many
-  // wrappers it chains (one for each would hold all the words after it, and cost the square of their number).
-  if (pastBound !== undefined) nestedScripts.push(['env', ...pastBound, ...words.slice(pastBoundFrom).map(quoted)].join(' '))
+  // Led by `env`, so that its options between and after the strings are read as options and not as the program. One
+  // script of each reading for the whole call, however many wrappers it chains (one for each would hold all the words
+  // after it, and cost the square of their number).
+  if (pastEnv !== undefined && pastShell !== undefined) {
+    const tail = words.slice(pastBoundFrom).map(quoted)
+    extraScripts.push(['env', ...pastEnv, ...tail].join(' '), ['env', ...pastShell, ...tail].filter(word => word !== '').join(' '))
+    if (hasPastLoose && pastLoose !== undefined) extraScripts.push(['env', ...pastLoose, ...tail].join(' '))
+  }
   const coreWords = words.slice(k).map((word, index) =>
     index === 0 && word.includes('/') && SYSTEM_BIN.test(word) ? word.slice(word.lastIndexOf('/') + 1) : word,
   )
@@ -924,7 +1201,7 @@ function coreOf(input: readonly string[]): Core {
     }
     coreWords.splice(1, g - 1)
   }
-  return { wrappers, coreWords, nestedScripts, copyScripts, movesDir, optionValues, ...(unresolved !== undefined && { unresolved }) }
+  return { wrappers, coreWords, nestedScripts, extraScripts, isAmbiguous, movesDir, optionValues, ...(unresolved !== undefined && { unresolved }) }
 }
 
 /** `script` options that take the next word. */
@@ -1419,10 +1696,23 @@ function substitutionsIn(text: string, depth = 0): string[] {
   return found
 }
 
-function scan(command: string, depth: number, isNested: boolean, out: Builder, scope = 0, parentScope?: number, isCopy = false): void {
-  // A copy, and everything nested in a copy, is charged; the text the command holds is not (only the depth bound reaches it).
-  if (isCopy) out.scanned += command.length
-  if (depth > MAX_DEPTH || (isCopy && out.scanned > MAX_SCANNED_CHARS)) {
+/**
+ * Scans a command (or a script nested in it) into parts. `extraDepth` is 0 for the command's own text and its nested
+ * scripts, which keep `MAX_PARTS` and `MAX_DEPTH` exactly as on `origin/main` (past them the parse is cut and the call is
+ * reviewed). An extra reading (see `MAX_EXTRA_CHARS`) is scanned at `extraDepth` 1 or more, and so is everything nested
+ * in one: it is charged to the extra budgets only, never to the text's own, and its depth does not count against
+ * `MAX_DEPTH`. When an extra budget runs out the scanning of extras stops and `isExhausted` is set: the call is refused.
+ */
+function scan(command: string, depth: number, isNested: boolean, out: Builder, scope = 0, parentScope?: number, extraDepth = 0): void {
+  const isExtra = extraDepth > 0
+  if (isExtra) {
+    if (out.isExhausted) return
+    out.extraScanned += command.length
+    if (extraDepth > MAX_EXTRA_DEPTH || out.extraScanned > out.maxExtraChars) {
+      out.isExhausted = true
+      return
+    }
+  } else if (depth > MAX_DEPTH) {
     out.isCut = true
     return
   }
@@ -1441,11 +1731,16 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
   // The next part reads the pipe of the one before it.
   let isPipeNext = false
 
-  const nested = (text: string, isCopyText = false) => scan(text, depth + 1, true, out, ++out.lastScope, scope, isCopy || isCopyText)
-  // The parts this scan makes are counted against the bound of its kind: a copy's against the copies', the text's own against its own.
-  const hasRoom = () => (isCopy ? out.copyParts < MAX_COPY_PARTS : out.ownParts < MAX_PARTS)
-  const countPart = () => {
-    if (isCopy) out.copyParts++
+  // Everything nested in an extra is an extra (the flag is inherited, and the depth is the extras' own); text of the
+  // command's own is read one level deeper as it always was, and an extra reading `isExtraText` starts a new extra.
+  const nested = (text: string, isExtraText = false) => {
+    if (isExtra || isExtraText) scan(text, depth, true, out, ++out.lastScope, scope, extraDepth + 1)
+    else scan(text, depth + 1, true, out, ++out.lastScope, scope)
+  }
+  // The parts are counted against the bound of their kind: the text's own against `MAX_PARTS`, an extra's against `MAX_EXTRA_PARTS`.
+  const hasRoom = (isExtraPart: boolean) => (isExtraPart ? out.extraParts < MAX_EXTRA_PARTS : out.ownParts < MAX_PARTS)
+  const countPart = (isExtraPart: boolean) => {
+    if (isExtraPart) out.extraParts++
     else out.ownParts++
   }
 
@@ -1490,42 +1785,52 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
     const isPiped = isPipeNext
     // A pipe at the end of a line goes on to the next line's command.
     if (!isLineEnd || words.length > 0 || redirects.length > 0) isPipeNext = false
-    if (words.length > 0 || redirects.length > 0) {
-      if (!hasRoom()) {
-        out.isCut = true
-      } else {
-        const { wrappers, coreWords, nestedScripts, copyScripts, unresolved, movesDir, optionValues } = coreOf(words)
-        const { scripts, isUnreadable, isInput } = inlineOf(coreWords)
-        const part: ShellPart = {
-          text,
-          words,
-          wrappers,
-          coreWords,
-          core: coreWords.join(' '),
-          redirects,
-          input,
-          isNested,
-          isPiped,
-          scope,
-          ...(parentScope !== undefined && { parentScope }),
-          movesDir,
-          optionValues,
-          ...(isUnreadable && { isUnreadable }),
-          ...(isInput && { isTerminalInput: true }),
-        }
-        out.parts.push(part)
-        countPart()
-        // A runner whose inner command was not found for sure: the words as
-        // they stand are a part of their own, so a rule can review the call.
-        if (unresolved !== undefined && hasRoom()) {
-          out.parts.push({ ...part, wrappers: [], coreWords: unresolved, core: unresolved.join(' '), redirects: [], input: '', isUnresolved: true })
-          countPart()
-        }
-        // What the text holds comes first and is never cut by the copies after it.
-        for (const script of scripts) nested(script)
-        for (const nestedScript of nestedScripts) if (nestedScript !== '') nested(nestedScript)
-        for (const copy of copyScripts) if (copy !== '') nested(copy, true)
+    // One reading of the words as a part, with the scripts it holds. `isReadingA` is the second reading of an ambiguous
+    // `nsenter` option: an extra, and so is everything it holds. Returns whether the part was made.
+    const makePart = (core: Core, isReadingA: boolean): boolean => {
+      const isExtraPart = isExtra || isReadingA
+      if (isExtraPart && out.isExhausted) return false
+      if (!hasRoom(isExtraPart)) {
+        // The text's own parts past the bound cut the parse (review, as on `origin/main`); an extra's refuse the call.
+        if (isExtraPart) out.isExhausted = true
+        else out.isCut = true
+        return false
       }
+      const { wrappers, coreWords, nestedScripts, extraScripts, unresolved, movesDir, optionValues } = core
+      const { scripts, isUnreadable, isInput } = inlineOf(coreWords)
+      const part: ShellPart = {
+        text,
+        words,
+        wrappers,
+        coreWords,
+        core: coreWords.join(' '),
+        redirects,
+        input,
+        isNested,
+        isPiped,
+        scope,
+        ...(parentScope !== undefined && { parentScope }),
+        movesDir,
+        optionValues,
+        ...(isUnreadable && { isUnreadable }),
+        ...(isInput && { isTerminalInput: true }),
+      }
+      out.parts.push(part)
+      countPart(isExtraPart)
+      // A runner whose inner command was not found for sure: the words as they stand are a part of their own, so a rule
+      // can review the call. Not counted (one for a part at most), so it never uses up a bound the text had without it.
+      if (unresolved !== undefined && !isReadingA) {
+        out.parts.push({ ...part, wrappers: [], coreWords: unresolved, core: unresolved.join(' '), redirects: [], input: '', isUnresolved: true })
+      }
+      // What the text holds comes first, and the extra readings after it.
+      for (const script of scripts) nested(script, isReadingA)
+      for (const nestedScript of nestedScripts) if (nestedScript !== '') nested(nestedScript, isReadingA)
+      for (const extra of extraScripts) if (extra !== '') nested(extra, true)
+      return true
+    }
+    if (words.length > 0 || redirects.length > 0) {
+      const core = coreOf(words)
+      if (makePart(core, false) && core.isAmbiguous) makePart(coreOf(words, true), true)
     }
     if (out.parts.length > owner) {
       pendingHeredocs.push(...heredocTags.map(({ tag, isExpanded }) => ({ tag, owner, isExpanded })))
@@ -1785,11 +2090,11 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
 }
 
 /** Splits a shell command into the commands it would run. */
-export function splitShell(command: string): Split {
+export function splitShell(command: string, extraChars = MAX_EXTRA_CHARS): Split {
   if (command.length > MAX_COMMAND_CHARS) {
-    return { parts: [], isTooLong: true, isCut: false }
+    return { parts: [], isTooLong: true, isCut: false, isExhausted: false }
   }
-  const out: Builder = { parts: [], isCut: false, lastScope: 0, scanned: 0, ownParts: 0, copyParts: 0 }
+  const out: Builder = { parts: [], isCut: false, lastScope: 0, ownParts: 0, extraScanned: 0, maxExtraChars: extraChars, extraParts: 0, isExhausted: false }
   scan(command, 0, false, out)
-  return { parts: out.parts, isTooLong: false, isCut: out.isCut }
+  return { parts: out.parts, isTooLong: false, isCut: out.isCut, isExhausted: out.isExhausted }
 }

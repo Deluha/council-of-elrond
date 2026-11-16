@@ -29,6 +29,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   moved (asks; one of a protected checked-out branch is blocked); a shell command, script or SQL file too long for its
   reviewer, a command with more than eight gated parts and a text too long for the secrets scan (they come to you,
   never to a model alone).
+- **A crafted command can now be refused outright** (`command-too-complex-to-read`): one that repeats `env -S`
+  strings, chains ambiguous `nsenter -S` options or nests scripts in them far beyond what anyone writes (see
+  "Changed"). Nothing ordinary meets it.
 - **Repeats are reviewed again.** The full council's approve is never remembered, so a repeated push or migration
   convenes it, and runs your checks, each time. A call with a git part, one that runs a script or a project's runner,
   and one reformatted in whitespace are reviewed again too; an approval holds only in the folder it was given in.
@@ -113,6 +116,14 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   database file and from `-init` files.
 
 ### Changed
+- **A command that repeats wrapper options or split strings more often than the parser reads is refused**, by a
+  new block, `command-too-complex-to-read` (the call is blocked: "The command repeats wrapper options or split strings
+  more often than the parser reads; it is refused. Write the command plainly."). Only a crafted command reaches it: an
+  `env -S` string nine times over, a chain of ambiguous `nsenter -S` links, or a split string that holds hundreds of
+  commands; an ordinary `env -S 'cmd args'`, `env VAR=x cmd` or `nsenter -t 1 -m ls` never does. A block the command's
+  own parts found still names its own rule. A command over 200 parts or 4 levels deep is reviewed
+  (`command-too-complex`) as before. It is a finding of the classifier like `command-too-long`, so a project rule
+  cannot lower it, and no allow rule is offered for it.
 - **The allow rule offered after "allow once" is narrower, and the question says what it allows.** A shell rule allows
   that exact command text, in any folder, without review. A file tool's rule allows every later write to that file by
   that tool. A rule for any other tool allows that tool with exactly the same arguments (pinned as escaped JSON; no
@@ -221,14 +232,20 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   read both ways, as the option's value and as the program: the part is reviewed and the strictest reading wins. Three
   option tables were wrong (`systemd-run --expand-environment`, `nsenter -W`, and `pnpm -c`/`--shell-mode`, whose
   words are one shell string) and hid a command from the rules; they are corrected. More than eight `env -S` strings
-  in one command are not spliced but read together with the words that follow them, as one script, and the part is
-  reviewed, so a crafted chain no longer stalls the classifier and the command it holds keeps its own tier. However
-  many `-S` or `-G` options `nsenter` is given, the command after them is read once as well as the word after the
-  first of them, and the strictest reading wins. Each such string is split as `env` splits it (its blanks, `\_`, `\c`
-  and `#` comments), not as a shell reads it. The second reading of the first eight `env -S` strings by the shell
-  scanner is a copy, and the copies of one command are bounded: past the bound the call is reviewed. Only copies are
-  cut, never the text the command holds: a `-c` string, a substitution, a subshell, a process substitution, `eval`
-  or a heredoc body after an expensive part is always read, so a block there stays a block.
+  in one command are not spliced but read together with the words that follow them, as `env` splits them and as a
+  shell reads them, and the part is reviewed, so a crafted chain no longer stalls the classifier and the command it
+  holds keeps its own tier. However many `-S` or `-G` options `nsenter` is given, and however many `nsenter` links
+  are chained, the part is read two ways and no more: the word after the first option as the program, and every such
+  option taking its next word; the strictest reading wins. Each `env -S` string is split as GNU `env` 9.4 splits it
+  (its blanks, quotes, `\_`, `\c`, `#` comments and `${NAME}`), and is also read alone, as a shell reads it, and as
+  the earlier versions read it, so a string `env` cannot read (an error in it) is reviewed and still classified.
+  **The readings the parser adds beside the text have budgets of their own** (400,000 characters scanned, 400
+  parts, 4 levels deep): the second `nsenter` reading, the shell scanner's reading of an `env -S` string, the
+  strings past the eighth, and every script nested in one of those. The text the command holds (its parts, `-c`
+  strings, substitutions, subshells, process substitutions, `eval` and heredoc bodies) keeps the 200 parts and 4
+  levels it always had, and is never charged to them, so a block there stays a block. A budget that is used up
+  refuses the call (see "Changed"); two earlier versions of the bound reviewed it, and each lowered some blocks to
+  reviews.
 - **A process substitution used as a redirect target no longer hides the command that follows it.** The substitution
   is the redirect's target, and the command after it, whatever separates them, is read with its own program. A redirect
   with no target at the end of a part, and an escaped digit before a here-document, no longer carry over to what comes
@@ -342,7 +359,12 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   `./`, `../`, an expansion or a plain substitution; letters, digits and `. _ / ~ + @ % -` only; no `; ! : & ? #`, quote
   or space; no segment that is a word of 6 or more characters that mixes letters and digits). Any other value is the password
   keyword of a connection string and is redacted and reported, and so is any value after a `;` earlier on the same
-  line, and a value directly followed by `;` and the next `name=` (`PWD=...;UID=...`).
+  line, a value (bare or quoted, up to 1,000 characters, a closing quote allowed) followed by `;` and then a
+  character that is no blank and up to 64 more with a `=` among them (`PWD=...;UID=sa`, `;User ID=sa`, `;[UID]=sa`),
+  and a `PWD` with a blank around its `=`, which is no shell assignment. `PWD=/tmp; ls`,
+  `PWD=/home/me/project; CC=gcc make`, `PWD=/work/p;make`, `export PWD=/tmp`, `PWD=$HOME/src` and `cd "$OLDPWD"`
+  stay readable; so does a connection string whose `PWD` value is over 1,000 characters or whose next name is over
+  64, and `PWD=/work/p;make CC=gcc` is redacted.
 - **Secrets are redacted before a cut, not after**: a script, a `.sql` file, the changes a push would send, the
   read-only preview and a file's diff are redacted whole, then cut, so a secret across the cut cannot show a piece of
   itself.

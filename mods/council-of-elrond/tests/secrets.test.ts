@@ -399,7 +399,7 @@ describe('redaction noise this release added is gone, and what must be caught st
       'PWD=../x/y;Database=d',
       'export PWD=/mypassword;UID=sa',
     ]) await loud(line)
-    for (const line of ['PWD=/tmp; ls', 'PWD=/home/me/project; CC=gcc make', 'PWD=/work/p;make', 'PWD=/work/project; echo hi', 'PWD=/tmp;UID=sa', 'PWD=/work/p\nUID=sa', 'PWD=/work/p;make CC=gcc', 'export PWD=/work/p && make UID=1']) await quiet(line)
+    for (const line of ['PWD=/tmp; ls', 'PWD=/home/me/project; CC=gcc make', 'PWD=/work/p;make', 'PWD=/work/project; echo hi', 'PWD=/tmp;UID=sa', 'PWD=/work/p\nUID=sa', 'export PWD=/work/p && make UID=1']) await quiet(line)
     // The line is the limit: a `;` on an earlier line is not in the way, and a short value is as quiet as on any name.
     for (const line of ['Server=x;\nPWD=/work/project', 'echo a; echo b\nexport PWD=/tmp', 'Server=x;UID=sa;PWD=/tmp']) await quiet(line)
     // Anything else after PWD is the password keyword of an ODBC-style connection string, as it was on origin/main.
@@ -421,6 +421,60 @@ describe('redaction noise this release added is gone, and what must be caught st
     for (const line of ['pwd=hunter2xyz', 'MYPWD=hunter2xyz', 'NEWPWD=hunter2xyz', 'Pwd=hunter2xyz', 'DB_PWD=hunter2xyz']) await loud(line)
     // A longer path is redacted as it was on origin/main, whatever the name: only a path under 6 characters is let go.
     for (const line of ['pwd=/work/x', 'token=/home/me/.ssh/id', 'password=~/.secrets']) await loud(line)
+  })
+
+  // DESIGN §16 item 45: the first item of a connection string is read by what follows its value, whatever the value's
+  // length and the next name's spelling, and a blank around the `=` is no shell assignment.
+  test('(b2) a PWD that starts a connection string is redacted whatever the next name looks like, and a blank around the = makes it no assignment', async () => {
+    const long = (n: number) => '/' + 'a/'.repeat(n)
+    for (const line of [
+      // The next name holds a space or a bracket, is long (up to 64 characters), or has a quote around it.
+      'PWD=/abcde/fgh;User ID=sa',
+      'PWD="/abcde/fgh";User ID=sa',
+      "PWD='/abcde/fgh';[UID]=sa",
+      'PWD=/abcde/fgh;Initial Catalog=db;User ID=sa',
+      'PWD=/abcde/fgh;[UID]=sa',
+      'PWD=/abcde/fgh;{UID}=sa',
+      'PWD=/abcde/fgh;"UID"=sa',
+      'PWD=/abcde/fgh;App Name=x',
+      'PWD=/abcde/fgh;UID =sa',
+      `PWD=/abcde/fgh;${'N'.repeat(33)}=1`,
+      `PWD=/abcde/fgh;${'N'.repeat(64)}=1`,
+      'OLDPWD=/abcde/fgh;User ID=sa',
+      // A value longer than 200 characters (bare or quoted), a closing quote before the `;`, and escaped quotes.
+      `PWD=${long(101)};UID=sa`,
+      `PWD=${long(400)};UID=sa`,
+      `PWD="${long(101)}";UID=sa`,
+      `PWD='${long(101)}';UID=sa`,
+      'PWD=/abcde/fgh";UID=sa',
+      "PWD=/abcde/fgh';UID=sa",
+      'PWD=\\"/abcde/fgh\\";UID=sa',
+      // A blank around the `=`: not a shell assignment, so not let go.
+      'PWD = /home/me/project',
+      'PWD =/home/me/project',
+      'PWD= /home/me/project',
+      'PWD\t=\t/home/me/project',
+      'OLDPWD = ~/work',
+      'export PWD = /home/me/project',
+    ]) await loud(line)
+    // What a shell command after a `;` looks like stays quiet: a blank first, or no `=` within the next 64 characters.
+    for (const line of [
+      'PWD=/tmp; ls',
+      'PWD=/home/me/project; CC=gcc make',
+      'PWD=/work/p;make',
+      'PWD=/home/me/project; echo hi=1',
+      'PWD="/home/me/project"; ls',
+      'PWD=/work/project;ls -la',
+      'export PWD=/work/p; export OLDPWD=/tmp',
+      'OLDPWD=/work/p; cd -',
+      'export PWD=/tmp',
+      'PWD=$HOME/src',
+      'cd "$OLDPWD"',
+    ]) await quiet(line)
+    // A name of 65 characters or a `=` past 64 is the residual, stated in DESIGN: the next item is not a name any more.
+    await quiet(`PWD=/abcde/fgh;${'N'.repeat(66)}=1`)
+    // What `;make CC=gcc` costs: a shell command word glued to the `;` that holds a `=` is read as the next item.
+    await loud('PWD=/work/p;make CC=gcc')
   })
 
   test('(c) a call expression, a subscript chain, a positional default and a small number are code, not secrets', async () => {
@@ -544,7 +598,12 @@ describe('redaction noise this release added is gone, and what must be caught st
     return best
   }
 
-  test('every new or changed pattern stays linear on adversarial input', async () => {
+  // The runner's own limit for a test is 5 s, and the two linear-time tests below take 2 to 4 s idle (many inputs of 200,000
+  // characters, each timed up to three times, run beside other work): the limit of the test is raised so that the runner never
+  // fails a test for being slow as a whole. The ceiling each input is held to (1,500 ms) is what the test asserts and is not raised.
+  const SLOW_TEST = { timeoutMs: 30_000 }
+
+  test('every new or changed pattern stays linear on adversarial input', SLOW_TEST, async () => {
     const size = 200_000
     const values = ['(', 'a(', 'a()', 'a().', 'a()[', 'a[', '[', ']', 'a(b)(c)', '${1:-', '`', '/', '~/', '0', 'await ', 'new a(', 'A(1', 'A(1)', 'A1(', 'PWD=/', 'PWD=;']
     for (const value of values) {
@@ -558,9 +617,12 @@ describe('redaction noise this release added is gone, and what must be caught st
     }
   })
 
-  test('the pattern for PWD after a semicolon, and the path test, stay linear on adversarial input (DESIGN §16 item 43)', async () => {
+  test('the pattern for PWD after a semicolon, and the path test, stay linear on adversarial input (DESIGN §16 items 43 and 45)', SLOW_TEST, async () => {
     const size = 200_000
-    const values = [';PWD=/', ';PWD="', ';OLDPWD=', 'PWD=./a/', 'PWD=$(', 'PWD=`a b ', ';PWD', 'PWD=/a/b/c1d2e3/', 'PWD=/aaaa;U=', 'PWD="aaaa";U=', "PWD='aaaa", 'PWD=/aaaa;']
+    // The last six are the look-ahead of the continued pattern at its worst (a `;` and 60 to 64 characters with no `=`; a
+    // value as long as the pattern reads; escaped and doubled quotes), and a `PWD=` that starts the next start.
+    const values = [';PWD=/', ';PWD="', ';OLDPWD=', 'PWD=./a/', 'PWD=$(', 'PWD=`a b ', ';PWD', 'PWD=/a/b/c1d2e3/', 'PWD=/aaaa;U=', 'PWD="aaaa";U=', "PWD='aaaa", 'PWD=/aaaa;',
+      `PWD=/aaaa;${'U'.repeat(62)}`, `PWD="aaaa";${'U'.repeat(63)} `, `PWD=/${'a'.repeat(999)};x`, 'PWD=\\"aaaa\\";', "PWD=aaaa';U", 'PWD=PWD=PWD=']
     for (const value of values) {
       for (const input of [value.repeat(Math.ceil(size / value.length)), `;${'a'.repeat(size)}${value}`, `${value}${'a/'.repeat(size / 2)}`]) {
         expect(await timed(input), value).toBeLessThan(1500)

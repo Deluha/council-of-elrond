@@ -84,12 +84,14 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     kind: 'password',
     level: 'low',
     label: 'secret',
-    // The same name and values, for a `PWD` that comes first in a connection string: its value is followed directly by
-    // a `;` and the next `name=` (`PWD=...;UID=sa`), which a shell command word after a `;` is not (`PWD=/tmp; make`, and
-    // `PWD=/tmp; CC=gcc make` has a space). Unlike `assignment`, a start that does not match is not consumed, so every
-    // length is bounded (a value of 200 characters at most, a next name of 32) to keep each start's cost fixed and the
-    // pattern linear; a longer value is the `assignment` pattern's, unless it is a path.
-    re: /\b((?:PWD|OLDPWD)\\?["']?\s*=\s*\\?["']?)(?!\[REDACTED)((?<=")[^"\\\n]{4,200}(?=\\?";[A-Za-z_][A-Za-z0-9_.-]{0,31}=)|(?<=')[^'\\\n]{4,200}(?=\\?';[A-Za-z_][A-Za-z0-9_.-]{0,31}=)|[^\s"'&;,\\]{4,200}(?=;[A-Za-z_][A-Za-z0-9_.-]{0,31}=))/g,
+    // The same name and values, for a `PWD` that comes first in a connection string: its value (bare or quoted, 4 to 1000
+    // characters, a closing quote allowed before the `;`) is followed by a `;` and then a character that is no blank and up
+    // to 64 more without a `;`, a line break or a second `=` before the first `=` (`PWD=...;UID=sa`, `;User ID=sa`, `;[UID]=sa`,
+    // a name of any length up to that). A shell command word after a `;` is not that: it has a blank (`PWD=/tmp; make`,
+    // `PWD=/tmp; CC=gcc make`) or no `=` (`PWD=/work/p;make`). Unlike `assignment`, a start that does not match is not
+    // consumed, so every length is bounded to keep each start's cost fixed and the pattern linear. Residual, as a class: a
+    // bare value over 1000 characters, and a next name of more than 64 characters.
+    re: /\b((?:PWD|OLDPWD)\\?["']?\s*=\s*\\?["']?)(?!\[REDACTED)((?<=")[^"\\\n]{4,1000}(?=\\?";(?=[^\s;])[^;\n=]{0,64}=)|(?<=')[^'\\\n]{4,1000}(?=\\?';(?=[^\s;])[^;\n=]{0,64}=)|[^\s"'&;,\\]{4,1000}(?=\\?["']?;(?=[^\s;])[^;\n=]{0,64}=))/g,
     keep: 1,
     isNoise: (kept, value) => isPlainNoise(kept, value),
   },
@@ -300,8 +302,8 @@ const PLAIN_WORD = /^[A-Za-z_.]+$/
 const SMALL_NUMBER = /^[0-9]{1,5}$/
 const PATH = /^(?:\/|~\/)[A-Za-z0-9._/-]*$/
 const BACKTICKS = /^`[^`]*`$/
-// What follows the name of a shell assignment: `=`, then a quote of the value if it has one. A quote before the `=` makes the name a key.
-const SHELL_ASSIGNMENT_REST = /^[ \t]*=[ \t]*\\?["']?$/
+// What follows the name of a shell assignment: `=` straight after the name and the value straight after it, then a quote of the value if it has one. A quote before the `=` makes the name a key, and a blank around the `=` is no assignment (`PWD = /x`).
+const SHELL_ASSIGNMENT_REST = /^=\\?["']?$/
 // What a path may hold after its start: letters, digits and `. _ / ~ + @ % -`, and `$ { }` for an expansion. No `; ! : & ? #`, quote or space.
 const PATH_CHARACTERS = /^[A-Za-z0-9._/~+@%${}-]*$/
 const SUBSTITUTION_BODY = /^(?:\$\(|`)([A-Za-z0-9 ._/~+@%-]*)(?:\)|`)$/

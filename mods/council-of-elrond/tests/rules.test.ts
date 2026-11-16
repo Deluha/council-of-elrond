@@ -642,6 +642,8 @@ const expectCases = (cases: readonly Case[]) => {
 }
 
 const RM = 'rm-recursive-outside-repo'
+/** The block of a call whose extra readings used up a budget of their own (DESIGN §16 item 45). */
+const TOO_COMPLEX_TO_READ = 'command-too-complex-to-read'
 
 describe('an unquoted heredoc body is expanded by the shell', () => {
   test('$(...) and backticks in the body are commands of the call', () => {
@@ -3180,9 +3182,9 @@ describe('nsenter -S and -G repeated, and env -S past its bound (DESIGN §16 ite
   })
 })
 
-describe('an expensive part never hides the text the command holds after or before it (DESIGN §16 item 42)', () => {
+describe('an expensive part never hides the text the command holds after or before it (DESIGN §16 items 42 and 45)', () => {
   const onFeat = (command: string) => bash(command, { ...CONTEXT, currentBranch: 'feat' })
-  // What the command holds, in each way the parser nests it: all of them are read whatever the copies of spliced strings cost.
+  // What the command holds, in each way the parser nests it: all of them are read whatever the extra readings cost.
   const dangerous: readonly (readonly [string, string, string])[] = [
     ["bash -c 'rm -rf /home/me'", 'block', RM],
     ['echo $(rm -rf /home/me)', 'block', RM],
@@ -3191,8 +3193,6 @@ describe('an expensive part never hides the text the command holds after or befo
     ['sh <<EOF\nrm -rf /home/me\nEOF', 'block', RM],
     ['sudo ls', 'ask', 'privileged'],
     ['git push --force origin main', 'block', 'force-push-protected-branch'],
-    // The first reading of strings past the bound, in a part that comes when the copies before it have used their room.
-    [`env ${'-S "" '.repeat(9)}-S rm -rf /home/me`, 'block', RM],
   ]
   const places = (expensive: string, command: string): string[] => [`${command}\n${expensive}`, `echo a; ${command}; ${expensive}`, `${expensive}; ${command}`]
 
@@ -3203,40 +3203,299 @@ describe('an expensive part never hides the text the command holds after or befo
     '3,000 splices': `env ${'-Senv '.repeat(3000)}ls`,
     "nested env -S '": "env -S '".repeat(2000),
   }
+  // Each of these uses up an extra budget, so the call is refused; what the text holds is still read, and a block in it
+  // names its own rule (a tie goes to the part), while a call that would only ask is refused for the budget.
   for (const [name, expensive] of Object.entries(shapes)) {
-    test(`${name}: what the command holds before, between and after it keeps its tier`, () => {
+    // (Each of these classifies some twenty commands of 18,000 characters, which takes 1 to 3 s idle against the runner's 5 s limit.)
+    test(`${name}: what the command holds before, between and after it is still read, and the call is refused`, { timeoutMs: 20_000 }, () => {
+      expect(splitShell(expensive).isExhausted, name).toBe(true)
       for (const [command, tier, ruleId] of dangerous) {
         for (const text of places(expensive, command)) {
           const result = onFeat(text)
-          expect(result.tier, `${name} | ${command}`).toBe(tier)
-          expect(result.decided?.ruleId, `${name} | ${command}`).toBe(ruleId)
+          expect(result.tier, `${name} | ${command}`).toBe('block')
+          expect(result.decided?.ruleId, `${name} | ${command}`).toBe(tier === 'block' ? ruleId : TOO_COMPLEX_TO_READ)
         }
       }
     })
   }
 
-  test('the copies have parts of their own: they never use up the room of the text the command holds', () => {
+  test('the extra readings have parts of their own: they never use up the room of the text the command holds', () => {
     const split = splitShell(`env ${'-Senv '.repeat(3000)}ls; bash -c 'rm -rf /home/me'`)
-    expect(split.isCut).toBe(true)
+    expect(split.isExhausted).toBe(true)
     // The part and the script after the expensive one are both there.
     expect(split.parts.some(part => part.core === 'rm -rf /home/me')).toBe(true)
     // And 150 ordinary parts after it are all there too.
     const many = splitShell(`env ${'-Senv '.repeat(3000)}ls; ${'echo a; '.repeat(150)}rm -rf /home/me`)
     expect(many.parts.some(part => part.core === 'rm -rf /home/me')).toBe(true)
-    // Strings that hold many commands (one on each line) make many parts as copies, more than the room of any one kind
-    // when there are two of them; none of the text's own is lost, and the call is a block.
+    // Strings that hold many commands (one on each line) make many parts as extras, more than the room of one kind
+    // when there are two of them; none of the text's own is lost, and the call is refused.
     const heavyPart = `env -S $'-i${'\\nls'.repeat(150)}'`
     const heavy = `${heavyPart}; ${heavyPart}; bash -c 'rm -rf /home/me'`
     const heavySplit = splitShell(heavy)
-    expect(heavySplit.isCut).toBe(true)
+    expect(heavySplit.isExhausted).toBe(true)
     expect(heavySplit.parts.some(part => part.core === 'rm -rf /home/me')).toBe(true)
-    expect(tierOf(heavy)).toBe('block')
+    expect(ruleOf(heavy)).toBe(RM)
   })
 
-  test('what is cut is only the copies: a command the text holds is cut at the depth and the part bounds, as it always was', () => {
-    expect(splitShell(`env ${'-Senv '.repeat(3000)}ls`).isCut).toBe(true)
+  test('what is refused is only the extra readings: a command the text holds is cut at the depth and the part bounds, as it always was', () => {
+    expect(splitShell(`env ${'-Senv '.repeat(3000)}ls`).isExhausted).toBe(true)
     expect(splitShell("env -S 'ls'").isCut).toBe(false)
+    expect(splitShell("env -S 'ls'").isExhausted).toBe(false)
     expect(splitShell(`${'ls; '.repeat(250)}`).isCut).toBe(true)
+    expect(splitShell(`${'ls; '.repeat(250)}`).isExhausted).toBe(false)
+  })
+})
+
+describe('the extra readings have budgets of their own, and one that is used up refuses the call (DESIGN §16 item 45)', () => {
+  const onFeat = (command: string) => bash(command, { ...CONTEXT, currentBranch: 'feat' })
+  const sq = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
+  const nestedBashC = (inner: string, times: number) => {
+    let text = inner
+    for (let i = 0; i < times; i++) text = `bash -c ${sq(text)}`
+    return text
+  }
+  const followers: readonly (readonly [string, string, string])[] = [
+    ['rm -rf /home/me', 'block', RM],
+    ['git push --force origin main', 'block', 'force-push-protected-branch'],
+    ['sudo ls', 'ask', 'privileged'],
+    ['claude -p hi', 'ask', 'claude-session'],
+  ]
+
+  test('the text the command holds is cut exactly as on origin/main: five shapes, with the tiers main gives', () => {
+    // Own parts: 250 parts cut at 200 (review); the 200th part is read, the 201st is not; the depth bound is 4.
+    const cases: readonly Case[] = [
+      ['ls; '.repeat(250), 'review', 'command-too-complex'],
+      [`${'echo a; '.repeat(199)}rm -rf /home/me`, 'block', RM],
+      [`${'echo a; '.repeat(200)}rm -rf /home/me`, 'review', 'command-too-complex'],
+      ['echo $(echo $(echo $(echo $(rm -rf /home/me))))', 'block', RM],
+      ['echo $(echo $(echo $(echo $(echo $(rm -rf /home/me)))))', 'review', 'command-too-complex'],
+      [nestedBashC('rm -rf /home/me', 4), 'block', RM],
+      [nestedBashC('rm -rf /home/me', 5), 'review', 'command-too-complex'],
+      // 250 parts that each carry an ambiguous nsenter option: the text's own parts are cut at 200, as on main.
+      [`${'nsenter -S x ls; '.repeat(250)}rm -rf /home/me`, 'review', 'command-too-complex'],
+    ]
+    expectCases(cases)
+    for (const [command] of cases) expect(splitShell(command).isExhausted, command.slice(0, 40)).toBe(false)
+    expect(splitShell('ls; '.repeat(250)).isCut).toBe(true)
+  })
+
+  test('a chain of ambiguous nsenter options is read as two readings of the part, whatever the number of links: what follows it keeps its tier', { timeoutMs: 20_000 }, () => {
+    const chains = ['nsenter -S nsenter ', 'nsenter -S nsenter -- ', 'nsenter -G nsenter ', 'nsenter -S nsenter -G nsenter ', 'sudo nsenter -S nsenter ']
+    for (const unit of chains) {
+      for (const links of [7, 8, 40, Math.floor(19_000 / unit.length)]) {
+        const chain = `${unit.repeat(links)}true`
+        expect(chain.length).toBeLessThanOrEqual(20_000 - 40)
+        for (const separator of [';', '\n', ' && ']) {
+          for (const [follower, tier, ruleId] of followers) {
+            const result = onFeat(`${chain}${separator}${follower}`)
+            expect(result.tier, `${links} x ${unit} ${follower}`).toBe(tier)
+            // With `sudo` in front the chain asks too (privileged), and an ask follower ties with it: the chain's rule is named first.
+            if (!(unit.startsWith('sudo') && tier === 'ask')) expect(result.decided?.ruleId, `${links} x ${unit} ${follower}`).toBe(ruleId)
+          }
+        }
+      }
+    }
+    // 1,000 links of the shortest unit fit the longest command.
+    const longest = `${'nsenter -S nsenter '.repeat(1000)}true; rm -rf /home/me`
+    expect(longest.length).toBeLessThanOrEqual(20_000)
+    expect(onFeat(longest).decided?.ruleId).toBe(RM)
+    // The chain is one extra part, however long: no extra budget is used up.
+    expect(splitShell(`${'nsenter -S nsenter '.repeat(1000)}true`).isExhausted).toBe(false)
+    // And is still never an allow.
+    expect(tierOf(`${'nsenter -S nsenter '.repeat(40)}true`)).toBe('review')
+  })
+
+  test('the second reading of an ambiguous nsenter option is one extra part, and reads what the first reading cannot', () => {
+    const parts = splitShell('nsenter -S x bash -c "rm -rf /home/me"').parts
+    // The part as written (the word is the program), the unresolved copy, and the reading where `-S` takes `x`.
+    expect(parts.map(part => part.core)).toContain('bash -c rm -rf /home/me')
+    expect(parts.some(part => part.core === 'rm -rf /home/me')).toBe(true)
+    expect(splitShell('nsenter -S 0 -S 0 -S 0 -S 0 -S 0 -S 0 rm -rf x').parts.filter(part => part.core === 'rm -rf x')).toHaveLength(1)
+    // The redirect of the part is the redirect of the second reading too.
+    expect(ruleOf('nsenter -S x cat > /home/me/.claude/plugins/x')).toBe('protected-path')
+  })
+
+  test('readings added to a part never use up the room of the text the command holds', () => {
+    // Each of these parts makes an extra part (the second nsenter reading) or an unresolved copy besides its own: 150 of
+    // them are 150 parts of the text's own, and the 151st command is read, as on main.
+    for (const unit of ['nsenter -S x ls; ', 'sudo --zz ls; ', 'env -S "ls" x; ']) {
+      const command = `${unit.repeat(150)}rm -rf /home/me`
+      const split = splitShell(command)
+      expect(split.isCut, unit).toBe(false)
+      expect(split.isExhausted, unit).toBe(false)
+      expect(split.parts.some(part => part.core === 'rm -rf /home/me'), unit).toBe(true)
+      expect(ruleOf(command), unit).toBe(RM)
+    }
+    // More than the room of the text is cut as always.
+    expect(ruleOf(`${'nsenter -S x ls; '.repeat(250)}rm -rf /home/me`)).toBe('command-too-complex')
+  })
+
+  test('everything nested inside an extra reading is an extra: the flag is inherited, and the depth is the extras\' own', () => {
+    // Three commands whose string holds a script of 60 parts: with the copy and the string alone that is some 120 extra parts
+    // each, 360 of the 400. Were the scripts nested in them counted as the text's own, they would use up the 200 of the text
+    // and the last command would not be read.
+    const heavy = `env -S 'bash -c "${'ls;'.repeat(60)}"' ls; `
+    const three = `${heavy.repeat(3)}rm -rf /home/me`
+    const split = splitShell(three)
+    expect(split.isCut).toBe(false)
+    expect(split.isExhausted).toBe(false)
+    expect(ruleOf(three)).toBe(RM)
+    // Four of them use up the extras' parts (and the text's own, which the strings' first reading also uses): refused.
+    expect(splitShell(`${heavy.repeat(4)}rm -rf /home/me`).isExhausted).toBe(true)
+    expect(tierOf(`${heavy.repeat(4)}rm -rf /home/me`)).toBe('block')
+    // The depth: four levels of `bash -c` inside the second reading of nsenter are read; five are refused, not reviewed.
+    expectCases([
+      [`nsenter -S x ${nestedBashC('rm -rf /home/me', 3)}`, 'block', RM],
+      [`nsenter -S x ${nestedBashC('rm -rf /home/me', 4)}`, 'block', RM],
+      [`nsenter -S x ${nestedBashC('rm -rf /home/me', 5)}`, 'block', TOO_COMPLEX_TO_READ],
+    ])
+    expect(splitShell(`nsenter -S x ${nestedBashC('rm -rf /home/me', 5)}`).isCut).toBe(false)
+    // The same five levels with no nsenter are the text's own, cut at the depth bound, as on main.
+    expectCases([[nestedBashC('rm -rf /home/me', 5), 'review', 'command-too-complex']])
+  })
+
+  test('an extra budget used up refuses the call, a block found still names its rule, and an ordinary command is not refused', { timeoutMs: 20_000 }, () => {
+    // The characters (copies of copies), the parts (a string of 450 commands) and the depth (a chain of nested env -S).
+    const shapes: Record<string, string> = {
+      'copies of copies': `env ${'-Senv '.repeat(3000)}ls`,
+      'nested env -S': "env -S '".repeat(2000),
+      'a string of 450 commands': `env -S '${'a;'.repeat(450)}'`,
+    }
+    for (const [name, shape] of Object.entries(shapes)) {
+      expect(splitShell(shape).isExhausted, name).toBe(true)
+      expect(ruleOf(shape), name).toBe(TOO_COMPLEX_TO_READ)
+      expect(tierOf(shape), name).toBe('block')
+      expect(tierOf(`echo hi; ${shape}`), name).toBe('block')
+      expect(ruleOf(`${shape}; rm -rf /home/me`), name).toBe(RM)
+      expect(ruleOf(`rm -rf /home/me; ${shape}`), name).toBe(RM)
+      // A project's rules cannot lower it: it is a finding of the classifier, not a rule.
+    }
+    // A string of 150 commands fits, and so does everything ordinary.
+    expect(splitShell(`env -S '${'a;'.repeat(150)}'`).isExhausted).toBe(false)
+    // The characters: the copies of four `-Senv` strings and a 19,000-character word scan about 250,000 of the 400,000 the
+    // extras may; a budget of 100,000 refuses it (no command of 20,000 characters reaches 400,000 without also reaching
+    // the depth or the parts, so the budget is shown with a smaller one).
+    const wide = `env ${'-Senv '.repeat(4)}echo ${'A'.repeat(19_000)}`
+    expect(splitShell(wide).isExhausted).toBe(false)
+    expect(splitShell(wide, 100_000).isExhausted).toBe(true)
+    expect(splitShell(wide, 100_000).isCut).toBe(false)
+    for (const command of ["env -S 'FOO=1 python3 -u' x.py", 'env -i FOO=1 make', "env -S 'ls -la'", 'nsenter -t 1 -m ls', 'nsenter -t 1 -S 0 ls']) {
+      expect(ruleOf(command), command).not.toBe(TOO_COMPLEX_TO_READ)
+      expect(splitShell(command).isExhausted, command).toBe(false)
+    }
+    // The nine of them in a chain are crafted, and refused.
+    expect(ruleOf(`${'env -S "" '.repeat(8)}env -S 'x'`)).toBe(TOO_COMPLEX_TO_READ)
+  })
+})
+
+describe('env -S strings are split as GNU env 9.4 splits them, and the first versions\' reading is kept beside it (DESIGN §16 item 45)', () => {
+  const gap = 'env ' + '-S "" '.repeat(8)
+  const core = (command: string) => splitShell(command).parts[0]?.coreWords
+  const isUnresolved = (command: string) => splitShell(command).parts.some(part => part.isUnresolved === true)
+
+  test('the words of a string: quotes, escapes, blanks and the comment', () => {
+    // Single quotes: only `\\` and `\'` are escapes; `\c`, `\_` and `\#` are literal there.
+    expect(core(`env -S "rm '\\c' -rf /home/me"`)).toEqual(['rm', '\\c', '-rf', '/home/me'])
+    expect(core(`env -S "printf '\\_' '\\#' 'a\\\\b'"`)).toEqual(['printf', '\\_', '\\#', 'a\\b'])
+    expect(core(`env -S "printf 'a\\'b'"`)).toEqual(['printf', "a'b"])
+    // Outside quotes: `\_` separates, `\c` ends the string, `\t` is a tab inside the word, `#` starts a comment at a word start.
+    expect(core("env -S 'printf a\\_b'")).toEqual(['printf', 'a', 'b'])
+    expect(core("env -S 'printf a\\cb c'")).toEqual(['printf', 'a'])
+    expect(core("env -S 'printf a\\tb'")).toEqual(['printf', 'a\tb'])
+    expect(core("env -S 'printf a #x y'")).toEqual(['printf', 'a'])
+    expect(core("env -S 'printf a#x y'")).toEqual(['printf', 'a#x', 'y'])
+    expect(core("env -S 'printf \\#x'")).toEqual(['printf', '#x'])
+    // Double quotes: `\_` is a blank inside the word.
+    expect(core(`env -S 'printf "a\\_b"'`)).toEqual(['printf', 'a b'])
+    // Blanks are the six of the C locale: a no-break space is part of the word.
+    expect(core('env -S "printf a b"')).toEqual(['printf', 'a b'])
+    // `${NAME}` is kept as written; the part is still sure.
+    expect(core("env -S 'printf ${HOME}'")).toEqual(['printf', '${HOME}'])
+    expect(isUnresolved("env -S 'printf ${HOME}'")).toBe(false)
+  })
+
+  test('a string env cannot read (an error in it) is reviewed, and read as a shell reads it', () => {
+    for (const command of ["env -S 'printf \\x'", `env -S 'printf "a'`, "env -S 'printf $X'", `env -S 'printf "a\\cb"'`, "env -S 'printf a\\'"]) {
+      expect(isUnresolved(command), command).toBe(true)
+      expect(tierOf(command), command).not.toBe('allow')
+    }
+    for (const command of [`env -S "rm '\\c' -rf /home/me"`, `${gap}-S "rm '\\c' -rf /home/me"`]) expect(tierOf(command), command).toBe('block')
+    // A bare `$` and an unterminated quote hide nothing: what the string says is classified all the same.
+    expectCases([
+      [`env -S 'rm -rf /home/me "'`, 'block', RM],
+      [`${gap}-S 'rm -rf /home/me $X'`, 'block', RM],
+      [`${gap}-S 'rm -rf /home/me \\x'`, 'block', RM],
+    ])
+  })
+
+  test('a string past the eighth, with env\'s single-quote and double-quote rules, is read as env reads it', () => {
+    expectCases([
+      // Single-quoted `\c`, `\_` and `\#` are literal: the arguments after them are the command's.
+      [`${gap}-S "rm '\\c' -rf /home/me"`, 'block', RM],
+      [`${gap}-S "rm '\\_' -rf /home/me"`, 'block', RM],
+      [`${gap}-S "rm '\\#' -rf /home/me"`, 'block', RM],
+      [`${gap}-S "rm '\\\\c' -rf /home/me"`, 'block', RM],
+      [`${gap}-S "git push '\\c' --force origin main"`, 'block', 'force-push-protected-branch'],
+      [`${gap}-S "sudo '\\c' ls"`, 'ask', 'privileged'],
+      [`${gap}-S "rm '\\c' -rf" /home/me`, 'block', RM],
+      [`${gap}-S -i -S "rm '\\c' -rf /home/me"`, 'block', RM],
+    ])
+    // The same inside the first eight.
+    expectCases([
+      [`env -S "git push '\\c' --force origin main"`, 'block', 'force-push-protected-branch'],
+      [`env -S "sudo '\\c' ls"`, 'ask', 'privileged'],
+    ])
+  })
+
+  test('a past-bound string holding shell operators is read as a shell reads it too, as the earlier versions did', () => {
+    expectCases([
+      [`${gap}-S 'x; rm -rf /home/me'`, 'block', RM],
+      [`${gap}-S 'x && rm -rf /home/me'`, 'block', RM],
+      [`${gap}-S 'x | rm -rf /home/me'`, 'block', RM],
+      [`${gap}-S $'x\\nrm -rf /home/me'`, 'block', RM],
+      [`${gap}-S "x $(rm -rf /home/me)"`, 'block', RM],
+      [`${gap}-S "x \`rm -rf /home/me\`"`, 'block', RM],
+      [`${gap}-S 'x; sudo ls'`, 'ask', 'privileged'],
+      // Only the reading with the words that follow the string finds these: the string alone has no target, and env's own
+      // reading has `x;` for its program.
+      [`${gap}-S 'x; rm -rf' /home/me`, 'block', RM],
+      [`${gap}-S 'x && rm -rf' /home/me`, 'block', RM],
+      [`env -S 'x; rm -rf' /home/me`, 'block', RM],
+      [`${gap}-S x -S 'rm -rf /home/me'`, 'block', RM],
+      // The first eight too.
+      [`env -S 'x; rm -rf /home/me'`, 'block', RM],
+      [`env -S 'x' -S 'rm -rf /home/me'`, 'block', RM],
+    ])
+  })
+
+  test('a string read the way the first versions did (a backslash before a quote, every blank a regular expression holds) is read too', () => {
+    expectCases([
+      [`env -S 'rm\\t-rf\\t/home/me'`, 'block', RM],
+      [`env -S 'rm -rf /home/me'`, 'block', RM],
+      [`env -S 'sudo\\nls'`, 'ask', 'privileged'],
+      [`${gap}-S 'rm\\t-rf\\t/home/me'`, 'block', RM],
+      [`${gap}-S 'rm -rf /home/me'`, 'block', RM],
+      [`${gap}-S 'git\\tpush\\t--force\\torigin\\tmain'`, 'block', 'force-push-protected-branch'],
+      [`${gap}-S '-S '\\''rm\\ -rf\\ /home/me'\\'''`, 'block', RM],
+    ])
+  })
+
+  test('each string is also read alone, as origin/main read it', () => {
+    expectCases([
+      [`env -S 'x' -S 'rm -rf /home/me'`, 'block', RM],
+      [`${gap}-S x -S 'rm -rf /home/me'`, 'block', RM],
+      [`env -S 'git push --force origin main' x`, 'block', 'force-push-protected-branch'],
+      // For env `x` is the program and what follows it its arguments; main's walk went on through the wrappers and found these.
+      [`env -S x watch env -S 'rm -rf /home/me'`, 'block', RM],
+      [`env -S x nice -n 5 env --split-string='git push --force origin main'`, 'block', 'force-push-protected-branch'],
+      [`sudo env -S x timeout 5 env -S 'dd if=/dev/zero of=/dev/sda'`, 'block', 'raw-disk-write'],
+    ])
+    // A string repeated is read each time it stands, as main read it (main's 200 parts ran out and reviewed it; the extras'
+    // 400 run out here, and the call is refused).
+    const repeated = "watch env -S 'watch env -S x' ".repeat(500)
+    expect(repeated.length).toBeLessThanOrEqual(20_000)
+    expect(splitShell(repeated).isExhausted).toBe(true)
+    expect(ruleOf(repeated)).toBe(TOO_COMPLEX_TO_READ)
   })
 })
 
@@ -3257,23 +3516,30 @@ describe('the classifier does not stall on crafted input', () => {
     return best
   }
 
-  test('env -S, thousands of times in one command, is classified at once and is not an allow', () => {
+  // The test runner's own limit is 5 s and these tests take 1 to 4 s idle (several shapes, each timed up to three times, and
+  // the suite runs beside other work): the limit of the test is raised so that the runner never fails a test for being slow
+  // as a whole. The ceiling above is what a test asserts about a call, and it is not raised.
+  const SLOW_TEST = { timeoutMs: 20_000 }
+
+  test('env -S, thousands of times in one command, is classified at once and is refused', SLOW_TEST, () => {
     const command = `env ${'-Senv '.repeat(3000)}ls`
     expect(command.length).toBe(18_006)
     expect(time(command)).toBeLessThan(SLOW_MS)
-    expect(['review', 'ask', 'block']).toContain(bash(command).tier)
+    expect(bash(command).tier).toBe('block')
   })
 
-  test('a command whose nested copies make more copies is cut by the bound on the text scanned, and is not an allow', () => {
+  test('a command whose nested copies make more copies is refused by the bound on the text scanned', SLOW_TEST, () => {
     const nested = "env -S '".repeat(2498)
     const split = splitShell(nested)
-    expect(split.isCut).toBe(true)
-    expect(['review', 'ask', 'block']).toContain(bash(nested).tier)
+    expect(split.isExhausted).toBe(true)
+    expect(bash(nested).tier).toBe('block')
+    expect(bash(nested).decided?.ruleId).toBe(TOO_COMPLEX_TO_READ)
     // A long ordinary command is far under the bound.
     expect(splitShell(`echo ${'a '.repeat(9000)}`).isCut).toBe(false)
+    expect(splitShell(`echo ${'a '.repeat(9000)}`).isExhausted).toBe(false)
   })
 
-  test('repeated nsenter options and env -S strings past the bound at 20,000 characters, and their tiers', () => {
+  test('repeated nsenter options and env -S strings past the bound at 20,000 characters, and their tiers', SLOW_TEST, () => {
     const repeated = `nsenter ${'-S 0 '.repeat(3990)}rm -rf /home/me`
     expect(repeated.length).toBeLessThanOrEqual(20_000)
     expect(time(repeated)).toBeLessThan(SLOW_MS)
@@ -3287,7 +3553,7 @@ describe('the classifier does not stall on crafted input', () => {
     expect(bash(strings).tier).toBe('block')
   })
 
-  test('a run of unknown wrapper options, and the other shapes the last round added, at 20,000 characters', () => {
+  test('a run of unknown wrapper options, and the other shapes the last round added, at 20,000 characters', SLOW_TEST, () => {
     const N = 19_990
     const fill = (unit: string): string => unit.repeat(Math.ceil(N / unit.length)).slice(0, N)
     const shapes: Record<string, string> = {
@@ -3313,6 +3579,14 @@ describe('the classifier does not stall on crafted input', () => {
       'env -S copies, then a script': `env ${'-Senv '.repeat(3000)}ls; bash -c 'rm -rf /home/me'`,
       "nested env -S ', then a script": `${"env -S '".repeat(2400)}; bash -c 'rm -rf /home/me'`,
       'env -S chain past the bound': `env ${'-S "" env '.repeat(1800)}-S rm -rf /home/me`,
+      // Chains of ambiguous nsenter links (DESIGN §16 item 45): one second reading for the whole part, not one for each link.
+      'nsenter -S chain': 'nsenter -S nsenter '.repeat(1050),
+      'nsenter -S chain with --': 'nsenter -S nsenter -- '.repeat(900),
+      'nsenter -S, -G chain': 'nsenter -S n nsenter -G n '.repeat(760),
+      'sudo nsenter chain': 'sudo nsenter -S nsenter '.repeat(800),
+      'nsenter chain, then a follower': `${'nsenter -S nsenter '.repeat(1000)}true; rm -rf /home/me`,
+      'env -S strings with escapes': `env ${'-S "a\\_b\\c" '.repeat(3000)}ls`,
+      'env -S past the bound, with operators': `${'env -S "" '.repeat(8)}-S ${"'x; y && z' ".repeat(1000)}`,
     }
     for (const [name, command] of Object.entries(shapes)) expect(time(command), name).toBeLessThan(SLOW_MS)
   })
