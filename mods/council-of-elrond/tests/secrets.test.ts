@@ -209,7 +209,8 @@ describe('what the scan reads (DESIGN §16 item 15)', () => {
 
   test('a long input is scanned within the size cap: the cost stays that of a scan of the cap, whatever the tool', async () => {
     // The ceiling guards a cost that grows with the text (tens of seconds), not a speed: the scan call alone is timed and
-    // the best of three runs counts, so a loaded machine does not fail it.
+    // a run is repeated (three at most) while it is over the ceiling, so a loaded machine does not fail it on one slow run; a
+    // consistent regression is slow in all three runs and still fails.
     const input = { query: 'x'.repeat(1_000_000) }
     let best = Infinity
     for (let run = 0; run < 3 && best >= 2000; run++) {
@@ -386,6 +387,19 @@ describe('redaction noise this release added is gone, and what must be caught st
       'Server=x; PWD=/work/project',
       'Server=db;UID=sa;PWD=MyStr0ngP@ssw0rd;',
     ]) await loud(line)
+    // A value directly followed by `;` and the next `name=` is the first item of a connection string (DESIGN §16 item 43), the
+    // `;` before the name or not: a shell command word after a `;` has a space, or no `=`.
+    for (const line of [
+      'PWD=/mypassword;UID=sa',
+      'PWD=/home/me/project;UID=sa;Server=x',
+      'OLDPWD=~/work;Server=x',
+      'PWD="/mypassword";UID=sa',
+      "PWD='/mypassword';UID=sa",
+      'PWD=$HOME/src;UID=sa',
+      'PWD=../x/y;Database=d',
+      'export PWD=/mypassword;UID=sa',
+    ]) await loud(line)
+    for (const line of ['PWD=/tmp; ls', 'PWD=/home/me/project; CC=gcc make', 'PWD=/work/p;make', 'PWD=/work/project; echo hi', 'PWD=/tmp;UID=sa', 'PWD=/work/p\nUID=sa', 'PWD=/work/p;make CC=gcc', 'export PWD=/work/p && make UID=1']) await quiet(line)
     // The line is the limit: a `;` on an earlier line is not in the way, and a short value is as quiet as on any name.
     for (const line of ['Server=x;\nPWD=/work/project', 'echo a; echo b\nexport PWD=/tmp', 'Server=x;UID=sa;PWD=/tmp']) await quiet(line)
     // Anything else after PWD is the password keyword of an ODBC-style connection string, as it was on origin/main.
@@ -516,7 +530,7 @@ describe('redaction noise this release added is gone, and what must be caught st
 
   // The ceiling guards quadratic growth in the length of the text, which costs tens of seconds at this size; it is not a
   // speed. Only the redact and scan calls are timed, and a run is repeated (three at most) while it is over the ceiling, so
-  // one slow run on a loaded machine does not fail the test while a stall that is slow every time still does.
+  // one slow run on a loaded machine does not fail the test, while a consistent regression, slow in all three runs, still does.
   const timed = async (input: string): Promise<number> => {
     let best = Infinity
     for (let run = 0; run < 3 && best >= 1500; run++) {
@@ -546,7 +560,7 @@ describe('redaction noise this release added is gone, and what must be caught st
 
   test('the pattern for PWD after a semicolon, and the path test, stay linear on adversarial input (DESIGN §16 item 43)', async () => {
     const size = 200_000
-    const values = [';PWD=/', ';PWD="', ';OLDPWD=', 'PWD=./a/', 'PWD=$(', 'PWD=`a b ', ';PWD', 'PWD=/a/b/c1d2e3/']
+    const values = [';PWD=/', ';PWD="', ';OLDPWD=', 'PWD=./a/', 'PWD=$(', 'PWD=`a b ', ';PWD', 'PWD=/a/b/c1d2e3/', 'PWD=/aaaa;U=', 'PWD="aaaa";U=', "PWD='aaaa", 'PWD=/aaaa;']
     for (const value of values) {
       for (const input of [value.repeat(Math.ceil(size / value.length)), `;${'a'.repeat(size)}${value}`, `${value}${'a/'.repeat(size / 2)}`]) {
         expect(await timed(input), value).toBeLessThan(1500)

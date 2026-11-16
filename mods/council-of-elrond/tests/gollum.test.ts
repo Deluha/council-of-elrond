@@ -151,6 +151,7 @@ describe('compound names, more formats and low patterns', () => {
       'curl-user-password': 'curl -u a:',
       'connection-string-empty-user': 'redis://:',
       'connection-string-pwd': ';PWD=',
+      'connection-string-pwd-continued': 'PWD=/aaaa;U=',
     }
     const size = 200_000
     for (const pattern of SECRET_PATTERNS) {
@@ -164,7 +165,8 @@ describe('compound names, more formats and low patterns', () => {
         `${'a'.repeat(size)}${prefix}`,
       ]
       // The ceiling guards quadratic growth in the text (tens of seconds at this size), not a speed. Only the redact and
-      // scan calls are timed, and the best of three runs counts, so a loaded machine does not fail one slow run.
+      // scan calls are timed, and a run is repeated (three at most) while it is over the ceiling, so a loaded machine does not fail one
+      // slow run. A consistent regression is slow in all three runs and still fails; this lets one slow run pass, nothing more.
       for (const [index, input] of inputs.entries()) {
         let best = Infinity
         for (let run = 0; run < 3 && best >= 1000; run++) {
@@ -421,7 +423,8 @@ describe('shapes the redaction missed', () => {
     const unit = ['password="', 'password=\'', 'password="a b ', 'curl -u ', 'curl -u a:', 'mysql x -p ', 'mysql --password ', 'authorization: token ', 'x-api-key: ']
     for (const prefix of unit) {
       for (const input of [prefix.repeat(Math.ceil(size / prefix.length)), `${prefix}${'a '.repeat(size / 2)}`, `${prefix}${'"'.repeat(size)}`, `${'a'.repeat(size)}${prefix}`]) {
-        // Best of three, the redact call alone: the ceiling guards quadratic growth, not a speed.
+        // The redact call alone, repeated (three at most) while it is over the ceiling: the ceiling guards quadratic growth, not a speed,
+        // and a consistent regression is slow in all three runs and still fails.
         let best = Infinity
         for (let run = 0; run < 3 && best >= 1000; run++) {
           const started = performance.now()

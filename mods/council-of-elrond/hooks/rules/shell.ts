@@ -55,11 +55,15 @@ export type Split = {
 }
 
 export const MAX_COMMAND_CHARS = 20_000
+/** The parts a command's own text may make (nested scripts it writes included); past it the parse is cut and the call is reviewed. */
 const MAX_PARTS = 200
+/** The parts the copies of spliced `env -S` strings may make, apart from the above, so that copies can never use up the room of the text the command holds. */
+const MAX_COPY_PARTS = 200
 /**
- * The most text one command may have scanned, nested scripts counted again each time (twenty times the longest command).
- * A crafted command can make copies of itself that each make more; the parts bound alone does not stop the copies that
- * make no part. Past it the parse is cut, as at MAX_PARTS: the call is reviewed, and what was found stays found.
+ * The most text the copies of spliced `env -S` strings may have scanned in one command (twenty times the longest command).
+ * A crafted command can make copies of itself that each make more. Only these copies are counted and cut: a script the
+ * command's own text holds (a `-c` string, a substitution, a subshell, a heredoc body, a past-bound `env -S` string) is
+ * always scanned, whatever the copies before it used. Past the bound the call is reviewed, and what was found stays found.
  */
 const MAX_SCANNED_CHARS = 20 * MAX_COMMAND_CHARS
 const MAX_DEPTH = 4
@@ -482,14 +486,20 @@ type Builder = {
   isCut: boolean
   /** The last nesting level handed out. */
   lastScope: number
-  /** The characters of text scanned so far, nested scripts included. */
+  /** The characters of copies (a spliced `env -S` string read again, and what is nested in such a copy) scanned so far. */
   scanned: number
+  /** Parts made by the command's own text, and by copies: each has its own bound. */
+  ownParts: number
+  copyParts: number
 }
 
 type Core = {
   wrappers: string[]
   coreWords: string[]
+  /** Scripts that are the first reading of text the part holds (a `-c` string, a past-bound `env -S` string, an `nsenter` reading). */
   nestedScripts: string[]
+  /** Scripts that read again a string already spliced into the part: copies, charged to the bound on copies. */
+  copyScripts: string[]
   /**
    * The words from a wrapper or runner whose options could not be read for
    * sure (one the tables do not know): they are classified again as they stand,
@@ -654,10 +664,14 @@ function coreOf(input: readonly string[]): Core {
   let k = 0
   const wrappers: string[] = []
   const nestedScripts: string[] = []
+  const copyScripts: string[] = []
   const optionValues: string[] = []
   let unresolved: string[] | undefined
   let movesDir = false
   let envSplices = 0
+  // The `env -S` strings past the bound, with the words between them, and where the words not yet added start.
+  let pastBound: string[] | undefined
+  let pastBoundFrom = 0
   // A call whose options were not all read: its words as they stand are classified
   // again, and where it runs is not known either.
   // The words are made only the first time: a crafted run of unknown options must not copy the rest for each.
@@ -810,9 +824,6 @@ function coreOf(input: readonly string[]): Core {
     if (spec.movesDir) movesDir = true
     let isPidForm = false
     const splits: { raw: string; rest: string[] }[] = []
-    // The `env -S` strings past the bound, with the words between them, and where the words not yet added start.
-    let pastBound: string[] | undefined
-    let pastBoundFrom = 0
     const skipOptions = () => {
       while (k < words.length) {
         const option = words[k] as string
@@ -856,8 +867,9 @@ function coreOf(input: readonly string[]): Core {
             // not all read. One script for all of them, so the work does not grow with their number.
             if (++envSplices > MAX_ENV_SPLICES) {
               markUnresolved(() => [name, ...words.slice(start + 1)])
-              if (pastBound === undefined) pastBound = [raw]
-              else pastBound.push(...words.slice(pastBoundFrom, k).map(quoted), raw)
+              // Read as env reads it (`envStringWords`: its blanks, quotes, `\_`, `\c` and `#` comment), and each word quoted, so the shell scanner does not read the string again its own way.
+              if (pastBound === undefined) pastBound = envStringWords(raw).map(quoted)
+              else pastBound.push(...words.slice(pastBoundFrom, k).map(quoted), ...envStringWords(raw).map(quoted))
               pastBoundFrom = read.next
               k = read.next
               continue
@@ -885,10 +897,13 @@ function coreOf(input: readonly string[]): Core {
     }
     // chrt PRIORITY CMD, taskset MASK CMD: the same, unless it is a pid form.
     if (PID_WRAPPERS.has(canonical) && !isPidForm && k < words.length) k++
-    for (const split of splits) nestedScripts.push([split.raw, ...split.rest.map(quoted)].join(' '))
-    // Led by `env`, so that its options between and after the strings are read as options and not as the program.
-    if (pastBound !== undefined) nestedScripts.push(['env', ...pastBound, ...words.slice(pastBoundFrom).map(quoted)].filter(word => word !== '').join(' '))
+    // The second reading of a spliced string (the shell scanner's, beside env's own that is in the part): a copy of text the part holds, charged to the bound on copies.
+    for (const split of splits) copyScripts.push([split.raw, ...split.rest.map(quoted)].join(' '))
   }
+  // Led by `env`, so that its options between and after the strings are read as options and not as the program. The
+  // first reading of the strings past the bound, so it is not a copy. One script for the whole call, however many
+  // wrappers it chains (one for each would hold all the words after it, and cost the square of their number).
+  if (pastBound !== undefined) nestedScripts.push(['env', ...pastBound, ...words.slice(pastBoundFrom).map(quoted)].join(' '))
   const coreWords = words.slice(k).map((word, index) =>
     index === 0 && word.includes('/') && SYSTEM_BIN.test(word) ? word.slice(word.lastIndexOf('/') + 1) : word,
   )
@@ -909,7 +924,7 @@ function coreOf(input: readonly string[]): Core {
     }
     coreWords.splice(1, g - 1)
   }
-  return { wrappers, coreWords, nestedScripts, movesDir, optionValues, ...(unresolved !== undefined && { unresolved }) }
+  return { wrappers, coreWords, nestedScripts, copyScripts, movesDir, optionValues, ...(unresolved !== undefined && { unresolved }) }
 }
 
 /** `script` options that take the next word. */
@@ -1404,9 +1419,10 @@ function substitutionsIn(text: string, depth = 0): string[] {
   return found
 }
 
-function scan(command: string, depth: number, isNested: boolean, out: Builder, scope = 0, parentScope?: number): void {
-  out.scanned += command.length
-  if (depth > MAX_DEPTH || out.scanned > MAX_SCANNED_CHARS) {
+function scan(command: string, depth: number, isNested: boolean, out: Builder, scope = 0, parentScope?: number, isCopy = false): void {
+  // A copy, and everything nested in a copy, is charged; the text the command holds is not (only the depth bound reaches it).
+  if (isCopy) out.scanned += command.length
+  if (depth > MAX_DEPTH || (isCopy && out.scanned > MAX_SCANNED_CHARS)) {
     out.isCut = true
     return
   }
@@ -1425,7 +1441,13 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
   // The next part reads the pipe of the one before it.
   let isPipeNext = false
 
-  const nested = (text: string) => scan(text, depth + 1, true, out, ++out.lastScope, scope)
+  const nested = (text: string, isCopyText = false) => scan(text, depth + 1, true, out, ++out.lastScope, scope, isCopy || isCopyText)
+  // The parts this scan makes are counted against the bound of its kind: a copy's against the copies', the text's own against its own.
+  const hasRoom = () => (isCopy ? out.copyParts < MAX_COPY_PARTS : out.ownParts < MAX_PARTS)
+  const countPart = () => {
+    if (isCopy) out.copyParts++
+    else out.ownParts++
+  }
 
   // A command substitution inside a word. It is scanned for the commands it
   // runs, and leaves a placeholder in the word — but an empty one (`$()`, ``)
@@ -1469,10 +1491,10 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
     // A pipe at the end of a line goes on to the next line's command.
     if (!isLineEnd || words.length > 0 || redirects.length > 0) isPipeNext = false
     if (words.length > 0 || redirects.length > 0) {
-      if (out.parts.length >= MAX_PARTS) {
+      if (!hasRoom()) {
         out.isCut = true
       } else {
-        const { wrappers, coreWords, nestedScripts, unresolved, movesDir, optionValues } = coreOf(words)
+        const { wrappers, coreWords, nestedScripts, copyScripts, unresolved, movesDir, optionValues } = coreOf(words)
         const { scripts, isUnreadable, isInput } = inlineOf(coreWords)
         const part: ShellPart = {
           text,
@@ -1492,13 +1514,17 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
           ...(isInput && { isTerminalInput: true }),
         }
         out.parts.push(part)
+        countPart()
         // A runner whose inner command was not found for sure: the words as
         // they stand are a part of their own, so a rule can review the call.
-        if (unresolved !== undefined && out.parts.length < MAX_PARTS) {
+        if (unresolved !== undefined && hasRoom()) {
           out.parts.push({ ...part, wrappers: [], coreWords: unresolved, core: unresolved.join(' '), redirects: [], input: '', isUnresolved: true })
+          countPart()
         }
+        // What the text holds comes first and is never cut by the copies after it.
         for (const script of scripts) nested(script)
         for (const nestedScript of nestedScripts) if (nestedScript !== '') nested(nestedScript)
+        for (const copy of copyScripts) if (copy !== '') nested(copy, true)
       }
     }
     if (out.parts.length > owner) {
@@ -1763,7 +1789,7 @@ export function splitShell(command: string): Split {
   if (command.length > MAX_COMMAND_CHARS) {
     return { parts: [], isTooLong: true, isCut: false }
   }
-  const out: Builder = { parts: [], isCut: false, lastScope: 0, scanned: 0 }
+  const out: Builder = { parts: [], isCut: false, lastScope: 0, scanned: 0, ownParts: 0, copyParts: 0 }
   scan(command, 0, false, out)
   return { parts: out.parts, isTooLong: false, isCut: out.isCut }
 }

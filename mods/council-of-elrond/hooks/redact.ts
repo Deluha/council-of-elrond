@@ -79,6 +79,20 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     keep: 1,
     isNoise: (kept, value) => isPlainNoise(kept, value),
   },
+  {
+    id: 'connection-string-pwd-continued',
+    kind: 'password',
+    level: 'low',
+    label: 'secret',
+    // The same name and values, for a `PWD` that comes first in a connection string: its value is followed directly by
+    // a `;` and the next `name=` (`PWD=...;UID=sa`), which a shell command word after a `;` is not (`PWD=/tmp; make`, and
+    // `PWD=/tmp; CC=gcc make` has a space). Unlike `assignment`, a start that does not match is not consumed, so every
+    // length is bounded (a value of 200 characters at most, a next name of 32) to keep each start's cost fixed and the
+    // pattern linear; a longer value is the `assignment` pattern's, unless it is a path.
+    re: /\b((?:PWD|OLDPWD)\\?["']?\s*=\s*\\?["']?)(?!\[REDACTED)((?<=")[^"\\\n]{4,200}(?=\\?";[A-Za-z_][A-Za-z0-9_.-]{0,31}=)|(?<=')[^'\\\n]{4,200}(?=\\?';[A-Za-z_][A-Za-z0-9_.-]{0,31}=)|[^\s"'&;,\\]{4,200}(?=;[A-Za-z_][A-Za-z0-9_.-]{0,31}=))/g,
+    keep: 1,
+    isNoise: (kept, value) => isPlainNoise(kept, value),
+  },
   { id: 'jwt', level: 'low', label: 'JWT', re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g },
   {
     id: 'authorization-header',

@@ -224,8 +224,11 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   in one command are not spliced but read together with the words that follow them, as one script, and the part is
   reviewed, so a crafted chain no longer stalls the classifier and the command it holds keeps its own tier. However
   many `-S` or `-G` options `nsenter` is given, the command after them is read once as well as the word after the
-  first of them, and the strictest reading wins. The text one command makes the parser scan, nested copies counted
-  again, is bounded: past the bound the call is reviewed.
+  first of them, and the strictest reading wins. Each such string is split as `env` splits it (its blanks, `\_`, `\c`
+  and `#` comments), not as a shell reads it. The second reading of the first eight `env -S` strings by the shell
+  scanner is a copy, and the copies of one command are bounded: past the bound the call is reviewed. Only copies are
+  cut, never the text the command holds: a `-c` string, a substitution, a subshell, a process substitution, `eval`
+  or a heredoc body after an expensive part is always read, so a block there stays a block.
 - **A process substitution used as a redirect target no longer hides the command that follows it.** The substitution
   is the redirect's target, and the command after it, whatever separates them, is read with its own program. A redirect
   with no target at the end of a part, and an escaped digit before a here-document, no longer carry over to what comes
@@ -337,8 +340,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **`PWD` and `OLDPWD` are left readable only as a shell assignment of a directory.** The name must be exactly `PWD` or
   `OLDPWD`, written with `=` and not as a quoted key, and the value must be shaped like a path (a start of `/`, `~/`,
   `./`, `../`, an expansion or a plain substitution; letters, digits and `. _ / ~ + @ % -` only; no `; ! : & ? #`, quote
-  or space; no segment that is a word of 6 or more letters and digits). Any other value is the password keyword of a
-  connection string and is redacted and reported, and so is any value after a `;` earlier on the same line.
+  or space; no segment that is a word of 6 or more characters that mixes letters and digits). Any other value is the password
+  keyword of a connection string and is redacted and reported, and so is any value after a `;` earlier on the same
+  line, and a value directly followed by `;` and the next `name=` (`PWD=...;UID=...`).
 - **Secrets are redacted before a cut, not after**: a script, a `.sql` file, the changes a push would send, the
   read-only preview and a file's diff are redacted whole, then cut, so a secret across the cut cannot show a piece of
   itself.

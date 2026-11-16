@@ -3161,13 +3161,91 @@ describe('nsenter -S and -G repeated, and env -S past its bound (DESIGN §16 ite
       expect(ruleOf(command), command).toBe('shell-runner-unresolved')
     }
   })
+
+  test('past the bound a string is split as env splits it (its blanks, escapes and comment), not as a shell reads it', () => {
+    expectCases([
+      // `\_` is a separator for env, and one word for a shell.
+      [`${gap}-S 'rm\\_-rf\\_/home/me'`, 'block', RM],
+      [`${gap}-S "rm\\_-rf\\_/home/me"`, 'block', RM],
+      [`${gap}-S 'sudo\\_ls'`, 'ask', 'privileged'],
+      // `\c` ends the string, and a `#` at the start of a word begins a comment: what is before them is the command.
+      [`${gap}-S 'rm -rf /home/me\\c ignored'`, 'block', RM],
+      [`${gap}-S 'rm -rf /home/me #ignored'`, 'block', RM],
+      [`${gap}-S 'rm\\_-rf' /home/me`, 'block', RM],
+      // Quotes inside the string group words as env groups them.
+      [`${gap}-S "'rm' '-rf' '/home/me'"`, 'block', RM],
+    ])
+    expect(onFeat(`${gap}-S 'git\\_push\\_--force\\_origin\\_main'`).tier).toBe('block')
+    for (const command of [`${gap}-S 'ls\\_-la'`, `${gap}-S 'ls #ignored'`]) expect(tierOf(command), command).toBe('review')
+  })
+})
+
+describe('an expensive part never hides the text the command holds after or before it (DESIGN §16 item 42)', () => {
+  const onFeat = (command: string) => bash(command, { ...CONTEXT, currentBranch: 'feat' })
+  // What the command holds, in each way the parser nests it: all of them are read whatever the copies of spliced strings cost.
+  const dangerous: readonly (readonly [string, string, string])[] = [
+    ["bash -c 'rm -rf /home/me'", 'block', RM],
+    ['echo $(rm -rf /home/me)', 'block', RM],
+    ['cat <(rm -rf /home/me)', 'block', RM],
+    ['eval "rm -rf /home/me"', 'block', RM],
+    ['sh <<EOF\nrm -rf /home/me\nEOF', 'block', RM],
+    ['sudo ls', 'ask', 'privileged'],
+    ['git push --force origin main', 'block', 'force-push-protected-branch'],
+    // The first reading of strings past the bound, in a part that comes when the copies before it have used their room.
+    [`env ${'-S "" '.repeat(9)}-S rm -rf /home/me`, 'block', RM],
+  ]
+  const places = (expensive: string, command: string): string[] => [`${command}\n${expensive}`, `echo a; ${command}; ${expensive}`, `${expensive}; ${command}`]
+
+  // Each shape is an expensive part: the first makes copies by splicing five strings (and a long word to copy), the second
+  // is past the bound of eight splices, the third nests env -S to the depth bound.
+  const shapes: Record<string, string> = {
+    'five splices and a long word': `env ${'-Senv '.repeat(5)}echo ${'A'.repeat(19_000)}`,
+    '3,000 splices': `env ${'-Senv '.repeat(3000)}ls`,
+    "nested env -S '": "env -S '".repeat(2000),
+  }
+  for (const [name, expensive] of Object.entries(shapes)) {
+    test(`${name}: what the command holds before, between and after it keeps its tier`, () => {
+      for (const [command, tier, ruleId] of dangerous) {
+        for (const text of places(expensive, command)) {
+          const result = onFeat(text)
+          expect(result.tier, `${name} | ${command}`).toBe(tier)
+          expect(result.decided?.ruleId, `${name} | ${command}`).toBe(ruleId)
+        }
+      }
+    })
+  }
+
+  test('the copies have parts of their own: they never use up the room of the text the command holds', () => {
+    const split = splitShell(`env ${'-Senv '.repeat(3000)}ls; bash -c 'rm -rf /home/me'`)
+    expect(split.isCut).toBe(true)
+    // The part and the script after the expensive one are both there.
+    expect(split.parts.some(part => part.core === 'rm -rf /home/me')).toBe(true)
+    // And 150 ordinary parts after it are all there too.
+    const many = splitShell(`env ${'-Senv '.repeat(3000)}ls; ${'echo a; '.repeat(150)}rm -rf /home/me`)
+    expect(many.parts.some(part => part.core === 'rm -rf /home/me')).toBe(true)
+    // Strings that hold many commands (one on each line) make many parts as copies, more than the room of any one kind
+    // when there are two of them; none of the text's own is lost, and the call is a block.
+    const heavyPart = `env -S $'-i${'\\nls'.repeat(150)}'`
+    const heavy = `${heavyPart}; ${heavyPart}; bash -c 'rm -rf /home/me'`
+    const heavySplit = splitShell(heavy)
+    expect(heavySplit.isCut).toBe(true)
+    expect(heavySplit.parts.some(part => part.core === 'rm -rf /home/me')).toBe(true)
+    expect(tierOf(heavy)).toBe('block')
+  })
+
+  test('what is cut is only the copies: a command the text holds is cut at the depth and the part bounds, as it always was', () => {
+    expect(splitShell(`env ${'-Senv '.repeat(3000)}ls`).isCut).toBe(true)
+    expect(splitShell("env -S 'ls'").isCut).toBe(false)
+    expect(splitShell(`${'ls; '.repeat(250)}`).isCut).toBe(true)
+  })
 })
 
 describe('the classifier does not stall on crafted input', () => {
   // About 1 ms before the quadratic splice, 38 s with it (DESIGN §16 item 34). The ceiling guards quadratic growth in the
   // length of the command, not a speed: it is far above the linear time and far below the quadratic one. Only the classify
-  // call is timed (not the building of the command), and the best of three runs is taken, so a loaded machine does not
-  // fail the test on one slow run while a real quadratic stall, which is slow every time, still does.
+  // call is timed (not the building of the command), and a run is repeated (three at most) while it is over the ceiling,
+  // so a loaded machine does not fail the test on one slow run. A consistent regression, such as a quadratic stall, is slow in
+  // all three runs and still fails; the repeat lets one slow run pass, nothing more.
   const SLOW_MS = 3000
   const time = (command: string): number => {
     let best = Infinity
@@ -3231,6 +3309,10 @@ describe('the classifier does not stall on crafted input', () => {
       'readers piped on': fill('ls ~/.claude/plugins/a | cat; '),
       'tmux display': `tmux ${fill("display -p '#(x)' \\; ").slice(0, N - 10)}`,
       'input tools': `xdotool ${'key a '.repeat(3300)}`,
+      // Copies of spliced strings, then what the text holds: the copies are bounded, the rest is read whole.
+      'env -S copies, then a script': `env ${'-Senv '.repeat(3000)}ls; bash -c 'rm -rf /home/me'`,
+      "nested env -S ', then a script": `${"env -S '".repeat(2400)}; bash -c 'rm -rf /home/me'`,
+      'env -S chain past the bound': `env ${'-S "" env '.repeat(1800)}-S rm -rf /home/me`,
     }
     for (const [name, command] of Object.entries(shapes)) expect(time(command), name).toBeLessThan(SLOW_MS)
   })
