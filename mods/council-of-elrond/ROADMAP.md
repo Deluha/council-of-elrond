@@ -92,10 +92,8 @@ The protocol for one session (set up and look first, run the brief, stop conditi
   is marked parallel-safe with it (their file sets are disjoint). Two sessions never run briefs
   that are not marked parallel-safe with each other.
 - Claim yours the same way: open the draft pull request first.
-- **P0 comes first.** Every other brief depends on it. Its done-test is in the P0 brief
-  (section 5, "Status"). If P0 is done, the first brief is the next open one on the board. If not,
-  no other brief starts, unless the maintainer says in the session to go on without it: the
-  hardening pull request is not merged yet, which is the maintainer's action MA8. Say so and stop.
+- **P0 comes first.** Every other brief depends on it; its done-test and the stop rule are in the
+  P0 brief (section 5, "Status").
 
 ## 4. Maintainer actions
 
@@ -207,8 +205,9 @@ edit the file that now holds it.
     `.claude/skills/council-of-elrond-development/SKILL.md` exist on `origin/main`**
     (`git fetch origin main && git cat-file -e origin/main:scripts/verify.mjs`). Nobody ticks it;
     the board row says so. Until the maintainer has run the terminal check and merged that pull
-    request (MA8), no brief starts. The first brief a session takes after that is the next open one
-    on the board.
+    request (MA8), no other brief starts: say so and stop, unless the maintainer says in the
+    session to go on without it. Once P0 is done, the first brief a session takes is the next open
+    one on the board.
   - **Every fact lives in exactly one file.** Section 3 of this file, "Resuming" (section 8),
     `docs/DEVELOPMENT.md`, `CONTRIBUTING.md` and the three existing skills are the sources to move
     from; what moves leaves a pointer behind.

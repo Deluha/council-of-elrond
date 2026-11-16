@@ -45,8 +45,12 @@
 // of the same step or job, at their exact indentation; an expression such as
 // `if: ${{ github.event_name == 'x' }}`, a flow-style mapping, a YAML anchor or a matrix does not
 // switch a step off here. In verify.mjs a call is ignored on a `//`, `/*` or ` *` line only, not on
-// a line inside a block comment that has no leading `*`. It shows that the wiring is written, not
-// that it runs.
+// a line inside a block comment that has no leading `*`. In the pre-commit hook the exact
+// `node scripts/verify.mjs --staged` line must be `exec node ...`, or the last live line, or come
+// after a live `set -e` line (`-eu`, `-euo pipefail`, `-o errexit`), and the live line before it
+// must not end in a backslash; a `set -e` inside a function or after a `set +e` still counts, and
+// a trap or an `if`/`||` that handles the status is not read. It shows that the wiring is written,
+// not that it runs.
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -835,12 +839,24 @@ export function ciRuns(ciText, command) {
 /**
  * Whether a shell script has a line that is exactly `command`, optionally after `exec` and leading
  * whitespace, with nothing after it but an optional `# comment`; never a line that also says
- * `exit 0` or `|| true`. Not inside echo, printf or a string; not with any other tail.
+ * `exit 0` or `|| true`. Not inside echo, printf or a string; not with any other tail. The status
+ * must also reach the caller: the line is `exec ...`, or the last live line of the script, or
+ * comes after a live `set -e` line (`set -eu`, `set -euo pipefail`, `set -o errexit`); and the live
+ * line before it does not end in a backslash (a continuation would make it an argument).
  */
 export function shellRuns(script, command) {
   const esc = command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const re = new RegExp(`^\\s*(?:exec\\s+)?${esc}(?:\\s+#.*)?\\s*$`)
-  return live(script).some((l) => re.test(l) && !/\bexit\s+0\b|\|\|\s*true\b/.test(l))
+  const re = new RegExp(`^\\s*(exec\\s+)?${esc}(?:\\s+#.*)?\\s*$`)
+  const lines = live(script)
+  let last = lines.length - 1
+  while (last >= 0 && (lines[last] ?? '').trim() === '') last--
+  const errexit = /^\s*set\s+(?:-[a-zA-Z]*e[a-zA-Z]*|(?:-\S+\s+)*-o\s+errexit)(?:\s|$)/
+  return lines.some((l, i) => {
+    const m = re.exec(l)
+    if (!m || /\bexit\s+0\b|\|\|\s*true\b/.test(l)) return false
+    if (/\\\s*$/.test(lines[i - 1] ?? '')) return false
+    return m[1] !== undefined || i === last || lines.slice(0, i).some((p) => errexit.test(p))
+  })
 }
 
 export function checkG11(root) {
@@ -853,7 +869,7 @@ export function checkG11(root) {
   }
   const hook = readText(root, '.githooks/pre-commit')
   if (hook === null) out.push(finding('G11', '.githooks/pre-commit', 1, 'missing'))
-  else if (!shellRuns(hook, 'node scripts/verify.mjs --staged')) out.push(finding('G11', '.githooks/pre-commit', 1, 'has no line that is exactly `node scripts/verify.mjs --staged` (optionally after exec, optionally with a comment; an echo, a comment, a tail such as `|| true` or `; exit 0` does not count)'))
+  else if (!shellRuns(hook, 'node scripts/verify.mjs --staged')) out.push(finding('G11', '.githooks/pre-commit', 1, 'has no line that is exactly `node scripts/verify.mjs --staged` whose status reaches git: `exec node scripts/verify.mjs --staged`, or the last live line, or after a live `set -e`; not after a line ending in a backslash (optionally with a comment; an echo, a comment, a tail such as `|| true` or `; exit 0` does not count)'))
   const verify = readText(root, 'scripts/verify.mjs')
   if (verify === null) out.push(finding('G11', 'scripts/verify.mjs', 1, 'missing'))
   else if (!liveJs(verify).some((l) => /\brun\(\s*'node'\s*,\s*\[\s*'scripts\/check-guidance\.mjs'/.test(l))) out.push(finding('G11', 'scripts/verify.mjs', 1, "does not run scripts/check-guidance.mjs: expected a `run('node', ['scripts/check-guidance.mjs', ...])` call (an import or a mention does not count)"))

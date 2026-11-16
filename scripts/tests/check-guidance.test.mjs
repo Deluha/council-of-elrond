@@ -622,9 +622,41 @@ describe('G11 wired in', () => {
       assert.equal(f.length, 1, hook)
       assert.match(f[0].message, /verify\.mjs --staged/)
     }
-    for (const hook of ['#!/bin/sh\nexec node scripts/verify.mjs --staged\n', '#!/bin/sh\nif command -v node; then\n  node scripts/verify.mjs --staged\nfi\n', '#!/bin/sh\n  exec node scripts/verify.mjs --staged   # the checks\n']) {
+    for (const hook of ['#!/bin/sh\nexec node scripts/verify.mjs --staged\n', '#!/bin/sh\nset -e\nif command -v node; then\n  node scripts/verify.mjs --staged\nfi\n', '#!/bin/sh\n  exec node scripts/verify.mjs --staged   # the checks\n']) {
       put('.githooks/pre-commit', hook)
       assert.deepEqual(g.checkG11(root), [], hook)
+    }
+  })
+
+  test('the pre-commit line must hand its status to git: exec, last line, or after set -e; not after a continuation', () => {
+    const { root, put } = tree()
+    const V = 'node scripts/verify.mjs --staged'
+    const rejected = [
+      ['followed by exit 0 without set -e', `#!/bin/sh\nset -u\n${V}\nexit 0\n`],
+      ['followed by a line without set -e', `#!/bin/sh\n${V}\necho done\n`],
+      ['set -e only after it', `#!/bin/sh\n${V}\nset -e\nexit 0\n`],
+      ['a commented set -e', `#!/bin/sh\n# set -e\n${V}\nexit 0\n`],
+      ['preceded by a continuation', `#!/bin/sh\nset -e\necho a \\\n${V}\n`],
+      ['exec preceded by a continuation', `#!/bin/sh\necho a \\\nexec ${V}\n`],
+    ]
+    for (const [name, hook] of rejected) {
+      put('.githooks/pre-commit', hook)
+      const f = g.checkG11(root)
+      assert.equal(f.length, 1, name)
+      assert.match(f[0].message, /status reaches git/, name)
+    }
+    const accepted = [
+      ['followed by exit 0 with set -e', `#!/bin/sh\nset -e\n${V}\nexit 0\n`],
+      ['set -eu', `#!/bin/sh\nset -eu\n${V}\nexit 0\n`],
+      ['set -euo pipefail', `#!/bin/sh\nset -euo pipefail\n${V}\nexit 0\n`],
+      ['set -o errexit', `#!/bin/sh\nset -o errexit\n${V}\nexit 0\n`],
+      ['the last line', `#!/bin/sh\nset -u\n${V}\n`],
+      ['the last live line before a comment and blank lines', `#!/bin/sh\n${V}\n\n# end\n`],
+      ['exec with lines after', `#!/bin/sh\nexec ${V}\necho fallback\nexit 1\n`],
+    ]
+    for (const [name, hook] of accepted) {
+      put('.githooks/pre-commit', hook)
+      assert.deepEqual(g.checkG11(root), [], name)
     }
   })
 

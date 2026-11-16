@@ -40,13 +40,14 @@ printf 'REPO=%s\nSCRATCH=%s\nP=%s\n' "$REPO" "$SCRATCH" "$P"
 ### Run a prompt
 
 ```sh
-REPO=$(git -C '<REPO printed above>' rev-parse --show-toplevel)
-SCRATCH='<SCRATCH printed above>'
-P='<P printed above>'
-MOD="$SCRATCH/mods/council-of-elrond"
-[ -n "$REPO" ] && [ -n "$SCRATCH" ] && [ -n "$P" ] && [ -d "$P/.git" ] && [ -d "$MOD" ] || { echo "refusing: a path is empty or missing"; exit 1; }
+REPO=$(git -C '<REPO printed above>' rev-parse --show-toplevel) && REPO=$(cd "$REPO" && pwd -P)
+SCRATCH=$(cd '<SCRATCH printed above>' && pwd -P)
+P=$(cd '<P printed above>' && pwd -P)
+MOD=$(cd "$SCRATCH/mods/council-of-elrond" && pwd -P)
+[ -n "$REPO" ] && [ -n "$SCRATCH" ] && [ -n "$P" ] && [ -n "$MOD" ] && [ -d "$P/.git" ] || { echo "refusing: a path is empty or missing"; exit 1; }
+bad() { case "$1" in "$REPO"|"$REPO"/*|/|"$HOME") return 0;; esac; case "$REPO" in "$1"/*) return 0;; esac; return 1; }
+for d in "$P" "$SCRATCH" "$MOD"; do bad "$d" && { echo "refusing: $d is the repository, inside it, above it, / or HOME"; exit 1; }; done
 cd "$P" || exit 1
-case "$(pwd -P)" in "$REPO"|"$REPO"/*) echo "refusing to probe inside the repository"; exit 1;; esac
 claude -p --plugin-dir "$MOD" --output-format stream-json --verbose \
   --model <a small model> --permission-mode <a mode> --max-budget-usd <an amount> \
   "Run exactly this shell command and report its result verbatim: rm -r build"
@@ -57,13 +58,14 @@ The three flags on the last lines are R13: the child run otherwise inherits the 
 ### Commands
 
 ```sh
-REPO=$(git -C '<REPO printed above>' rev-parse --show-toplevel)
-SCRATCH='<SCRATCH printed above>'
-P='<P printed above>'
-MOD="$SCRATCH/mods/council-of-elrond"
-[ -n "$REPO" ] && [ -n "$SCRATCH" ] && [ -n "$P" ] && [ -d "$P/.git" ] && [ -d "$MOD" ] || { echo "refusing: a path is empty or missing"; exit 1; }
+REPO=$(git -C '<REPO printed above>' rev-parse --show-toplevel) && REPO=$(cd "$REPO" && pwd -P)
+SCRATCH=$(cd '<SCRATCH printed above>' && pwd -P)
+P=$(cd '<P printed above>' && pwd -P)
+MOD=$(cd "$SCRATCH/mods/council-of-elrond" && pwd -P)
+[ -n "$REPO" ] && [ -n "$SCRATCH" ] && [ -n "$P" ] && [ -n "$MOD" ] && [ -d "$P/.git" ] || { echo "refusing: a path is empty or missing"; exit 1; }
+bad() { case "$1" in "$REPO"|"$REPO"/*|/|"$HOME") return 0;; esac; case "$REPO" in "$1"/*) return 0;; esac; return 1; }
+for d in "$P" "$SCRATCH" "$MOD"; do bad "$d" && { echo "refusing: $d is the repository, inside it, above it, / or HOME"; exit 1; }; done
 cd "$P" || exit 1
-case "$(pwd -P)" in "$REPO"|"$REPO"/*) echo "refusing to probe inside the repository"; exit 1;; esac
 claude -p --plugin-dir "$MOD" --output-format stream-json --verbose <the three flags> "/council test \"git push --force origin main\""
 claude -p --plugin-dir "$MOD" --output-format stream-json --verbose <the three flags> "/council report"
 ```
@@ -93,13 +95,14 @@ Read the output for:
 - the audit line, from a block of its own:
 
 ```sh
-REPO=$(git -C '<REPO printed above>' rev-parse --show-toplevel)
-SCRATCH='<SCRATCH printed above>'
-P='<P printed above>'
-MOD="$SCRATCH/mods/council-of-elrond"
-[ -n "$REPO" ] && [ -n "$SCRATCH" ] && [ -n "$P" ] && [ -d "$P/.git" ] && [ -d "$MOD" ] || { echo "refusing: a path is empty or missing"; exit 1; }
+REPO=$(git -C '<REPO printed above>' rev-parse --show-toplevel) && REPO=$(cd "$REPO" && pwd -P)
+SCRATCH=$(cd '<SCRATCH printed above>' && pwd -P)
+P=$(cd '<P printed above>' && pwd -P)
+MOD=$(cd "$SCRATCH/mods/council-of-elrond" && pwd -P)
+[ -n "$REPO" ] && [ -n "$SCRATCH" ] && [ -n "$P" ] && [ -n "$MOD" ] && [ -d "$P/.git" ] || { echo "refusing: a path is empty or missing"; exit 1; }
+bad() { case "$1" in "$REPO"|"$REPO"/*|/|"$HOME") return 0;; esac; case "$REPO" in "$1"/*) return 0;; esac; return 1; }
+for d in "$P" "$SCRATCH" "$MOD"; do bad "$d" && { echo "refusing: $d is the repository, inside it, above it, / or HOME"; exit 1; }; done
 cd "$P" || exit 1
-case "$(pwd -P)" in "$REPO"|"$REPO"/*) echo "refusing to probe inside the repository"; exit 1;; esac
 cat .claude/council-of-elrond/audit/audit.jsonl
 ```
 
@@ -110,14 +113,13 @@ by the maintainer in a terminal; list them as unverified.
 ### Clean up
 
 ```sh
-REPO=$(git -C '<REPO printed above>' rev-parse --show-toplevel)
-SCRATCH='<SCRATCH printed above>'
-P='<P printed above>'
-[ -n "$REPO" ] && [ -n "$SCRATCH" ] && [ -n "$P" ] && [ -d "$P/.git" ] && [ -d "$SCRATCH/mods" ] || { echo "refusing: a path is empty or missing"; exit 1; }
+REPO=$(git -C '<REPO printed above>' rev-parse --show-toplevel) && REPO=$(cd "$REPO" && pwd -P)
+SCRATCH=$(cd '<SCRATCH printed above>' && pwd -P)
+P=$(cd '<P printed above>' && pwd -P)
 PROBES=$(dirname "$P")
-case "$(cd "$PROBES" && pwd -P):$(cd "$SCRATCH" && pwd -P)" in
-  "$REPO"|"$REPO"/*|*":$REPO"|*":$REPO"/*) echo "refusing to remove anything inside the repository"; exit 1;;
-esac
+[ -n "$REPO" ] && [ -n "$SCRATCH" ] && [ -n "$P" ] && [ -d "$P/.git" ] && [ -d "$SCRATCH/mods" ] || { echo "refusing: a path is empty or missing"; exit 1; }
+bad() { case "$1" in "$REPO"|"$REPO"/*|/|"$HOME") return 0;; esac; case "$REPO" in "$1"/*) return 0;; esac; return 1; }
+for d in "$PROBES" "$SCRATCH"; do bad "$d" && { echo "refusing to remove $d: the repository, inside it, above it, / or HOME"; exit 1; }; done
 echo "removing $PROBES and $SCRATCH"
 rm -rf -- '<P without its trailing /probe>' '<SCRATCH printed above>'
 cd "$REPO" && git status --short   # nothing from the probe should show
