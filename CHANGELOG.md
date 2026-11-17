@@ -29,9 +29,10 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   moved (asks; one of a protected checked-out branch is blocked); a shell command, script or SQL file too long for its
   reviewer, a command with more than eight gated parts and a text too long for the secrets scan (they come to you,
   never to a model alone).
-- **A crafted command can now be refused outright** (`command-too-complex-to-read`): one that repeats `env -S`
-  strings, chains ambiguous `nsenter -S` options or nests scripts in them far beyond what anyone writes (see
-  "Changed"). Nothing ordinary meets it.
+- **A crafted command can now be refused outright** (`command-too-complex-to-read`): one whose split strings repeat
+  a wrapper thousands of times, or whose split strings, second readings or nested scripts hold more commands, or nest
+  deeper, than the readings the parser adds are allowed (see "Changed", which also names the few honest but extreme
+  commands that were reviewed and are now refused, and what to do). Nothing ordinary meets it.
 - **Repeats are reviewed again.** The full council's approve is never remembered, so a repeated push or migration
   convenes it, and runs your checks, each time. A call with a git part, one that runs a script or a project's runner,
   and one reformatted in whitespace are reviewed again too; an approval holds only in the folder it was given in.
@@ -51,7 +52,11 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   took the command for `-d`'s value and reviewed it.
 - Wrapper and runner options are read as the programs read them, so a word after an option that takes a value is that
   value and not a command; a few commands an old, wrong reading made review or block are now classified as what they
-  are (for example `systemd-run --expand-environment` and `nsenter -W`).
+  are (for example `systemd-run --expand-environment` and `nsenter -W`). The same holds for an `env -S` string that
+  holds the program, or ends in an option that takes a value: the words after it are the program's arguments, or that
+  value, and not the command, as `env` reads them (0.5.0 took them for the command).
+- A long command that 0.5.0 reviewed only because the readings it made of its split strings used up its 200 parts is
+  read completely, and gets the tier of what it holds.
 - A merge's current branch is read in the repository that decides the call, so a merge into a branch that is not
   protected is no longer treated as one, and a reviewer now gets a diff it did not get. A key for a word holding an
   escaped literal quote is narrower than before.
@@ -118,12 +123,26 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 ### Changed
 - **A command that repeats wrapper options or split strings more often than the parser reads is refused**, by a
   new block, `command-too-complex-to-read` (the call is blocked: "The command repeats wrapper options or split strings
-  more often than the parser reads; it is refused. Write the command plainly."). Only a crafted command reaches it: an
-  `env -S` string nine times over, a chain of ambiguous `nsenter -S` links, or a split string that holds hundreds of
-  commands; an ordinary `env -S 'cmd args'`, `env VAR=x cmd` or `nsenter -t 1 -m ls` never does. A block the command's
-  own parts found still names its own rule. A command over 200 parts or 4 levels deep is reviewed
-  (`command-too-complex`) as before. It is a finding of the classifier like `command-too-long`, so a project rule
-  cannot lower it, and no allow rule is offered for it.
+  more often than the parser reads; it is refused. Write the command plainly."). Only a crafted command reaches it:
+  a split string that repeats a wrapper thousands of times, a split string or a second reading that holds more
+  commands than the extra readings' budget of 400 parts, or scripts nested deeper than their 4 levels; an ordinary
+  `env -S 'cmd args'`, `env VAR=x cmd` or `nsenter -t 1 -m ls` never does. A block the command's own parts found
+  still names its own rule. A command over 200 parts or 4 levels deep is reviewed (`command-too-complex`) as before.
+  It is a finding of the classifier like `command-too-long`, so a project rule cannot lower it, and no allow rule is
+  offered for it. **Honest but extreme commands that were reviewed are now refused:** more than 200 commands inside
+  one `env -S` string, or inside the script of a command behind ambiguous `nsenter` options; four or more scripts
+  nested inside one of those; and a chain of `env -S` strings that each hold a `${NAME}` expansion (five of the
+  plainest are enough).
+  Write the command plainly, or put it in a script file and run that.
+- **An `env -S` string that holds a `${NAME}` expansion is reviewed and read three ways.** `env` expands the name
+  from its environment, and one that is unset expands to nothing, so its word vanishes, an option before it takes the
+  next word, and the words after the string can become the command. The classifier cannot know the value, so the
+  part is reviewed (`shell-runner-unresolved`) and the strictest of three readings wins: the expansion kept as a word,
+  every expansion replaced by nothing (the options read again from the start), and the words after the string
+  alone as a command. Honest strings with an expansion (`env -S 'node ${NODE_OPTS}' app.js`, `env -S 'echo ${HOME}'`)
+  are reviewed where they were allowed; a string with the `$` escaped or in single quotes is no expansion and is read as
+  before. What stays unknown is what a set name holds (an option, a program word) and how a mixture of set and unset
+  names in one string moves where the options end.
 - **The allow rule offered after "allow once" is narrower, and the question says what it allows.** A shell rule allows
   that exact command text, in any folder, without review. A file tool's rule allows every later write to that file by
   that tool. A rule for any other tool allows that tool with exactly the same arguments (pinned as escaped JSON; no
@@ -238,7 +257,8 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   are chained, the part is read two ways and no more: the word after the first option as the program, and every such
   option taking its next word; the strictest reading wins. Each `env -S` string is split as GNU `env` 9.4 splits it
   (its blanks, quotes, `\_`, `\c`, `#` comments and `${NAME}`), and is also read alone, as a shell reads it, and as
-  the earlier versions read it, so a string `env` cannot read (an error in it) is reviewed and still classified.
+  the earlier versions read it, so a string `env` cannot read (an error in it) is reviewed and still classified. A
+  string that holds a `${NAME}` is reviewed and read three ways (see "Changed").
   **The readings the parser adds beside the text have budgets of their own** (400,000 characters scanned, 400
   parts, 4 levels deep): the second `nsenter` reading, the shell scanner's reading of an `env -S` string, the
   strings past the eighth, and every script nested in one of those. The text the command holds (its parts, `-c`
@@ -357,14 +377,19 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
 - **`PWD` and `OLDPWD` are left readable only as a shell assignment of a directory.** The name must be exactly `PWD` or
   `OLDPWD`, written with `=` and not as a quoted key, and the value must be shaped like a path (a start of `/`, `~/`,
   `./`, `../`, an expansion or a plain substitution; letters, digits and `. _ / ~ + @ % -` only; no `; ! : & ? #`, quote
-  or space; no segment that is a word of 6 or more characters that mixes letters and digits). Any other value is the password
-  keyword of a connection string and is redacted and reported, and so is any value after a `;` earlier on the same
-  line, a value (bare or quoted, up to 1,000 characters, a closing quote allowed) followed by `;` and then a
-  character that is no blank and up to 64 more with a `=` among them (`PWD=...;UID=sa`, `;User ID=sa`, `;[UID]=sa`),
-  and a `PWD` with a blank around its `=`, which is no shell assignment. `PWD=/tmp; ls`,
-  `PWD=/home/me/project; CC=gcc make`, `PWD=/work/p;make`, `export PWD=/tmp`, `PWD=$HOME/src` and `cd "$OLDPWD"`
-  stay readable; so does a connection string whose `PWD` value is over 1,000 characters or whose next name is over
-  64, and `PWD=/work/p;make CC=gcc` is redacted.
+  or space; no segment that is a word of 6 or more characters that mixes letters and digits), and the name must stand
+  where a shell reads an assignment word: at the start of the text or of a line, after a blank, after `(`, `{`, a
+  backtick or `$(`, or glued to a `|`, `||` or `&&`. After any other character (`db.PWD=`, `--PWD=`, `&PWD=`,
+  `,PWD=`, `#PWD=`, `$PWD=`, a quote) it is a key of a query, an option or a field, and is redacted and reported.
+  Any other value is the password keyword of a connection string and is redacted and reported, and so is any value
+  after a `;` earlier on the same line, a value (bare or quoted, up to 1,000 characters, a closing quote allowed, up
+  to 16 blanks or tabs allowed before the `;`) followed by `;` and then a character that is no blank and up to 64 more
+  with a `=` among them (`PWD=...;UID=sa`, `PWD=... ;UID=sa`, `;User ID=sa`, `;[UID]=sa`), and a `PWD` with a blank
+  around its `=`, which is no shell assignment. `PWD=/tmp; ls`, `PWD=/tmp ; ls`, `PWD=/home/me/project; CC=gcc make`,
+  `PWD=/work/p;make`, `export PWD=/tmp`, `PWD=$HOME/src` and `cd "$OLDPWD"` stay readable; so does a connection
+  string whose `PWD` value is over 1,000 characters, has a blank inside it, or is followed by more than 16 blanks
+  before its `;`, one whose next name is over 64 characters, and one whose item follows a blank (`UID=sa PWD=...`).
+  `PWD=/work/p;make CC=gcc` (a command word glued to the `;`, with a `=` after it) and `PWD = /x` are redacted.
 - **Secrets are redacted before a cut, not after**: a script, a `.sql` file, the changes a push would send, the
   read-only preview and a file's diff are redacted whole, then cut, so a secret across the cut cannot show a piece of
   itself.

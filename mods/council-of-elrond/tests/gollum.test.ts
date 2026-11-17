@@ -154,6 +154,8 @@ describe('compound names, more formats and low patterns', () => {
       'curl-user-password': 'curl -u a:',
       'connection-string-empty-user': 'redis://:',
       'connection-string-pwd': ';PWD=',
+      // The name after a character that is no assignment context: the look-behind of the glued pattern at each start.
+      'connection-string-pwd-glued': '.PWD=',
       // A `;` and 60 characters with no `=`: the look-ahead of the continued pattern at its worst.
       'connection-string-pwd-continued': `PWD=/aaaa;${'U'.repeat(60)}`,
     }
@@ -181,6 +183,27 @@ describe('compound names, more formats and low patterns', () => {
         }
         expect(best, `${pattern.id} input ${index}`).toBeLessThan(1000)
       }
+    }
+    // The blanks the continued pattern allows before its `;`: a value that runs through many names to one long run of blanks
+    // (every name's value ends at the same run), a run of blanks and tabs, quoted values, and the glued pattern after each
+    // character it looks behind at.
+    const shapes: Record<string, string> = {
+      'names sharing one run of blanks': `${'PWD=aaaa'.repeat(120)}${' '.repeat(size)};UID=sa`,
+      'names, each with a run of blanks': `${`PWD=aaaa${' '.repeat(40)};x`.repeat(Math.ceil(size / 50))}`,
+      'quoted, with blanks and tabs': `${'PWD="aaaa" \t ;x'.repeat(Math.ceil(size / 16))}`,
+      'a run of blanks after a quote': `PWD='aaaa'${' \t'.repeat(size / 2)};UID=sa`,
+      'the glued pattern after each character': `${'-PWD=aaaa(PWD=aaaa$PWD=aaaa&PWD=aaaa'.repeat(Math.ceil(size / 40))}`,
+      'a run of names': 'PWD'.repeat(size / 3),
+    }
+    for (const [name, input] of Object.entries(shapes)) {
+      let best = Infinity
+      for (let run = 0; run < 3 && best >= 1000; run++) {
+        const started = performance.now()
+        redact(input)
+        await scanText(input)
+        best = Math.min(best, performance.now() - started)
+      }
+      expect(best, name).toBeLessThan(1000)
     }
   })
 

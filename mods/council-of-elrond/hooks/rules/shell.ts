@@ -592,19 +592,25 @@ const ENV_CONTROL_ESCAPES: Readonly<Record<string, string>> = { f: '\f', n: '\n'
  * The words GNU `env -S` makes of its string, as `env` 9.4 does (checked with harmless `printf` calls):
  * - outside quotes: blanks separate; `\_` is a separator; `\c` ends the string; `\f \n \r \t \v` are those characters
  *   (not separators); `\# \$ \" \' \\` are the character; a `#` that starts a word begins a comment to the end;
- *   `${NAME}` is expanded (kept as written here: its value is not known) and a bare `$` is an error;
+ *   `${NAME}` is expanded from the environment (kept as written here: its value is not known) and a bare `$` is an error;
  * - inside single quotes: only `\\` and `\'` are escapes, every other backslash is a backslash, `$` is plain;
  * - inside double quotes: as outside, but `\_` is a blank character, `\c` is an error, and a `#` is plain;
  * - any other backslash sequence, a backslash at the end, an unterminated quote and a bare `$` are errors: `env` runs
  *   nothing. `isSure` is then false; the words are still read on (leniently: an unknown escape is its character, a bare
  *   `$` is itself, an unterminated quote runs to the end), so that the part is reviewed with the most the string could say.
+ *
+ * An expansion's value is not known to the classifier, and an unset name expands to nothing: its word vanishes (or keeps
+ * the text glued to it), so an option before it takes the next word, and a `#` straight after it starts a comment. So
+ * `hasExpansion` says the string holds one (outside single quotes), and with `isVanishing` every expansion is replaced by
+ * nothing: the other end of what the string can mean, read beside the words with the expansions kept.
  */
-function envSplit(text: string): { words: string[]; isSure: boolean } {
+function envSplit(text: string, isVanishing = false): { words: string[]; isSure: boolean; hasExpansion: boolean } {
   const words: string[] = []
   let word = ''
   let hasWord = false
   let quote = ''
   let isSure = true
+  let hasExpansion = false
   const end = () => {
     if (hasWord) words.push(word)
     word = ''
@@ -616,9 +622,13 @@ function envSplit(text: string): { words: string[]; isSure: boolean } {
     if (found === null) {
       isSure = false
       word += '$'
-    } else word += found[0]
+    } else {
+      hasExpansion = true
+      if (!isVanishing) word += found[0]
+    }
     skip = found === null ? 0 : found[0].length - 1
-    hasWord = true
+    // Kept as a word, an expansion starts one; replaced by nothing it starts none (a quote has already started it).
+    if (found === null || !isVanishing) hasWord = true
   }
   for (let i = 0; i < text.length; i++) {
     const c = text[i] as string
@@ -648,7 +658,7 @@ function envSplit(text: string): { words: string[]; isSure: boolean } {
           continue
         }
         end()
-        return { words, isSure }
+        return { words, isSure, hasExpansion }
       }
       if (e === '_') {
         if (quote === '"') {
@@ -690,7 +700,7 @@ function envSplit(text: string): { words: string[]; isSure: boolean } {
   }
   if (quote !== '') isSure = false
   end()
-  return { words, isSure }
+  return { words, isSure, hasExpansion }
 }
 
 /**
@@ -923,6 +933,9 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
   let pastShell: string[] | undefined
   let pastLoose: string[] | undefined
   let hasPastLoose = false
+  // The same strings with every `${NAME}` replaced by nothing, and whether one past the bound holds an expansion.
+  let pastVanished: string[] | undefined
+  let hasPastExpansion = false
   let pastBoundFrom = 0
   // A call whose options were not all read: its words as they stand are classified
   // again, and where it runs is not known either.
@@ -1127,17 +1140,26 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
             // A further reading, the first versions' (`envLooseWords`), made only when it differs from env's own.
             const loose = envLooseWords(raw)
             const isLooseDifferent = loose.length !== split.words.length || loose.some((word, index) => word !== split.words[index])
+            // A string holding an expansion (`${NAME}`, whose value the classifier cannot know: an unset name makes its word
+            // vanish, so an option before it takes the next word and the words after the string can become the command) is
+            // read two ways beside the first: with the expansions replaced by nothing (the words made again, the options
+            // read again from the start of the part), and the words that follow the string, alone, as a command. All
+            // extras; the part is reviewed whatever they say.
+            const vanished = split.hasExpansion ? envSplit(raw, true).words : split.words
+            if (split.hasExpansion) hasPastExpansion ||= envSplices >= MAX_ENV_SPLICES
             if (++envSplices > MAX_ENV_SPLICES) {
               markUnresolved(() => [name, ...words.slice(start + 1)])
               const between = words.slice(pastBoundFrom, k).map(quoted)
-              if (pastEnv === undefined || pastShell === undefined || pastLoose === undefined) {
+              if (pastEnv === undefined || pastShell === undefined || pastLoose === undefined || pastVanished === undefined) {
                 pastEnv = split.words.map(quoted)
                 pastShell = [raw]
                 pastLoose = loose.map(quoted)
+                pastVanished = vanished.map(quoted)
               } else {
                 pastEnv.push(...between, ...split.words.map(quoted))
                 pastShell.push(...between, raw)
                 pastLoose.push(...between, ...loose.map(quoted))
+                pastVanished.push(...between, ...vanished.map(quoted))
               }
               if (isLooseDifferent) hasPastLoose = true
               pastBoundFrom = read.next
@@ -1146,6 +1168,12 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
             }
             // A string env cannot read (an error in it) runs nothing in env; the part is reviewed, and the shell's reading below is the one that tells what the text says.
             if (!split.isSure) markUnresolved(() => [name, ...words.slice(start + 1)])
+            if (split.hasExpansion) {
+              markUnresolved(() => [name, ...words.slice(start + 1)])
+              const tail = words.slice(read.next)
+              extraScripts.push([...words.slice(0, k), ...vanished, ...tail].map(quoted).join(' '))
+              if (tail.length > 0) extraScripts.push(tail.map(quoted).join(' '))
+            }
             if (isLooseDifferent) extraScripts.push([...loose, ...words.slice(read.next)].map(quoted).join(' '))
             splits.push({ raw, rest: words.slice(read.next) })
             words = [...words.slice(0, k), ...split.words, ...words.slice(read.next)]
@@ -1180,6 +1208,9 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
     const tail = words.slice(pastBoundFrom).map(quoted)
     extraScripts.push(['env', ...pastEnv, ...tail].join(' '), ['env', ...pastShell, ...tail].filter(word => word !== '').join(' '))
     if (hasPastLoose && pastLoose !== undefined) extraScripts.push(['env', ...pastLoose, ...tail].join(' '))
+    // A string past the bound that holds an expansion: the strings with it replaced by nothing. (The words after them alone
+    // are the part's own command already: a string past the bound is skipped, not spliced.)
+    if (hasPastExpansion && pastVanished !== undefined) extraScripts.push(['env', ...pastVanished, ...tail].join(' '))
   }
   const coreWords = words.slice(k).map((word, index) =>
     index === 0 && word.includes('/') && SYSTEM_BIN.test(word) ? word.slice(word.lastIndexOf('/') + 1) : word,

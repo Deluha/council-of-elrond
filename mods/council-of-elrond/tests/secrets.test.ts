@@ -477,6 +477,45 @@ describe('redaction noise this release added is gone, and what must be caught st
     await loud('PWD=/work/p;make CC=gcc')
   })
 
+  // DESIGN §16 item 46: the exemption holds only where a shell reads an assignment word, and blanks may stand between a
+  // connection string's first value and its `;`.
+  test('(b3) PWD after a character that is no assignment context is the password keyword; blanks before the ; of a connection string', async () => {
+    const path = '/home/me/project'
+    // After a letter, a dot, a dash, `&`, `,`, `#`, `$`, `=`, `[`, `?`, `:` or a quote: a key of a query, an option, a field.
+    for (const before of ['db.', '--', '-', '&', ',', '#', '$', 'x-', '?', ':', '=', '[', '"', "'", 'url?UID=sa&', 'jdbc:odbc:x,', '/', '.', '+', '@']) {
+      await loud(`${before}PWD=${path}`)
+      await loud(`${before}OLDPWD=${path}`)
+    }
+    await loud(`echo "PWD=${path}"`)
+    await loud(`mysql --PWD=${path} -u root`)
+    // A shell reads an assignment after the start of the text or of a line, a blank or tab, `(`, `$(`, `{`, a backtick and a
+    // pipe or `&&` glued to it.
+    for (const before of ['', ' ', '\t', '\n', 'x ', 'cd /x\n', '(', '$(', '{', '`', 'a|', 'a||', 'a&&', 'a | ', 'a && ', 'a || ']) {
+      await quiet(`${before}PWD=${path} make`)
+      await quiet(`${before}OLDPWD=${path} make`)
+    }
+    // After a `;` the earlier rule of item 43 already read it as the keyword.
+    await loud(`cd /x;PWD=${path}`)
+    // Blanks or tabs between a connection string's first value and its `;` (up to 16): redacted, bare or quoted; a shell command
+    // after a `;` that has a blank, or no `=` within 64 characters, stays quiet.
+    for (const line of [
+      'PWD=/abcde/fgh ;UID=sa',
+      'PWD=/abcde/fgh \t ;UID=sa',
+      'PWD="/abcde/fgh" ;UID=sa',
+      "PWD='/abcde/fgh'\t;UID=sa",
+      'OLDPWD=/abcde/fgh  ;Server=x',
+      `PWD=/abcde/fgh${' '.repeat(16)};UID=sa`,
+      'Server=x;PWD=/abcde/fgh ;UID=sa',
+      'PWD=hunter2xyz ;UID=sa',
+    ]) await loud(line)
+    for (const line of ['PWD=/tmp ; ls', 'PWD=/x ; CC=gcc make', 'PWD=/home/me/project ; echo hi=1', 'PWD=/work/p ;make', 'PWD=/work/p ;', 'PWD="/home/me/project" ; ls']) await quiet(line)
+    // The cost, as for item 45: a command word glued to the `;` with a `=` after it.
+    await loud('PWD=/work/p ;make CC=gcc')
+    // The residual classes, stated in DESIGN: a bare value with a blank inside it, more than 16 blanks before the `;`, and a
+    // connection string whose item follows a blank (`UID=sa PWD=...`).
+    for (const line of ['PWD=/correct horse;UID=sa', `PWD=/abcde/fgh${' '.repeat(17)};UID=sa`, 'UID=sa PWD=/home/me/project']) await quiet(line)
+  })
+
   test('(c) a call expression, a subscript chain, a positional default and a small number are code, not secrets', async () => {
     for (const line of [
       'const schema = { password: z.string().min(8) }',

@@ -3409,9 +3409,14 @@ describe('env -S strings are split as GNU env 9.4 splits them, and the first ver
     expect(core(`env -S 'printf "a\\_b"'`)).toEqual(['printf', 'a b'])
     // Blanks are the six of the C locale: a no-break space is part of the word.
     expect(core('env -S "printf a b"')).toEqual(['printf', 'a b'])
-    // `${NAME}` is kept as written; the part is still sure.
+    // `${NAME}` is kept as written in the part itself; its value is not known, so the part is reviewed (DESIGN §16 item 46).
     expect(core("env -S 'printf ${HOME}'")).toEqual(['printf', '${HOME}'])
-    expect(isUnresolved("env -S 'printf ${HOME}'")).toBe(false)
+    expect(isUnresolved("env -S 'printf ${HOME}'")).toBe(true)
+    // In single quotes, and after an escaped `$`, it is no expansion: the string is read as before and is sure.
+    expect(core(`env -S "printf '\\\${HOME}'"`)).toEqual(['printf', '${HOME}'])
+    expect(isUnresolved(`env -S "printf '\\\${HOME}'"`)).toBe(false)
+    expect(core("env -S 'printf \\${HOME}'")).toEqual(['printf', '${HOME}'])
+    expect(isUnresolved("env -S 'printf \\${HOME}'")).toBe(false)
   })
 
   test('a string env cannot read (an error in it) is reviewed, and read as a shell reads it', () => {
@@ -3496,6 +3501,139 @@ describe('env -S strings are split as GNU env 9.4 splits them, and the first ver
     expect(repeated.length).toBeLessThanOrEqual(20_000)
     expect(splitShell(repeated).isExhausted).toBe(true)
     expect(ruleOf(repeated)).toBe(TOO_COMPLEX_TO_READ)
+  })
+
+  // DESIGN §16 item 46. An unset name expands to nothing, its word vanishes, an option before it takes the next word, and
+  // the words after the string become the command; the classifier cannot know the value, so a string holding an expansion
+  // is read with the expansion kept (the part itself), with every expansion replaced by nothing, and the words after it alone.
+  describe('a string holding a ${NAME} expansion (DESIGN §16 item 46)', () => {
+    const hasCore = (command: string, text: string) => splitShell(command).parts.some(part => part.core === text)
+
+    test('the words env makes of it with the expansions replaced by nothing: the word vanishes, glued text stays, a # after it starts a comment', () => {
+      // Each: the part with the expansion kept makes `junk` (or the path) the program; only the reading with it replaced by
+      // nothing makes the words after the string the command. The command (`echo hi`) is the whole part: `core` of that reading.
+      for (const command of [
+        "env -S '-u ${X}' junk echo hi",
+        "env -S '--unset ${X}' junk echo hi",
+        "env -S '-iu ${X}' junk echo hi",
+        "env -S 'A=1 -u ${X}' junk echo hi",
+        "env -S '-u ${X}${Y}' junk echo hi",
+        "env -S '-u${X}' junk echo hi",
+        "env '-S-u ${X}' junk echo hi",
+        "env --split-string='-u ${X}' junk echo hi",
+        "env --split-string '-u ${X}' junk echo hi",
+        "env -S '-C ${X}' / echo hi",
+        "env -S '-u ${X}#c' junk echo hi",
+        `${gap}-S '-u \${X}' junk echo hi`,
+        `${gap}-S '-C \${X}' / echo hi`,
+        `nice env -S '-u \${X}' junk echo hi`,
+        `timeout 5 env -S '-u \${X}' junk echo hi`,
+        `sudo env -S '-u \${X}' junk echo hi`,
+      ]) {
+        expect(hasCore(command, 'echo hi'), command).toBe(true)
+        expect(tierOf(command), command).not.toBe('allow')
+      }
+      // Glued text keeps the rest of the word; a quoted expansion leaves an empty word, so nothing vanishes.
+      expect(hasCore("env -S 'x${X}y' echo hi", 'xy echo hi')).toBe(true)
+      expect(hasCore("env -S 'x${X}y' echo hi", 'echo hi')).toBe(true)
+      expect(hasCore(`env -S '-u "\${X}"' junk echo hi`, 'echo hi')).toBe(false)
+      expect(hasCore(`env -S '-u "\${X}"' junk echo hi`, 'junk echo hi')).toBe(true)
+      // A glued value that vanishes leaves the option with an empty value: the words after the string stay arguments of the program.
+      expect(hasCore("env -S '--unset=${X}' junk echo hi", 'junk echo hi')).toBe(true)
+      expect(hasCore("env -S '--unset=${X}' junk echo hi", 'echo hi')).toBe(false)
+      // The comment: for an unset name `a ${X}#x b` is `a`, and `b` is not a word; with the expansion kept it is two words.
+      expect(hasCore("env -S 'a ${X}#x b' echo hi", 'a echo hi')).toBe(true)
+      expect(core("env -S 'a ${X}#x b' echo hi")).toEqual(['a', '${X}#x', 'b', 'echo', 'hi'])
+      // A `#` that is not at the start of a word is plain in both.
+      expect(hasCore("env -S 'a x${X}#y' echo hi", 'a x#y echo hi')).toBe(true)
+      // And a `$` escaped is no expansion: nothing is added, the part is sure.
+      expect(isUnresolved("env -S 'a \\${X}' echo hi")).toBe(false)
+      expect(hasCore("env -S 'a \\${X}' echo hi", 'a echo hi')).toBe(false)
+    })
+
+    test('the words after the string are also a command by themselves, as the options before an expansion can end the string', () => {
+      // `-u ${X} ${Y}`: with X unset and Y set `-u` takes Y's value and the words after the string are the command: neither
+      // the expansions kept (the program is `${Y}`) nor replaced by nothing (`-u` takes the first word after) read that.
+      expect(hasCore("env -S '-u ${X} ${Y}' echo hi", 'echo hi')).toBe(true)
+      expect(hasCore("env -S '-u ${X} ${Y}' echo hi", 'hi')).toBe(true)
+      expectCases([
+        ["env -S '-u ${X} ${Y}' rm -rf /home/me", 'block', RM],
+        [`${gap}-S '-u \${X} \${Y}' rm -rf /home/me`, 'block', RM],
+        // An empty tail makes no extra and no error.
+        ["env -S '${X}'", 'review', 'shell-dynamic-program'],
+        ["env -S '-u ${X}'", 'review', 'shell-runner-unresolved'],
+      ])
+    })
+
+    test('the part is reviewed whatever the string says; everything the reading with it replaced by nothing finds is found', () => {
+      for (const command of [
+        "env -S 'printf ${HOME}'",
+        "env -S 'FOO=${BAR} python3 -u' x.py",
+        "env -S '${HOME}/bin/tool arg' x",
+        `env -S "PATH=\${HOME}/bin:\${PATH} node" a.js`,
+        `${gap}-S 'echo \${HOME}' x`,
+      ]) {
+        expect(tierOf(command), command).toBe('review')
+      }
+      // A string without an expansion is read as before.
+      for (const command of ["env -S 'ls -la' x", "env -S 'printf \\${HOME}'", `env -S "printf '\\\${HOME}'"`, 'env -S "FOO=1 BAR=2 ls" x']) expect(tierOf(command), command).toBe('allow')
+    })
+
+    test('acceptance: the options before an expansion, each with a wrapper in front and inside $(...), then a command that blocks or asks', () => {
+      const sq = (text: string) => `'${text}'`
+      const strings = [
+        '-u ${X} echo',
+        '--unset ${X} echo',
+        '${X}',
+        '-C ${X} /',
+        '-iu ${X} echo',
+        'A=1 -u ${X} echo',
+        '-u ${X}${Y} echo',
+        '-u ${X} ${Y}',
+        '-u ${X}#c echo',
+      ]
+      const forms: ((text: string, tail: string) => string)[] = [
+        (text, tail) => `env -S ${sq(text)} ${tail}`,
+        (text, tail) => `env ${sq(`-S${text}`)} ${tail}`,
+        (text, tail) => `env --split-string=${sq(text)} ${tail}`,
+        (text, tail) => `env --split-string ${sq(text)} ${tail}`,
+        (text, tail) => `nice env -S ${sq(text)} ${tail}`,
+        (text, tail) => `timeout 5 env -S ${sq(text)} ${tail}`,
+        (text, tail) => `sudo env -S ${sq(text)} ${tail}`,
+        (text, tail) => `echo $(env -S ${sq(text)} ${tail})`,
+        (text, tail) => `${gap}-S ${sq(text)} ${tail}`,
+        (text, tail) => `env -S ${sq(text)} -S ${sq('-u ${Z}')} ${tail}`,
+      ]
+      const blocks: [string, string][] = [
+        ['rm -rf /home/me', RM],
+        ['git push --force origin main', 'force-push-protected-branch'],
+        ['dd if=/dev/zero of=/dev/sda', 'raw-disk-write'],
+        ["sh -c 'rm -rf /home/me'", RM],
+      ]
+      for (const text of strings) {
+        for (const form of forms) {
+          for (const [tail, ruleId] of blocks) expectCases([[form(text, tail), 'block', ruleId]])
+          expect(tierOf(form(text, 'sudo ls')), form(text, 'sudo ls')).toBe('ask')
+        }
+      }
+    })
+
+    test('five strings that each hold an expansion in one command are refused, not reviewed; four are read; the time stays small', { timeoutMs: 20_000 }, () => {
+      const chain = (count: number, tail: string) => `env ${"-S 'A=${X}' ".repeat(count)}${tail}`
+      expect(splitShell(chain(4, 'echo hi')).isExhausted).toBe(false)
+      expect(tierOf(chain(4, 'echo hi'))).toBe('review')
+      expect(ruleOf(chain(4, 'rm -rf /home/me'))).toBe(RM)
+      expect(splitShell(chain(5, 'echo hi')).isExhausted).toBe(true)
+      expect(ruleOf(chain(5, 'echo hi'))).toBe(TOO_COMPLEX_TO_READ)
+      expect(tierOf(chain(5, 'rm -rf /home/me'))).toBe('block')
+      // Thousands of them, in one command and in many commands, are a refusal found at once.
+      for (const shape of [`env ${"-S '-u ${X}' ".repeat(1400)}echo hi`, "env -S '${X}' echo hi; ".repeat(800), `env ${"-S '${X}' ".repeat(8)}-S '\${X}' -S '\${Y}' echo hi`]) {
+        const started = performance.now()
+        const result = bash(shape)
+        expect(performance.now() - started).toBeLessThan(2000)
+        expect(result.tier).toBe('block')
+      }
+    })
   })
 })
 

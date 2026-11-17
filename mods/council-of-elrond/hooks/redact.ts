@@ -80,18 +80,34 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     isNoise: (kept, value) => isPlainNoise(kept, value),
   },
   {
+    id: 'connection-string-pwd-glued',
+    kind: 'password',
+    level: 'low',
+    label: 'secret',
+    // `PWD` and `OLDPWD` are exempt (the `assignment` pattern lets them go) only where a shell reads an assignment word: the
+    // name at the start of the text or of a line, after a blank, after `(` (`$(` too), `{`, a backtick, or glued to a `|`, `||` or
+    // `&&`. After any other character (`db.PWD=`, `--PWD=`, `&PWD=`, `,PWD=`, `#PWD=`, `$PWD=`, a quote) it is a key of a
+    // query, an option, a field or a connection string, and is read as the password keyword, whatever the value is. The
+    // same value forms as `assignment`; a plain word, number or short path is noise there as everywhere. The name is looked
+    // for first (`(?=PWD|OLDPWD)`), so each start costs a fixed amount.
+    re: /\b(?=PWD|OLDPWD)(?<!^|[\s({`|]|&&)((?:PWD|OLDPWD)\\?["']?\s*=\s*\\?["']?)(?!\[REDACTED)((?<=")[^"\\\n]{4,1000}(?=\\?")|(?<=')[^'\\\n]{4,1000}(?=\\?')|[^\s"'&;,\\]{4,})/g,
+    keep: 1,
+    isNoise: (kept, value) => isPlainNoise(kept, value),
+  },
+  {
     id: 'connection-string-pwd-continued',
     kind: 'password',
     level: 'low',
     label: 'secret',
     // The same name and values, for a `PWD` that comes first in a connection string: its value (bare or quoted, 4 to 1000
-    // characters, a closing quote allowed before the `;`) is followed by a `;` and then a character that is no blank and up
-    // to 64 more without a `;`, a line break or a second `=` before the first `=` (`PWD=...;UID=sa`, `;User ID=sa`, `;[UID]=sa`,
-    // a name of any length up to that). A shell command word after a `;` is not that: it has a blank (`PWD=/tmp; make`,
-    // `PWD=/tmp; CC=gcc make`) or no `=` (`PWD=/work/p;make`). Unlike `assignment`, a start that does not match is not
-    // consumed, so every length is bounded to keep each start's cost fixed and the pattern linear. Residual, as a class: a
-    // bare value over 1000 characters, and a next name of more than 64 characters.
-    re: /\b((?:PWD|OLDPWD)\\?["']?\s*=\s*\\?["']?)(?!\[REDACTED)((?<=")[^"\\\n]{4,1000}(?=\\?";(?=[^\s;])[^;\n=]{0,64}=)|(?<=')[^'\\\n]{4,1000}(?=\\?';(?=[^\s;])[^;\n=]{0,64}=)|[^\s"'&;,\\]{4,1000}(?=\\?["']?;(?=[^\s;])[^;\n=]{0,64}=))/g,
+    // characters, a closing quote allowed before the `;`, up to 16 blanks or tabs between them) is followed by a `;` and
+    // then a character that is no blank and up to 64 more without a `;`, a line break or a second `=` before the first `=`
+    // (`PWD=...;UID=sa`, `PWD=... ;UID=sa`, `;User ID=sa`, `;[UID]=sa`, a name of any length up to that). A shell command
+    // word after a `;` is not that: it has a blank (`PWD=/tmp; make`, `PWD=/tmp ; CC=gcc make`) or no `=` (`PWD=/work/p;make`).
+    // Unlike `assignment`, a start that does not match is not consumed, so every length is bounded to keep each start's cost
+    // fixed and the pattern linear. Residual, as a class: a bare value over 1000 characters, more than 16 blanks before the
+    // `;`, and a next name of more than 64 characters.
+    re: /\b((?:PWD|OLDPWD)\\?["']?\s*=\s*\\?["']?)(?!\[REDACTED)((?<=")[^"\\\n]{4,1000}(?=\\?"[ \t]{0,16};(?=[^\s;])[^;\n=]{0,64}=)|(?<=')[^'\\\n]{4,1000}(?=\\?'[ \t]{0,16};(?=[^\s;])[^;\n=]{0,64}=)|[^\s"'&;,\\]{4,1000}(?=\\?["']?[ \t]{0,16};(?=[^\s;])[^;\n=]{0,64}=))/g,
     keep: 1,
     isNoise: (kept, value) => isPlainNoise(kept, value),
   },
