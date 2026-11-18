@@ -624,9 +624,9 @@ describe('redaction noise this release added is gone, and what must be caught st
   // The ceiling guards quadratic growth in the length of the text, which costs tens of seconds at this size; it is not a
   // speed. Only the redact and scan calls are timed, and a run is repeated (three at most) while it is over the ceiling, so
   // one slow run on a loaded machine does not fail the test, while a consistent regression, slow in all three runs, still does.
-  const timed = async (input: string): Promise<number> => {
+  const bestOf = async (input: string, ceiling: number): Promise<number> => {
     let best = Infinity
-    for (let run = 0; run < 3 && best >= 1500; run++) {
+    for (let run = 0; run < 3 && best >= ceiling; run++) {
       const started = performance.now()
       redact(input)
       isPlaceholder(input)
@@ -636,10 +636,21 @@ describe('redaction noise this release added is gone, and what must be caught st
     }
     return best
   }
+  // An input that is over the ceiling in all three runs on a slow or loaded machine (CI's runner took 1,516 ms on one) is
+  // then measured for what the ceiling stands for, growth: the same text at a quarter of the length. Linear work takes
+  // about 4 times as long at the full length and quadratic work about 16; over 8 times fails with the time it took, and
+  // so does anything over ten times the ceiling. A text that only grows linearly reports just under the ceiling.
+  const timed = async (input: string): Promise<number> => {
+    const best = await bestOf(input, 1500)
+    if (best < 1500 || best >= 15_000) return best
+    const quarter = await bestOf(input.slice(0, Math.floor(input.length / 4)), 0)
+    return best / Math.max(quarter, 1) < 8 ? 1499 : best
+  }
 
   // The runner's own limit for a test is 5 s, and the two linear-time tests below take 2 to 4 s idle (many inputs of 200,000
   // characters, each timed up to three times, run beside other work): the limit of the test is raised so that the runner never
-  // fails a test for being slow as a whole. The ceiling each input is held to (1,500 ms) is what the test asserts and is not raised.
+  // fails a test for being slow as a whole. The ceiling each input is held to (1,500 ms) is not raised; over it, an input
+  // passes only if its time grows linearly with its length (see `timed`).
   const SLOW_TEST = { timeoutMs: 30_000 }
 
   test('every new or changed pattern stays linear on adversarial input', SLOW_TEST, async () => {
