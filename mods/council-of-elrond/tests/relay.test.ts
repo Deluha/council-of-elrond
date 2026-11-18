@@ -176,7 +176,7 @@ describe('/council output reaches Claude where nothing draws', () => {
     expect(result.context?.[0]).not.toContain(FAKE_GITHUB_TOKEN)
   })
 
-  test('rules: an exact-string allowlist entry shows no character of it to Claude, and still its first three to the person', async ($, on) => {
+  test('rules: an exact-string allowlist entry shows no character of it, to Claude or to the person', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { surfaces: [] })
     const entry = 'zq9-exact-string-entry'
     const hash = 'sha256:0123456789abcdef'
@@ -188,9 +188,11 @@ describe('/council output reaches Claude where nothing draws', () => {
     expect(sent).toContain(hash)
     expect(sent).not.toContain('zq9')
     expect(sent).not.toContain(entry)
-    // The person's copy is as it was: three characters and an ellipsis.
-    expect(w.logs.join('\n')).toContain('zq9…')
-    expect(w.logs.join('\n')).not.toContain('(an exact string, not shown)')
+    // The person's copy is the same: no character of the entry, the fixed words in its place.
+    const shown = w.logs.join('\n')
+    expect(shown).toContain('(an exact string, not shown)')
+    expect(shown).toContain(hash)
+    expect(shown).not.toContain('zq9')
   })
 })
 

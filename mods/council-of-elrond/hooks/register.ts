@@ -2,17 +2,20 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, ProcessRunResult, ProcessSpawnResult, Register, RenderElement, ToolCallResult } from 'claude-code'
 
 import type { CouncilPanel } from '../types'
-import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, isRotation, ROTATED_FILES } from './audit.js'
+import { appendPlan, AUDIT_GITIGNORE, auditLine, fingerprintOf, isRotation, placeScopeOf, ROTATED_FILES } from './audit.js'
 import type { AuditRecord, Decision } from './audit.js'
-import { OVERRIDES_PATH } from './config/defaults.js'
-import { loadConfig, MODEL_ID } from './config/schema.js'
+import { OVERRIDES_PATH, SHIPPED } from './config/defaults.js'
+import { ignoredConfig, loadConfig, MODEL_ID } from './config/schema.js'
+import type { BrokenFile } from './config/schema.js'
 import type { LoadedConfig } from './config/schema.js'
+import { brokenChecksOf, codeOf, hashOf, ignoredChecksOf, isHeldBack, isTrusted, matchCode, parseRecord, recordValue, TRUST_KEY, trustMode, withoutTrusted, withTrusted } from './config/trust.js'
+import type { RulesFile, TrustCounts, TrustRecord } from './config/trust.js'
 import { MODEL_SLOTS } from './config/types.js'
 import type { GimliCommand, MemberName, ModelSlot } from './config/types.js'
 import { withAllowlistEntry, withRule } from './config/write.js'
 import type { FileEdit } from './config/write.js'
-import { isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput } from './elrond/commands.js'
-import { callKeyOf, codeOf, isOfferable, parseChatLines } from './elrond/chat.js'
+import { errorsLine, isCouncilCommand, isSlot, logOutput, modelsOutput, needsPerson, parseCouncil, rulesOutput, statusOutput, testOutput, trustedOutput, trustLines, trustListing, unconfirmedNotice } from './elrond/commands.js'
+import { callKeyOf, codeOf as chatCodeOf, isOfferable, parseChatLines } from './elrond/chat.js'
 import { combine, hasRealBlock } from './elrond/combine.js'
 import type { Voice } from './elrond/combine.js'
 import { bigOperationOf, councilSeats, needsCurrentBranch, rangeOf } from './elrond/council.js'
@@ -24,8 +27,10 @@ import { deadlineFor, profileOf, resolveModel } from './elrond/models.js'
 import type { ModelChoice } from './elrond/models.js'
 import {
   cacheApprove,
+  isCacheable as isCacheableCall,
   isOutOfRounds,
   isWipeOutcome,
+  lockedVerbOf,
   lockoutOf,
   noteRound,
   noteWipe,
@@ -36,34 +41,33 @@ import {
   roundsLeft,
 } from './elrond/operations.js'
 import type { WipePolicy } from './elrond/operations.js'
-import { refusalText } from './elrond/refusal.js'
-import { isRelayed, noticeText, nobodyToAsk, relayContext } from './elrond/relay.js'
+import { projectReasonText, refusalText } from './elrond/refusal.js'
+import { brokenNotice, isRelayed, noticeText, nobodyToAsk, relayContext, untrustedNotice } from './elrond/relay.js'
 import { reportOutput } from './elrond/report.js'
 import { bandRows, debateRows, voiceNote } from './elrond/view.js'
 import type { Row } from './elrond/view.js'
-import { ruleJson, suggestRule } from './elrond/suggest.js'
+import { suggestQuestion, suggestRule } from './elrond/suggest.js'
 import type { Refusal } from './elrond/refusal.js'
 import { route } from './elrond/routing.js'
 import type { Enabled, Seat } from './elrond/routing.js'
-import { ARAGORN_LIMITS, productionHits, sqlOf } from './members/aragorn.js'
+import { productionHits, sqlOf } from './members/aragorn.js'
 import type { SqlPiece } from './members/aragorn.js'
-import { requestOf, whoOf } from './members/brief.js'
+import { isRunCut, requestOf, whoOf } from './members/brief.js'
 import type { Brief } from './members/brief.js'
-import { formatPreview, INSPECTION_TIMEOUT_MS, MAX_LISTED, mergePlace, planPreview, rangeDiffInspection } from './members/galadriel.js'
+import { formatPreviewCut, INSPECTION_TIMEOUT_MS, MAX_LISTED, mergePlace, planPreview, rangeDiffInspections, runsElsewhere, unreadCommitsNote, unseenPushNote } from './members/galadriel.js'
 import type { Inspection, InspectionResult } from './members/galadriel.js'
-import { GANDALF_LIMITS } from './members/gandalf.js'
-import { isGimliBlock, keepTail, problemOf, statusOf, tailOf } from './members/gimli.js'
+import { isGimliBlock, keepTail, notRunCheck, problemOf, statusOf, tailOf } from './members/gimli.js'
 import type { GimliRun } from './members/gimli.js'
 import { patternsWith, scanCall, warnsPasswordFingerprint } from './members/gollum.js'
 import { callDiff, LEGOLAS_LIMITS } from './members/legolas.js'
 import type { CallDiff, Current } from './members/legolas.js'
 import type { GollumFinding } from './members/gollum.js'
-import { newNonce, parseVerdict, truncate } from './members/shared.js'
-import type { Verdict } from './members/shared.js'
+import { addOmitted, cut, newNonce, parseVerdict, reasonsOf } from './members/shared.js'
+import type { Omitted, Shown, Verdict } from './members/shared.js'
 import { redact } from './redact.js'
 import type { SecretPattern } from './redact.js'
-import { classify, FILE_PATH_FIELDS, SHELL_TOOLS, targetsOf } from './rules/classify.js'
-import type { Call, Classification, ClassifyContext, Target } from './rules/classify.js'
+import { applyAdditions, classifyBase, FILE_PATH_FIELDS, forcePushPlaces, SHELL_TOOLS, targetsOf } from './rules/classify.js'
+import type { Call, Classification, ClassifyContext, Finding, Target } from './rules/classify.js'
 import { isInside, relativeTo, resolve } from './rules/paths.js'
 import { auditDirsOf, candidateChildren, checksOf, combineClassifications, intersection, scopesTouched, scopeTagOf, unionById, writeDirOf } from './rules/scopes.js'
 import {
@@ -79,10 +83,12 @@ import {
   grantChat,
   holdsChat,
   INITIAL_SESSION,
+  isListed,
   isReadable,
   isShadow,
   markDebateOpened,
   noteCheck,
+  noteListed,
   noteOffer,
   noteVoice,
   noteWritten,
@@ -94,8 +100,10 @@ import {
   useChat,
   withBypass,
   withEpic,
+  withoutListed,
   withSessionModel,
   withShadow,
+  withTrustNonce,
 } from './state.js'
 import type { ChatUse } from './state.js'
 import type { CouncilDebate, CouncilSession } from '../types'
@@ -194,6 +202,8 @@ type Settings = {
   gollumEnabled: boolean
   galadrielEnabled: boolean
   plainMode: boolean
+  /** `confirm`: a rules file's settings that loosen the gate or run code wait for `/council trust`; `always`: every file is trusted. */
+  trustProjectRules: 'confirm' | 'always'
 }
 
 const modelSetting = (value: unknown): string => (typeof value === 'string' ? value : 'default')
@@ -223,6 +233,7 @@ const settingsOf = (options: PluginOptions): Settings => ({
   gollumEnabled: options.gollumEnabled !== false,
   galadrielEnabled: options.galadrielEnabled !== false,
   plainMode: options.plainMode === true,
+  trustProjectRules: trustMode(options.trustProjectRules),
 })
 
 type Context = {
@@ -264,8 +275,10 @@ let context: Promise<Context> | undefined
 /** C5: one entry per child of the root, a repository's scope or undefined for a plain folder. */
 const children = new Map<string, Promise<Scope | undefined>>()
 let auditQueue: Promise<void> = Promise.resolve()
-/** The folders whose audit `.gitignore` was looked at since the module loaded. */
+/** The folders whose audit `.gitignore` exists or was written since the module loaded: one that failed to be written is tried again at the next line. */
 const gitignoreChecked = new Set<string>()
+/** Audit lines that could not be written since the module loaded (the session's start): `/council status` says how many. */
+let auditFailures = 0
 const warned = new Set<string>()
 
 const wipePolicy = (): WipePolicy => ({ toolErrors: settings.toolErrorsAreWipes })
@@ -297,6 +310,74 @@ function warnOnce($: EngineInterface, key: string, line: string, toast?: string)
   if (toast !== undefined) $.ui.toast(toast, { timeoutMs: 8_000 })
 }
 
+/** The real path of a rules file, links resolved: the key its trust is recorded under. */
+const rulesKeyOf = async ($: EngineInterface, path: string): Promise<string> => (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath ?? path
+
+/** The trust record; a store that cannot be read says why, and nothing is then trusted by it. */
+async function readTrust($: EngineInterface): Promise<{ ok: true; record: TrustRecord } | { ok: false; problem: string }> {
+  try {
+    return { ok: true, record: parseRecord(await $.store.get(TRUST_KEY)) }
+  } catch (error) {
+    return { ok: false, problem: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** Stores the record; the problem when it could not be. */
+async function saveTrust($: EngineInterface, record: TrustRecord): Promise<string | undefined> {
+  try {
+    await $.store.set(TRUST_KEY, recordValue(record))
+    return undefined
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
+/**
+ * How a rules file stands. Only a file with settings that wait for trust has a
+ * question to answer; with the option at `always` there is no record to read.
+ * Trusted means the file's exact text, as read, hashes to what a person confirmed for that path.
+ */
+async function fileTrustOf($: EngineInterface, path: string, fileText: string, loaded: LoadedConfig): Promise<RulesFile> {
+  // Nothing to confirm (no rule, nothing waits). Lists that only add are settings all the same: the mod does not rewrite such a file as if it were its own.
+  if (loaded.needsTrust === undefined) return { path, state: 'nothing', ...(loaded.hasSettings === true && settings.trustProjectRules !== 'always' && { holdsSettings: true }) }
+  if (settings.trustProjectRules === 'always') return { path, state: 'option' }
+  const key = await rulesKeyOf($, path)
+  const hash = await hashOf(fileText)
+  const stored = await readTrust($)
+  return { path: key, hash, state: stored.ok && isTrusted(stored.record, key, hash) ? 'confirmed' : 'untrusted' }
+}
+
+/** Where nothing draws, one row the model reads (the only channel to the person). A refusal or a failure is logged, never raised. */
+async function appendRow($: EngineInterface, content: string): Promise<void> {
+  try {
+    if ((await $.session.surfaces()).length > 0) return
+    const result = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: content }] } })
+    if (result.deny !== undefined) $.ui.log(text('notice.appendFailed', { problem: result.deny }), { to: 'debug' })
+  } catch (error) {
+    $.ui.log(text('notice.appendFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
+  }
+}
+
+/** Once per session per file content, when its settings are held back: a line and a toast, and where nothing draws a row Claude relays. Counts only. */
+async function noticeUntrusted($: EngineInterface, file: RulesFile, counts: TrustCounts): Promise<void> {
+  const key = `trust:${file.path}:${file.hash ?? ''}`
+  if (warned.has(key)) return
+  const notice = unconfirmedNotice(counts)
+  warnOnce($, key, notice.line, notice.toast)
+  await appendRow($, untrustedNotice(counts))
+}
+
+/**
+ * Once per session per file content, when a rules file has errors: where nothing draws, a row Claude relays,
+ * with the number of errors and nothing from the file. (The line and the toast are `loadRules`'s.)
+ */
+async function noticeBroken($: EngineInterface, path: string, fileText: string | undefined, broken: BrokenFile, errors: number): Promise<void> {
+  const key = `broken:${await rulesKeyOf($, path)}:${fileText === undefined ? 'unreadable' : await hashOf(fileText)}`
+  if (warned.has(key)) return
+  warned.add(key)
+  await appendRow($, brokenNotice(broken.kind, errors))
+}
+
 /** Reads and validates the rules file of one directory; a broken one warns once under `key`. */
 async function loadRules($: EngineInterface, dir: string, key: string): Promise<{ loaded: LoadedConfig; hasFile: boolean }> {
   const path = `${dir}/${OVERRIDES_PATH}`
@@ -309,14 +390,24 @@ async function loadRules($: EngineInterface, dir: string, key: string): Promise<
       return undefined
     })
   }
-  const loaded = readProblem !== undefined ? { ...loadConfig(undefined), errors: [readProblem] } : loadConfig(fileText)
-  if (loaded.errors.length > 0) {
+  let loaded = readProblem !== undefined ? ignoredConfig([readProblem]) : loadConfig(fileText)
+  if (loaded.broken !== undefined) {
+    const isPartial = loaded.broken.kind === 'partial'
     warnOnce(
       $,
       key,
-      text('notice.configBroken', { path: OVERRIDES_PATH, errors: loaded.errors.join('; ') }),
-      text('notice.configBrokenShort'),
+      text(isPartial ? 'notice.configPartial' : 'notice.configBroken', { path: OVERRIDES_PATH, errors: loaded.errors.join('; ') }),
+      text(isPartial ? 'notice.configPartialShort' : 'notice.configBrokenShort'),
     )
+    await noticeBroken($, path, fileText, loaded.broken, loaded.errors.length)
+  }
+  if (fileText !== undefined && loaded.errors.length === 0) {
+    const file = await fileTrustOf($, path, fileText, loaded)
+    // Held back: the same text again, with only what cannot loosen the gate in force. A file with nothing to confirm is read the same way, so
+    // its rules only add to the shipped decision: nobody can confirm it, and a rule that replaced the decision would take a review away.
+    if (file.state === 'untrusted' || (file.state === 'nothing' && settings.trustProjectRules !== 'always')) loaded = loadConfig(fileText, SHIPPED, false)
+    loaded = { ...loaded, file }
+    if (file.state === 'untrusted' && loaded.needsTrust !== undefined) await noticeUntrusted($, file, loaded.needsTrust.counts)
   }
   return { loaded, hasFile }
 }
@@ -404,8 +495,13 @@ async function classifyIn(
   where: ClassifyContext,
 ): Promise<{ classification: Classification; ctx: CallContext }> {
   const scopes = await scopesOf($, ctx, targetsOf(call, where))
-  const { classification, index } = combineClassifications(scopes.map(scope => classify(call, scope.loaded.compiled, { ...where, root: scope.dir })))
-  return { classification, ctx: callContextOf(ctx, scopes, index) }
+  const each = scopes.map(scope => classifyBase(call, scope.loaded.compiled, { ...where, root: scope.dir }))
+  const combined = combineClassifications(each.map(one => one.base))
+  // The rules of unconfirmed files go on top of the combined shipped decision, so one scope's addition cannot take another's review away.
+  const classification = applyAdditions(combined.classification, each.flatMap(one => one.unconfirmed))
+  // The scope whose unconfirmed rule decided, when one did; else the strictest scope's.
+  const deciding = classification.decided === undefined ? -1 : each.findIndex(one => one.unconfirmed.includes(classification.decided as Finding))
+  return { classification, ctx: callContextOf(ctx, scopes, deciding >= 0 ? deciding : combined.index) }
 }
 
 /** The scope of the session's working directory: its repository, else the root's. For `/council` and the start suggestion. */
@@ -467,25 +563,31 @@ async function realPathOf($: EngineInterface, call: Call, cwd: string, ctx: Cont
     : real
 }
 
-/** Content of scripts the call runs that Claude wrote this session, redacted. */
+/**
+ * Content of scripts the call runs that Claude wrote this session, redacted
+ * whole (the prompt cuts it, so a cut never splits a secret), and how many the
+ * call names that could not be shown.
+ */
 async function scriptsOf(
   $: EngineInterface,
   classification: Classification,
   cwd: string,
   written: readonly string[],
   ctx: Context,
-): Promise<{ path: string; content: string }[]> {
+): Promise<{ scripts: { path: string; content: string }[]; unseen: number }> {
   const scripts: { path: string; content: string }[] = []
+  let unseen = 0
   for (const word of classification.scriptPaths) {
-    if (scripts.length >= MAX_SCRIPTS) break
     const path = resolve(word, cwd, ctx.home)
-    if (!written.includes(path)) continue
-    const content = await $.fs.read(path).catch(() => undefined)
-    if (typeof content === 'string') {
-      scripts.push({ path, content: redact(truncate(content, GANDALF_LIMITS.scriptLines, GANDALF_LIMITS.scriptChars), ctx.patterns) })
+    if (scripts.length >= MAX_SCRIPTS || !written.includes(path)) {
+      unseen++
+      continue
     }
+    const content = await $.fs.read(path).catch(() => undefined)
+    if (typeof content === 'string') scripts.push({ path: redact(path, ctx.patterns), content: redact(content, ctx.patterns) })
+    else unseen++
   }
-  return scripts
+  return { scripts, unseen }
 }
 
 /**
@@ -495,8 +597,46 @@ async function scriptsOf(
  */
 async function gitDirOf($: EngineInterface, cwd: string | undefined, ctx: CallContext): Promise<string | undefined> {
   if (cwd === undefined) return ctx.gitDir
-  const real = (await $.fs.stat(cwd, { resolve: true }).catch(() => undefined))?.realPath
+  return realDirInside($, cwd, ctx)
+}
+
+/** A folder with its links resolved, when that really lies inside the root; undefined when it cannot be resolved or lies outside. */
+async function realDirInside($: EngineInterface, dir: string, ctx: Context): Promise<string | undefined> {
+  const real = (await $.fs.stat(dir, { resolve: true }).catch(() => undefined))?.realPath
   return real !== undefined && (real === ctx.realRoot || isInside(real, ctx.realRoot)) ? real : undefined
+}
+
+/** The most distinct folders whose branch is read for one call; more is unknown (a force push then asks). */
+const MAX_BRANCH_DIRS = 3
+
+/**
+ * The branch a force push of the current branch would overwrite, for the
+ * check that blocks it on a protected one. Read only when the call has such a
+ * push part (a cheap test on its parts: any other call starts no process), in
+ * the folder each push runs in, with the git environment and timeout of the
+ * previews. Unknown (undefined) on any failure: a push git would run elsewhere,
+ * a folder outside the root, a detached HEAD, a git error or timeout, more
+ * than MAX_BRANCH_DIRS folders. Where the pushes of one call sit on different
+ * branches, one the root's protected branches match is the answer, else unknown.
+ */
+async function pushBranchOf($: EngineInterface, ctx: Context, call: Call, where: ClassifyContext): Promise<string | undefined> {
+  const places = forcePushPlaces(call, where)
+  if (places.length === 0) return undefined
+  const command = typeof call.input.command === 'string' ? call.input.command : ''
+  const dirs = new Set<string>()
+  for (const { part, cwd } of places) {
+    if (runsElsewhere(part, { command, root: where.root, cwd })) return undefined
+    dirs.add(cwd)
+  }
+  if (dirs.size > MAX_BRANCH_DIRS) return undefined
+  const branches: (string | undefined)[] = []
+  for (const cwd of dirs) {
+    const dir = cwd === where.cwd ? cwd : await realDirInside($, cwd, ctx)
+    branches.push(dir === undefined ? undefined : await currentBranchOf($, dir))
+  }
+  const first = branches[0]
+  if (branches.every(branch => branch === first)) return first === 'HEAD' ? undefined : first
+  return branches.find(branch => branch !== undefined && branch !== 'HEAD' && ctx.loaded.compiled.protectedBranches.some(re => re.test(branch)))
 }
 
 /**
@@ -538,11 +678,13 @@ async function runGitInspection(
  * Runs Galadriel's inspections: only what the table planned, read-only, each
  * on its own timeout. A failure is no preview, never a decision.
  */
-async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: CallContext): Promise<string | undefined> {
+async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: CallContext): Promise<{ shown: Shown | undefined; notes: string[] }> {
   const results: InspectionResult[] = []
   for (const step of plan) {
     try {
-      if (step.kind === 'path') {
+      if (step.kind === 'note') {
+        results.push({ kind: 'note', label: step.label })
+      } else if (step.kind === 'path') {
         const stat = await $.fs.stat(step.path).catch(() => undefined)
         if (stat === undefined) {
           results.push({ kind: 'path', label: step.label, state: 'missing' })
@@ -555,14 +697,20 @@ async function previewOf($: EngineInterface, plan: readonly Inspection[], ctx: C
         }
       } else {
         const { label, run } = await runGitInspection($, step, ctx)
-        results.push({ kind: 'git', label, exitCode: run.exitCode, stdout: run.stdout.slice(0, 50_000) })
+        // Redacted before it is cut, here and again in the preview's own cut.
+        results.push({ kind: 'git', label, exitCode: run.exitCode, stdout: redact(run.stdout, ctx.patterns).slice(0, 50_000) })
       }
     } catch {
       results.push({ kind: 'failed', label: step.label })
     }
   }
-  const preview = formatPreview(results, settings.previewLines)
-  return preview === undefined ? undefined : redact(preview, ctx.patterns)
+  const redactShown = (shown: string): string => redact(shown, ctx.patterns)
+  const unread = unreadCommitsNote(plan, results)
+  const base = formatPreviewCut(results, settings.previewLines, redactShown)
+  // What git could not read is said in the preview too, where there is one; the notes go to the reviewers either way.
+  const note: InspectionResult[] = unread === undefined ? [] : [{ kind: 'note', label: unread }]
+  const shown = base === undefined || unread === undefined ? base : formatPreviewCut([...results, ...note], settings.previewLines, redactShown)
+  return { shown, notes: [...results, ...note].flatMap(result => (result.kind === 'note' ? [result.label] : [])) }
 }
 
 /**
@@ -573,7 +721,8 @@ async function fileDiffOf($: EngineInterface, call: Call, cwd: string, realPath:
   const field = FILE_PATH_FIELDS[call.tool]
   const given = field === undefined ? undefined : call.input[field]
   if (field === undefined) return undefined
-  if (typeof given !== 'string') return { path: '(no path)', diff: callDiff(call, '(no path)', { state: 'unreadable' }, settings.diffLines) }
+  const redactText = (shown: string): string => redact(shown, ctx.patterns)
+  if (typeof given !== 'string') return { path: '(no path)', diff: callDiff(call, '(no path)', { state: 'unreadable' }, settings.diffLines, redactText) }
   const absolute = realPath ?? resolve(given, cwd, ctx.home)
   const path = relativeTo(absolute, ctx.root) || absolute
   let current: Current
@@ -583,25 +732,31 @@ async function fileDiffOf($: EngineInterface, call: Call, cwd: string, realPath:
     const content = await $.fs.read(absolute).catch(() => undefined)
     current = typeof content === 'string' ? { state: 'text', text: content } : { state: 'unreadable' }
   }
-  const diff = callDiff(call, path, current, settings.diffLines)
-  return { path, diff: { ...diff, diff: redact(diff.diff, ctx.patterns) } }
+  // Redacted inside the diff, before it is cut.
+  return { path, diff: callDiff(call, path, current, settings.diffLines, redactText) }
 }
 
-/** The `.sql` files a database call names, read when they sit inside the project, redacted and cut. */
-async function sqlFilesOf($: EngineInterface, files: readonly { word: string; cwd?: string }[], cwd: string, ctx: Context): Promise<SqlPiece[]> {
+/** The `.sql` files a database call names, read when they sit inside the project and redacted whole (the prompt cuts them), and how many could not be shown. */
+async function sqlFilesOf($: EngineInterface, files: readonly { word: string; cwd?: string }[], cwd: string, ctx: Context): Promise<{ pieces: SqlPiece[]; unseen: number }> {
   const pieces: SqlPiece[] = []
+  let unseen = 0
   for (const file of files) {
     const path = resolve(file.word.replace(/^['"]|['"]$/g, ''), file.cwd ?? cwd, ctx.home)
-    if (!isInside(path, ctx.root)) continue
+    if (!isInside(path, ctx.root)) {
+      unseen++
+      continue
+    }
     // Inside by name is not enough: a link may land outside the project.
     const real = (await $.fs.stat(path, { resolve: true }).catch(() => undefined))?.realPath
-    if (real === undefined || !isInside(real, ctx.realRoot)) continue
-    const content = await $.fs.read(real).catch(() => undefined)
-    if (typeof content === 'string') {
-      pieces.push({ label: relativeTo(path, ctx.root) ?? path, text: redact(truncate(content, ARAGORN_LIMITS.sqlLines, ARAGORN_LIMITS.sqlChars), ctx.patterns) })
+    if (real === undefined || !isInside(real, ctx.realRoot)) {
+      unseen++
+      continue
     }
+    const content = await $.fs.read(real).catch(() => undefined)
+    if (typeof content === 'string') pieces.push({ label: redact(relativeTo(path, ctx.root) ?? path, ctx.patterns), text: redact(content, ctx.patterns) })
+    else unseen++
   }
-  return pieces
+  return { pieces, unseen }
 }
 
 /** What the seated member is given: the context its profile asks for, and nothing else. */
@@ -613,38 +768,45 @@ async function briefOf(
   cwd: string,
   realPath: string | undefined,
   state: CouncilSession,
-  preview: string | undefined,
+  preview: Shown | undefined,
+  notes: readonly string[],
   ctx: Context,
 ): Promise<Brief> {
-  const ruleReasons = [...new Set(classification.findings.map(finding => finding.reason))]
+  const { ruleReasons, projectReasons } = reasonsOf(classification.findings)
+  const withProject = projectReasons.length > 0 ? { projectReasons } : {}
   const shown = callText(call, ctx.patterns)
+  // The names the call supplies go to the reviewer inside one fenced block, redacted like the rest (DESIGN §16).
+  const named = (value: string): string => redact(value, ctx.patterns)
   const latestPrompt = state.latestPrompt
-  const withPreview = preview !== undefined ? { preview } : {}
+  const withPreview = preview !== undefined ? { preview: preview.text, ...(preview.omitted !== undefined && { previewOmitted: preview.omitted }) } : {}
+  const withNotes = notes.length > 0 ? { notes } : {}
   // Routing seats the diff reviewer on file tools only, which always have a diff.
   const file = seat.member === 'gandalf' || seat.profile === 'git' ? undefined : await fileDiffOf($, call, cwd, realPath, ctx)
   if (seat.member === 'legolas' && file !== undefined) {
-    return { member: 'legolas', context: { tool: call.tool, path: file.path, diff: file.diff, ruleReasons, latestPrompt, ...withPreview } }
+    return { member: 'legolas', context: { tool: named(call.tool), path: named(file.path), diff: file.diff, ruleReasons, ...withProject, latestPrompt, ...withPreview } }
   }
   if (seat.member === 'aragorn' && seat.profile === 'git') {
     return {
       member: 'aragorn',
       profile: 'git',
-      context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, protectedBranches: ctx.loaded.compiled.config.protectedBranches, ...withPreview },
+      context: { tool: named(call.tool), call: shown, ruleReasons, ...withProject, latestPrompt, protectedBranches: ctx.loaded.compiled.config.protectedBranches, ...withPreview, ...withNotes },
     }
   }
   if (seat.member === 'aragorn') {
     const found = sqlOf(classification)
-    const inline = found.inline.map(piece => ({ label: piece.label, text: redact(piece.text, ctx.patterns) }))
-    const sql = [...inline, ...(await sqlFilesOf($, found.files, cwd, ctx))]
+    const inline = found.inline.map(piece => ({ label: named(piece.label), text: redact(piece.text, ctx.patterns) }))
+    const read = await sqlFilesOf($, found.files, cwd, ctx)
+    const sql = [...inline, ...read.pieces]
+    const unseenSqlFiles = read.unseen + found.pastCap
     const production = productionHits([shown, ...sql.map(piece => piece.text)].join('\n'), ctx.loaded.compiled.production)
     return {
       member: 'aragorn',
       profile: 'database',
-      context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, sql, production, ...(file !== undefined && { diff: file.diff }) },
+      context: { tool: named(call.tool), call: shown, ruleReasons, ...withProject, latestPrompt, sql, production, ...(unseenSqlFiles > 0 && { unseenSqlFiles }), ...(file !== undefined && { diff: file.diff }) },
     }
   }
-  const scripts = await scriptsOf($, classification, cwd, state.written, ctx)
-  return { member: 'gandalf', context: { tool: call.tool, call: shown, ruleReasons, latestPrompt, scripts, ...withPreview } }
+  const { scripts, unseen } = await scriptsOf($, classification, cwd, state.written, ctx)
+  return { member: 'gandalf', context: { tool: named(call.tool), call: shown, ruleReasons, ...withProject, latestPrompt, scripts, ...(unseen > 0 && { unseenScripts: unseen }), ...withPreview, ...withNotes } }
 }
 
 /**
@@ -712,14 +874,50 @@ async function currentBranchOf($: EngineInterface, dir: string): Promise<string 
  * redacted, with the range that was read (the table's fallback range when the
  * first can't be read). Undefined when git can't say.
  */
-async function rangeDiffOf($: EngineInterface, step: Extract<Inspection, { kind: 'git' }>, ctx: CallContext): Promise<{ label: string; diff: string } | undefined> {
+async function rangeDiffOf(
+  $: EngineInterface,
+  step: Extract<Inspection, { kind: 'git' }>,
+  ctx: CallContext,
+  share = 1,
+): Promise<{ label: string; diff: string; omitted?: Omitted } | undefined> {
   try {
     const { label, run } = await runGitInspection($, step, ctx)
     if (run.exitCode !== 0) return undefined
-    const diff = run.stdout.slice(0, LEGOLAS_LIMITS.diffChars * 4).trimEnd()
-    return { label, diff: redact(truncate(diff === '' ? '(no changes)' : diff, settings.diffLines, LEGOLAS_LIMITS.diffChars), ctx.patterns) }
+    // Redacted before it is cut, so a cut never splits a secret.
+    const diff = redact(run.stdout, ctx.patterns).trimEnd()
+    // Each of several ranges gets its share of the limits.
+    const { text: shown, omitted } = cut(diff === '' ? '(no changes)' : diff, Math.max(1, Math.floor(settings.diffLines / share)), Math.floor(LEGOLAS_LIMITS.diffChars / share))
+    return { label, diff: shown, ...(omitted !== undefined && { omitted }) }
   } catch {
     return undefined
+  }
+}
+
+/**
+ * The changes of every range a push names, for the diff reviewer: each read by
+ * `rangeDiffOf` on its share of the limits and set under its own label when
+ * there are several. `unread` counts the ranges git could not read. Undefined
+ * when none could be.
+ */
+async function rangesDiffOf(
+  $: EngineInterface,
+  steps: readonly Inspection[],
+  ctx: CallContext,
+): Promise<{ label: string; diff: string; omitted?: Omitted; unread: number } | undefined> {
+  const gits = steps.filter((step): step is Extract<Inspection, { kind: 'git' }> => step.kind === 'git')
+  const reads: { label: string; diff: string; omitted?: Omitted }[] = []
+  for (const step of gits) {
+    const read = await rangeDiffOf($, step, ctx, gits.length)
+    if (read !== undefined) reads.push(read)
+  }
+  const [only] = reads
+  if (only === undefined) return undefined
+  const omitted = reads.reduce<Omitted | undefined>((sum, read) => addOmitted(sum, read.omitted), undefined)
+  return {
+    label: reads.map(read => read.label).join(', '),
+    diff: reads.length === 1 ? only.diff : reads.map(read => `# ${read.label}\n${read.diff}`).join('\n\n'),
+    ...(omitted !== undefined && { omitted }),
+    unread: gits.length - reads.length,
   }
 }
 
@@ -896,18 +1094,43 @@ async function confirmAllowlist($: EngineInterface, finding: GollumFinding): Pro
 /**
  * Rewrites the project rules file with one confirmed change, read fresh: a
  * broken file is left alone, and a result that doesn't validate isn't written.
+ * A file nobody confirmed is not rewritten either (it was not offered; the
+ * change could not take effect): not one with settings waiting, nor one whose
+ * rules would decide first, nor one that holds settings nobody can confirm.
+ * The person confirmed this one change, and nothing else in the file: only when
+ * the file was trusted before, or was not there, or holds no setting at all, is
+ * its new content recorded as trusted; no other path records trust (DESIGN §16).
  */
 async function writeOverrides($: EngineInterface, root: string, change: (current: string | undefined) => FileEdit): Promise<FileEdit> {
   const path = `${root}/${OVERRIDES_PATH}`
   try {
     const current = (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
+    const before = current === undefined ? undefined : await fileTrustOf($, path, current, loadConfig(current))
+    if (before !== undefined && isHeldBack({ file: before })) return { ok: false, problem: text('trust.writeRefused') }
     const edit = change(current)
-    if (edit.ok) await $.fs.write(path, edit.text)
+    if (edit.ok) {
+      await $.fs.write(path, edit.text)
+      // Only here: a file that was not there, was confirmed, or holds no setting at all (any other was refused above), so the one change the person confirmed is all the new content holds.
+      if (settings.trustProjectRules === 'confirm') await recordTrust($, path, edit.text)
+    }
     return edit
   } catch (error) {
     return { ok: false, problem: error instanceof Error ? error.message : String(error) }
   }
 }
+
+/** Records the content just written as confirmed. A record that cannot be read or saved leaves the file untrusted, and says so. */
+async function recordTrust($: EngineInterface, path: string, written: string): Promise<void> {
+  const stored = await readTrust($)
+  const problem = stored.ok ? await saveTrust($, withTrusted(stored.record, await rulesKeyOf($, path), await hashOf(written))) : stored.problem
+  if (problem !== undefined) $.ui.log(text('notice.trustNotSaved', { problem }))
+}
+
+/** The config of the rules file in `dir`, among the scopes a call touched. */
+const loadedAt = (ctx: CallContext, dir: string): LoadedConfig => ctx.scopes.find(scope => scope.dir === dir)?.loaded ?? ctx.loaded
+
+/** Where the mod may write a rules entry for this call: its `writeDir`, unless that file's settings wait for confirmation (a rule or allowlist entry added there would not take effect). */
+const writableDir = (ctx: CallContext): string | undefined => (ctx.writeDir === undefined || isHeldBack(loadedAt(ctx, ctx.writeDir)) ? undefined : ctx.writeDir)
 
 /**
  * After "allow once" and a call that ran: offers the allow rule for it, showing
@@ -930,7 +1153,7 @@ async function offerRule(
   if (suggested.kind === 'none') return undefined
   const { rule, key } = suggested.suggestion
   if ((await $.session.surfaces()).length === 0) return undefined
-  const question = text('ask.suggestRule', { path: OVERRIDES_PATH, json: ruleJson(rule) })
+  const question = suggestQuestion(suggested.suggestion, OVERRIDES_PATH)
   const answer = await $.ui
     .ask(question, { options: [text('ask.suggestAdd'), text('ask.suggestDecline')], header: text('ask.header') })
     .catch(() => undefined)
@@ -948,15 +1171,16 @@ async function offerRule(
   return rule.id
 }
 
-async function appendAudit($: EngineInterface, record: AuditRecord, root: string): Promise<void> {
+async function appendAudit($: EngineInterface, record: AuditRecord, root: string, patterns: readonly SecretPattern[]): Promise<void> {
   const path = resolve(settings.auditLogPath, root)
   const folder = path.slice(0, path.lastIndexOf('/'))
   if (!gitignoreChecked.has(folder)) {
-    gitignoreChecked.add(folder)
     const ignore = `${folder}/.gitignore`
     if (isInside(path, root) && !(await $.fs.exists(ignore))) await $.fs.write(ignore, AUDIT_GITIGNORE)
+    // Only now: a write that failed above is looked at again with the next line.
+    gitignoreChecked.add(folder)
   }
-  const line = auditLine(record)
+  const line = auditLine(record, patterns)
   const current = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
   const maxBytes = settings.auditMaxKb * 1024
   const older: (string | undefined)[] = []
@@ -972,15 +1196,19 @@ async function appendAudit($: EngineInterface, record: AuditRecord, root: string
 /**
  * Queues one audit line for each of `dirs` (the call's repositories, else the
  * root: DESIGN §14.5). Writes run in order, but nobody waits for them: a
- * failed write is logged and a hanging one holds back only the lines queued
- * after it, never a decision or the call that follows.
+ * failed write is counted, the first of the session is said in the transcript
+ * and in a toast, and a hanging one holds back only the lines queued after it,
+ * never a decision or the call that follows.
  */
-function audit($: EngineInterface, record: AuditRecord, dirs: readonly string[]): void {
+function audit($: EngineInterface, record: AuditRecord, dirs: readonly string[], patterns: readonly SecretPattern[]): void {
   for (const dir of dirs) {
     auditQueue = auditQueue
-      .then(() => appendAudit($, record, dir))
+      .then(() => appendAudit($, record, dir, patterns))
       .catch((error: unknown) => {
-        $.ui.log(text('notice.auditFailed', { problem: error instanceof Error ? error.message : String(error) }), { to: 'debug' })
+        const problem = error instanceof Error ? error.message : String(error)
+        auditFailures++
+        warnOnce($, 'audit-failed', text('notice.auditFailedFirst', { problem }), text('notice.auditFailedShort'))
+        $.ui.log(text('notice.auditFailed', { problem }), { to: 'debug' })
       })
   }
 }
@@ -1178,6 +1406,112 @@ async function councilModel($: EngineInterface, command: Extract<CouncilCommand,
   return { title, lines }
 }
 
+/** A rules file in scope, read now: its content, hash and what in it waits for trust. */
+type RulesRead = { dir: string; key: string; hash: string; loaded: LoadedConfig }
+
+/** At most this many repositories below a multi-repository root are looked at for rules files. */
+const MAX_SCOPE_DIRS = 100
+
+/** The folders whose rules file `/council trust` and `untrust` deal with: the root's, or in a multi-repository root each repository below it. */
+async function rulesDirsInScope($: EngineInterface, ctx: Context): Promise<string[]> {
+  if (!ctx.isMulti) return [ctx.root]
+  const entries = await $.fs.list(ctx.root).catch(() => [])
+  const dirs = entries.filter(entry => entry.kind === 'dir' && !entry.isLink).map(entry => `${ctx.root.replace(/\/$/, '')}/${entry.name}`).slice(0, MAX_SCOPE_DIRS)
+  const found: string[] = []
+  for (const dir of dirs) if ((await $.fs.exists(`${dir}/.git`)) && (await $.fs.exists(`${dir}/${OVERRIDES_PATH}`))) found.push(dir)
+  return found
+}
+
+/** Every valid rules file in scope with settings that wait for trust, read and hashed at this moment. */
+async function readRulesFiles($: EngineInterface, ctx: Context): Promise<RulesRead[]> {
+  const files: RulesRead[] = []
+  for (const dir of await rulesDirsInScope($, ctx)) {
+    const path = `${dir}/${OVERRIDES_PATH}`
+    const fileText = (await $.fs.exists(path)) ? await $.fs.read(path).catch(() => undefined) : undefined
+    if (fileText === undefined) continue
+    const loaded = loadConfig(fileText)
+    if (loaded.needsTrust !== undefined) files.push({ dir, key: await rulesKeyOf($, path), hash: await hashOf(fileText), loaded })
+  }
+  return files
+}
+
+/**
+ * The nonce the trust code is derived from: made on first use from the same source as the reviewers' tags,
+ * twice over (128 bits), kept in the session record and shown nowhere.
+ */
+async function trustNonceOf($: EngineInterface): Promise<string> {
+  const candidate = `${newNonce()}${newNonce()}`
+  await update($, session, value => withTrustNonce(sessionOf(value), candidate))
+  return sessionOf(await read($, session)).trustNonce
+}
+
+/**
+ * `/council trust` lists every setting a file holds back, in full, and the code to type; the listing is noted in
+ * the session. `/council trust <code>` confirms a file only if its content was listed in full in this session,
+ * is as it was then, and the code is the one derived for it (DESIGN §16).
+ */
+async function trustCommand($: EngineInterface, command: Extract<CouncilCommand, { kind: 'trust' }>, mode?: Mode): Promise<Output> {
+  const title = text('cmd.title')
+  const inMode = <T extends (Record<string, unknown> & { then?: never }) | string | number | boolean | null | undefined>(build: () => T): T => (mode === undefined ? build() : withMode(mode, build))
+  if (settings.trustProjectRules === 'always') return inMode(() => ({ title, lines: [text('trust.option')] }))
+  const ctx = await contextOf($)
+  const stored = await readTrust($)
+  const record = stored.ok ? stored.record : []
+  const waiting = (await readRulesFiles($, ctx)).filter(file => !isTrusted(record, file.key, file.hash))
+  const nonce = await trustNonceOf($)
+  const coded: (RulesRead & { code: string })[] = []
+  for (const file of waiting) coded.push({ ...file, code: await codeOf(nonce, file.hash) })
+  const views = coded.flatMap(file => (file.loaded.needsTrust === undefined ? [] : [{ where: file.dir, hash: file.hash, code: file.code, summary: file.loaded.needsTrust.summary, counts: file.loaded.needsTrust.counts }]))
+  const listing = inMode(() => trustListing(views, ctx.patterns))
+  if (command.code === undefined) {
+    // Noted before the listing is shown: a code is only ever typed after it.
+    await update($, session, value => noteListed(sessionOf(value), listing.listed))
+    return listing.output
+  }
+  if (!stored.ok) return inMode(() => ({ title, lines: [text('trust.saveFailed', { problem: stored.problem })] }))
+  const match = matchCode(coded, command.code)
+  if (match.kind === 'none') return inMode(() => ({ title, lines: [text('trust.noMatch', { code: command.code ?? '' })] }))
+  if (match.kind === 'ambiguous') return inMode(() => ({ title, lines: [text('trust.ambiguous', { code: command.code ?? '' })] }))
+  const hash = match.files[0]?.hash ?? ''
+  const blocked = listing.blocked.find(entry => entry.hash === hash)
+  if (blocked !== undefined && !listing.listed.includes(hash)) return inMode(() => ({ title, lines: [text('trust.unconfirmable', { why: blocked.why })] }))
+  if (!listing.listed.includes(hash) || !isListed(sessionOf(await read($, session)), hash)) return inMode(() => ({ title, lines: [text('trust.notListed')] }))
+  const problem = await saveTrust($, match.files.reduce((kept, file) => withTrusted(kept, file.key, file.hash), record))
+  if (problem !== undefined) return inMode(() => ({ title, lines: [text('trust.saveFailed', { problem })] }))
+  // The listing is spent by this confirmation.
+  await update($, session, value => withoutListed(sessionOf(value), [hash]))
+  await reloadContext($)
+  return inMode(() =>
+    trustedOutput(match.files.flatMap(file => (file.loaded.needsTrust === undefined ? [] : [{ where: file.dir, counts: file.loaded.needsTrust.counts }]))),
+  )
+}
+
+/** `/council untrust`: the record of every rules file in scope is removed, and the rules are read again. */
+async function untrustCommand($: EngineInterface, mode?: Mode): Promise<Output> {
+  const title = text('cmd.title')
+  const inMode = (build: () => Output): Output => (mode === undefined ? build() : withMode(mode, build))
+  const ctx = await contextOf($)
+  const stored = await readTrust($)
+  if (!stored.ok) return inMode(() => ({ title, lines: [text('trust.saveFailed', { problem: stored.problem })] }))
+  const keys: string[] = []
+  for (const dir of await rulesDirsInScope($, ctx)) {
+    const path = `${dir}/${OVERRIDES_PATH}`
+    if (await $.fs.exists(path)) keys.push(await rulesKeyOf($, path))
+  }
+  const removed = stored.record.filter(entry => keys.includes(entry.path)).length
+  if (removed > 0) {
+    const problem = await saveTrust($, withoutTrusted(stored.record, keys))
+    if (problem !== undefined) return inMode(() => ({ title, lines: [text('trust.saveFailed', { problem })] }))
+  }
+  // Said again for the same content if it comes back to be untrusted.
+  for (const key of [...warned]) if (key.startsWith('trust:')) warned.delete(key)
+  await reloadContext($)
+  return inMode(() => ({
+    title,
+    lines: [removed > 0 ? text('trust.untrusted', { n: removed }) : text('trust.untrustNone'), ...(settings.trustProjectRules === 'always' ? [text('trust.untrustOption')] : [])],
+  }))
+}
+
 /**
  * The output of one subcommand. The `$` reads come first; the pure builders then
  * run in `mode` when one is given (the copy Claude reads is built in plain). A
@@ -1205,8 +1539,10 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
         gollumEnabled: settings.gollumEnabled,
         galadrielEnabled: settings.galadrielEnabled,
         tokenBudget: settings.tokenBudget,
+        auditFailures,
       }
-      return inMode(() => statusOutput(input))
+      const scoped = await cwdContextOf($)
+      return inMode(() => statusOutput({ ...input, trust: trustLines(scoped.loaded) }))
     }
     case 'bypass':
       await update($, session, value => withBypass(sessionOf(value), command.on))
@@ -1228,7 +1564,7 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
     }
     case 'rules': {
       const ctx = await cwdContextOf($)
-      return inMode(() => rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors, mode !== undefined))
+      return inMode(() => rulesOutput(ctx.loaded.compiled, ctx.loaded.origin, ctx.loaded.errors, trustLines(ctx.loaded), ctx.loaded.broken?.kind === 'partial'))
     }
     case 'test': {
       // Classification only: nothing the command names is run or read. The directories below the root
@@ -1238,7 +1574,7 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
       const call: Call = { tool: 'Bash', input: { command: command.command } }
       const where = { root: root.root, cwd, ...(root.home !== undefined && { home: root.home }) }
       const { classification, ctx } = await classifyIn($, root, call, where)
-      const operation = classification.tier === 'allow' ? undefined : operationOf(call, classification, where)
+      const operation = classification.tier === 'allow' ? undefined : operationOf(call, classification, where, ctx.patterns)
       const state = sessionOf(await read($, session))
       const seated = classification.tier === 'review' ? route(call, classification, enabledMembers()) : undefined
       const reviewer =
@@ -1256,6 +1592,8 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
               seats: councilSeats(call, classification, enabledMembers(), { ranges: settings.galadrielEnabled }),
               choice: modelChoice('council', ctx, state.models),
               checks: settings.gimliEnabled ? checksIn(ctx).map(check => check.command.name) : [],
+              ignoredChecks: settings.gimliEnabled ? ignoredChecksOf(ctx.scopes.map(scope => scope.loaded)) : 0,
+              brokenChecks: settings.gimliEnabled ? brokenChecksOf(ctx.scopes.map(scope => scope.loaded)) : 0,
               isBranchAssumed: big.entry === 'merge-to-protected' && needsCurrentBranch(classification, ctx.loaded.compiled),
             }
       const typed = redact(command.command, ctx.patterns)
@@ -1269,11 +1607,15 @@ async function councilOutput($: EngineInterface, command: Exclude<CouncilCommand
     }
     case 'model':
       return councilModel($, command)
+    case 'trust':
+      return trustCommand($, command, mode)
+    case 'untrust':
+      return untrustCommand($, mode)
     case 'reload': {
       const ctx = await reloadContext($)
       return inMode(() => {
         const lines = [text('cmd.reloaded', { count: ctx.loaded.compiled.rules.length, origin: ctx.loaded.origin })]
-        if (ctx.loaded.errors.length > 0) lines.push(text('cmd.configErrors', { errors: ctx.loaded.errors.join('; ') }))
+        if (ctx.loaded.errors.length > 0) lines.push(errorsLine(ctx.loaded.errors, ctx.loaded.broken?.kind === 'partial'))
         return { title, lines }
       })
     }
@@ -1442,12 +1784,15 @@ export const register: Register = (on, options) => {
     const cwd = await $.session.cwd()
     const realPath = await realPathOf($, call, cwd, sessionCtx)
     // The session root's: operation keys, previews and the Legolas brief's paths keep it, so two repositories' keys never meet.
-    const where = {
+    const placed = {
       root: sessionCtx.root,
       cwd,
       ...(sessionCtx.home !== undefined && { home: sessionCtx.home }),
       ...(realPath !== undefined && { realPath }),
     }
+    // A force push of the current branch is judged by the branch it would overwrite: read first, only for such a call.
+    const currentBranch = await pushBranchOf($, sessionCtx, call, placed)
+    const where = { ...placed, ...(currentBranch !== undefined && { currentBranch }) }
     // C5: classified against every repository the call touches; the strictest decides, and its scope's config is `ctx`'s.
     const { classification, ctx } = await classifyIn($, sessionCtx, call, where)
     const scopeDirs = ctx.scopes.map(scope => scope.dir)
@@ -1457,14 +1802,17 @@ export const register: Register = (on, options) => {
     const writeWhere = { ...where, root: ctx.scopes[0]?.dir ?? ctx.root }
 
     if (classification.tier === 'allow') {
-      // High-confidence secrets refuse an allowed call too (DESIGN §13.2). It has
-      // no operation, so no rounds, no failed attempt and no state write; low
+      // High-confidence secrets refuse an allowed call too (DESIGN §13.2), and so does a text too long to scan in
+      // full (§16 item 16). It has no operation, so no rounds, no failed attempt and no state write; low
       // findings are ignored here, as the mod never asks on an allowed call.
       if (settings.gollumEnabled) {
         const scan = await scanCall(call, ctx.patterns, ctx.allowlist)
         const first = scan.high[0]
-        if (first !== undefined) {
-          const deny = refusalText({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') })
+        if (first !== undefined || scan.partial) {
+          const deny =
+            first !== undefined
+              ? refusalText({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') }, 'plain', ctx.patterns)
+              : refusalText({ who: 'who.gollum', verdict: 'block', reason: text('escalate.secretPartial'), alternative: text('alternative.shorterCall') }, 'plain', ctx.patterns)
           const fingerprint = await fingerprintOf(call.tool, call.input)
           const now = await $.clock.now()
           audit(
@@ -1480,7 +1828,7 @@ export const register: Register = (on, options) => {
               profile: null,
               model: null,
               verdict: 'block',
-              reason: scan.high.map(finding => finding.label).join(', '),
+              reason: first !== undefined ? scan.high.map(finding => finding.label).join(', ') : text('escalate.secretPartial', {}, 'plain'),
               shadow: false,
               bypass: false,
               decision: null,
@@ -1490,6 +1838,7 @@ export const register: Register = (on, options) => {
               ...(e.agentId !== undefined && { agentId: e.agentId }),
             },
             logDirs,
+            ctx.patterns,
           )
           return { deny }
         }
@@ -1512,9 +1861,15 @@ export const register: Register = (on, options) => {
     const epoch = state.promptEpoch
     const thisPrompt = (value: CouncilSession | undefined): boolean => sessionOf(value).promptEpoch === epoch
     const fingerprint = await fingerprintOf(call.tool, call.input)
-    // The verdict cache key: the fingerprint, apart per scope outside the root scope alone (the audit line keeps the plain one).
-    const cacheKey = scopeTag === '' ? fingerprint : await fingerprintOf(call.tool, call.input, scopeTag)
-    const operation = operationOf(call, classification, where)
+    // Where an approval holds: the scope tag and the session's folder, which follows a `cd` between calls (DESIGN §14.5, §16).
+    const placeScope = placeScopeOf(scopeTag, cwd)
+    // The verdict cache key: the fingerprint, apart per scope and per folder (the audit line keeps the plain one).
+    const cacheKey = await fingerprintOf(call.tool, call.input, placeScope)
+    const operation = operationOf(call, classification, where, ctx.patterns)
+    // The branch, the index and the history are not in the key: a call with a git part is never served from the cache, nor cached. Nor is one no reviewer decides (too many parts).
+    // Nor one an unconfirmed ask rule puts to the person after its review: that answer is the person's, call by call.
+    // Nor one that runs a script or a project's runner: the code it runs can change between two calls with the same text.
+    const isCacheable = isCacheableCall(call, classification, operation)
     const decided = classification.decided
     const shadow = isShadow(state, settings.shadowMode)
     // Built on first use: a block, lockout or cached call never shows it, and a write can be megabytes.
@@ -1547,11 +1902,14 @@ export const register: Register = (on, options) => {
     let model: string | null = null
     let tokens = 0
     let verdictText: string | null = null
-    let reasonText: string | null = decided?.reason ?? null
+    // A project rule's reason is the repository's text: in the audit line, as in the refusal, it is cleaned, capped and introduced as such.
+    let reasonText: string | null = decided === undefined ? null : decided.source === 'project' ? projectReasonText(decided.reason, 'plain', ctx.patterns) : decided.reason
     let decision: Decision | null = null
     let isCached = false
     let isShadowed = false
-    let preview: string | undefined
+    let preview: Shown | undefined
+    /** What the preview could not show, said to every reviewer outside the preview. */
+    let previewNotes: readonly string[] = []
     let councilRecord: AuditRecord['council']
     let reviewMs: number | undefined
     let ruleAdded: string | undefined
@@ -1569,6 +1927,8 @@ export const register: Register = (on, options) => {
         opKey: operation.key,
         tier: classification.tier,
         ruleId: decided?.ruleId ?? null,
+        // Rules of an unconfirmed project file that matched but only added: the shipped decision's id stays in `ruleId`.
+        ...(classification.added.length > 0 && { alsoRuleIds: [...new Set(classification.added.map(finding => finding.ruleId))] }),
         member,
         profile,
         model,
@@ -1586,13 +1946,13 @@ export const register: Register = (on, options) => {
         ...(councilRecord !== undefined && { council: councilRecord }),
         ...(e.agentId !== undefined && { agentId: e.agentId }),
       }
-      audit($, record, logDirs)
+      audit($, record, logDirs, ctx.patterns)
       const counts = result.deny !== undefined ? isWipe : isWipeOutcome(outcome, wipePolicy())
       if (counts || outcome === 'ran') {
         await update($, session, value => {
           const current = sessionOf(value)
           if (!thisPrompt(current)) return current // a new prompt already reset the counters
-          return counts ? noteWipe(current, operation) : resetOperation(current, operation.key)
+          return counts ? noteWipe(current, operation) : resetOperation(current, operation)
         })
       }
       // Cosmetic and themed only: a failure here never changes the result.
@@ -1605,8 +1965,8 @@ export const register: Register = (on, options) => {
 
     /** Refuses with the rounds left on the operation; `isWipe` counts it as a failed attempt. */
     const refuse = async (refusal: Refusal, isWipe: boolean): Promise<ToolCallResult> => {
-      const left = roundsLeft(sessionOf(await read($, session)), operation.key)
-      return finish({ deny: refusalText({ ...refusal, roundsLeft: left }) }, isWipe)
+      const left = roundsLeft(sessionOf(await read($, session)), operation)
+      return finish({ deny: refusalText({ ...refusal, roundsLeft: left }, 'plain', ctx.patterns) }, isWipe)
     }
 
     /**
@@ -1622,7 +1982,8 @@ export const register: Register = (on, options) => {
       const result = await proceed()
       if (outcomeOf(result) === 'ran') {
         // Only where one rules file is the call's own (DESIGN §14.5): never a root file that would end the lookup.
-        ruleAdded = ctx.writeDir === undefined ? undefined : await offerRule($, call, classification, writeWhere, ctx, hadSecret, ctx.writeDir).catch(() => undefined)
+        const writeDir = writableDir(ctx)
+        ruleAdded = writeDir === undefined ? undefined : await offerRule($, call, classification, writeWhere, ctx, hadSecret, writeDir).catch(() => undefined)
       }
       return finish(result)
     }
@@ -1635,25 +1996,29 @@ export const register: Register = (on, options) => {
       why: StringKey,
       opinions: readonly MemberOpinion[],
       secrets: readonly GollumFinding[] = [],
+      // The rule the question names when it is not the deciding one: an unconfirmed project rule that asks after the review.
+      asking: Finding | undefined = decided,
     ): Promise<'allowed' | ToolCallResult> => {
       const question = questionText(
         {
           call: shownCall(),
-          ruleReason: decided?.reason ?? '',
+          ruleReason: asking?.reason ?? '',
+          ...(asking?.source === 'project' && { isProjectReason: true }),
           why,
           opinions,
-          ...(preview !== undefined && { preview }),
+          ...(preview !== undefined && { preview: preview.text }),
           ...(secrets.length > 0 && { secrets: secrets.map(finding => ({ label: finding.label, snippet: finding.snippet })) }),
-          canAllowlist: secrets.length === 1 && ctx.writeDir !== undefined,
+          canAllowlist: secrets.length === 1 && writableDir(ctx) !== undefined,
         },
         currentMode(),
+        ctx.patterns,
       )
       // One entry per confirm: the allowlist is offered for a single finding only.
-      const answer = await escalate($, question, secrets.length === 1 && ctx.writeDir !== undefined)
+      const answer = await escalate($, question, secrets.length === 1 && writableDir(ctx) !== undefined)
       if (answer === 'unavailable') {
         decision = answer
         // Chat approval (ROADMAP C4): only where nothing draws, and never for a protected path or a block rule.
-        const callKey = isOfferable(classification) ? await callKeyOf(call, scopeTag) : undefined
+        const callKey = isOfferable(classification) ? await callKeyOf(call, placeScope) : undefined
         if (callKey !== undefined) {
           // Consumed in one write, and used only if that write took it: two identical calls must not both spend one.
           const spent: { use: ChatUse } = { use: undefined }
@@ -1678,7 +2043,7 @@ export const register: Register = (on, options) => {
           callKey === undefined
             ? undefined
             : {
-                code: codeOf(callKey),
+                code: chatCodeOf(callKey),
                 // The deciding scope's config and root, the pair its classification came from.
                 canSession: suggestRule(call, classification, ctx.loaded.compiled, { ...where, root: ctx.gitDir }, { hadSecret, declined: [] }).kind === 'rule',
               }
@@ -1714,7 +2079,7 @@ export const register: Register = (on, options) => {
       if (answer.kind === 'allowlist') {
         const finding = secrets[0]
         // Not offered without a rules file of its own to write to, so an answer without one is not honoured.
-        const writeDir = ctx.writeDir
+        const writeDir = writableDir(ctx)
         if (finding !== undefined && writeDir !== undefined && (await confirmAllowlist($, finding))) {
           const written = await writeOverrides($, writeDir, current => withAllowlistEntry(current, finding.fingerprint))
           if (written.ok) {
@@ -1736,15 +2101,15 @@ export const register: Register = (on, options) => {
         return refuse({ who: 'who.user', verdict: 'keep blocked', reason: text('reason.userKeptBlocked'), alternative: text('alternative.ask') }, true)
       }
       decision = 'instruction'
-      await update($, session, value => resetRounds(sessionOf(value), operation.key))
+      await update($, session, value => resetRounds(sessionOf(value), operation))
       return refuse(
         { who: 'who.user', verdict: 'instruction', reason: text('reason.userKeptBlocked'), alternative: text('alternative.ask'), instruction: answer.text },
         false,
       )
     }
 
-    const askUser = async (why: StringKey, opinions: readonly MemberOpinion[]): Promise<ToolCallResult> => {
-      const answer = await putToUser(why, opinions)
+    const askUser = async (why: StringKey, opinions: readonly MemberOpinion[], asking: Finding | undefined = decided): Promise<ToolCallResult> => {
+      const answer = await putToUser(why, opinions, [], asking)
       return answer === 'allowed' ? allowOnce() : answer
     }
 
@@ -1754,6 +2119,20 @@ export const register: Register = (on, options) => {
       return finish(await proceed())
     }
 
+    /**
+     * A call the shipped rules review that an unconfirmed project `ask` rule also matched (`classification.alsoAsk`): once the review is
+     * done and did not refuse it, the person is asked, with the project's reason as the project's text. The answer is never cached, and
+     * where nobody can be asked it ends refused, as for an approve of a cut command. A person already asked about a secret is not asked again.
+     */
+    let projectAsk: Finding | undefined
+    const askProject = (opinions: readonly MemberOpinion[]): Promise<ToolCallResult> => {
+      if (projectAsk === undefined) return finish({ deny: refusalText({ who: 'who.council', verdict: 'error', reason: text('reason.internal'), alternative: text('alternative.ask') }) })
+      reasonText = projectReasonText(projectAsk.reason, 'plain', ctx.patterns)
+      return askUser('escalate.askProject', opinions, projectAsk)
+    }
+    /** Shadow mode in the review phase: verdicts are only logged, but an ask rule still enforces. */
+    const passShadowed = (): Promise<ToolCallResult> => (projectAsk !== undefined ? askProject([]) : passInShadow())
+
     // 1. Bypass: every gated call passes, logged.
     if (state.bypass) {
       $.ui.log(text('notice.bypass', { tool: call.tool }), { to: 'debug' })
@@ -1762,19 +2141,23 @@ export const register: Register = (on, options) => {
 
     // 4. Block tier.
     if (classification.tier === 'block') {
-      return refuse({ who: 'who.rules', verdict: 'block', reason: decided?.reason ?? '', alternative: text('alternative.narrower') }, true)
+      return refuse(
+        { who: 'who.rules', verdict: 'block', reason: decided?.reason ?? '', ...(decided?.source === 'project' && { isProjectReason: true }), alternative: text('alternative.narrower') },
+        true,
+      )
     }
 
     // 5. Lockout: too many failed attempts on this operation since the user last wrote.
     // Decided on a fresh read: a parallel call's failed attempts may have landed since the first.
-    const lockout = lockoutOf(sessionOf(await read($, session)), operation)
+    const lockState = sessionOf(await read($, session))
+    const lockout = lockoutOf(lockState, operation)
     if (lockout !== undefined) {
       member = null
       verdictText = 'locked out'
       const reason =
         lockout.kind === 'key'
           ? text('reason.lockoutKey', { count: lockout.wipes })
-          : text('reason.lockoutVerb', { count: lockout.wipes, verb: operation.verbKey.replace(/^\w+:/, '') })
+          : text('reason.lockoutVerb', { count: lockout.wipes, verb: (lockedVerbOf(lockState, operation) ?? operation.verbKey).replace(/^\w+:/, '') })
       reasonText = reason
       return refuse({ who: 'who.council', verdict: 'locked out', reason: `${text('refusal.lockout', { count: lockout.wipes })} ${reason}`, alternative: text('alternative.lockout') }, false)
     }
@@ -1790,12 +2173,14 @@ export const register: Register = (on, options) => {
         const first = scan.high[0] as GollumFinding
         return refuse({ who: 'who.gollum', verdict: 'block', reason: text('reason.secretHigh', { label: first.label, snippet: first.snippet }), alternative: text('alternative.removeSecret') }, true)
       }
-      if (scan.low.length > 0) {
+      // A finding that may be a secret, or a text too long to read in full: the person decides, every time. No allow rule is offered for it.
+      if (scan.low.length > 0 || scan.partial) {
         hadSecret = true
         member = 'gollum'
         verdictText = 'ask'
-        reasonText = scan.low.map(finding => finding.label).join(', ')
-        const answer = await putToUser('escalate.secretLow', [], scan.low)
+        const why = scan.low.length === 0 ? 'escalate.secretPartial' : scan.partial ? 'escalate.secretLowPartial' : 'escalate.secretLow'
+        reasonText = scan.low.length === 0 ? text('escalate.secretPartial', {}, 'plain') : scan.low.map(finding => finding.label).join(', ')
+        const answer = await putToUser(why, [], scan.low)
         if (answer !== 'allowed') return answer
         isAllowedByUser = true
         member = routedMember
@@ -1808,8 +2193,11 @@ export const register: Register = (on, options) => {
       return askUser('escalate.askTier', [])
     }
 
-    // Review. An identical call approved this prompt is not reviewed again.
-    if (state.cache.includes(cacheKey)) {
+    projectAsk = classification.tier === 'review' && !isAllowedByUser ? classification.alsoAsk : undefined
+
+    // Review. An identical call approved this prompt, in this folder, is not reviewed again. Read afresh: a call in flight beside this one may have been approved since the snapshot.
+    const cacheState = sessionOf(await read($, session))
+    if (isCacheable && cacheState.cache.includes(cacheKey)) {
       isCached = true
       verdictText = 'approve'
       reasonText = null
@@ -1817,7 +2205,11 @@ export const register: Register = (on, options) => {
     }
 
     // 8. The read-only preview, for the reviewer and the user.
-    if (settings.galadrielEnabled) preview = await previewOf($, planPreview(call, classification, where), ctx)
+    if (settings.galadrielEnabled) {
+      const previewed = await previewOf($, planPreview(call, classification, where), ctx)
+      preview = previewed.shown
+      previewNotes = previewed.notes
+    }
 
     /**
      * A big operation: every enabled member with something to review sits on
@@ -1828,21 +2220,23 @@ export const register: Register = (on, options) => {
       member = 'council'
       profile = null
       const seats = councilSeats(call, classification, enabledMembers(), { ranges: settings.galadrielEnabled })
-      if (seats.length === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', [])
+      if (seats.length === 0) return shadow ? passShadowed() : askUser('escalate.memberOff', [])
       // A fresh read, so reviews running in parallel are counted when this one decides.
-      if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
+      if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passShadowed() : askUser('escalate.budget', [])
       const choice = modelChoice('council', ctx, state.models)
       model = choice.model
       const range = rangeOf(classification)
-      const ruleReasons = [...new Set(classification.findings.map(finding => finding.reason))]
+      const { ruleReasons, projectReasons } = reasonsOf(classification.findings)
       const sittings: Sitting[] = []
       for (const seat of seats) {
         const who = whoOf(seat.member, seat.member === 'aragorn' ? seat.profile : undefined)
         if (seat.member === 'legolas' && seat.range !== undefined) {
           // The part's own folder (after any `cd`): rangeOf names the part, the finding holds where it runs.
           const rangeCwd = range === undefined ? undefined : classification.findings.find(finding => finding.part === range.part)?.cwd
-          const inspection = range === undefined ? undefined : rangeDiffInspection(range.kind, range.part, call, where, rangeCwd)
-          const read = inspection?.kind === 'git' ? await rangeDiffOf($, inspection, ctx) : undefined
+          const planned = range === undefined ? undefined : rangeDiffInspections(range.kind, range.part, call, where, rangeCwd)
+          const read = planned === undefined ? undefined : await rangesDiffOf($, planned.inspections, ctx)
+          // What no diff could be shown for: refspecs left out of the plan, and ranges git could not read.
+          const notes = planned === undefined || read === undefined ? [] : [...planned.notes, ...(read.unread > 0 ? [unseenPushNote(read.unread)] : [])]
           sittings.push(
             read === undefined
               ? { seat, who, skip: text('council.noRange') }
@@ -1851,16 +2245,33 @@ export const register: Register = (on, options) => {
                   who,
                   brief: {
                     member: 'legolas',
-                    context: { tool: call.tool, path: read.label, range: { kind: seat.range, call: callText(call, ctx.patterns) }, diff: { diff: read.diff, isNew: false }, ruleReasons, latestPrompt: state.latestPrompt },
+                    context: {
+                      tool: redact(call.tool, ctx.patterns),
+                      path: redact(read.label, ctx.patterns),
+                      range: { kind: seat.range, call: callText(call, ctx.patterns) },
+                      diff: { diff: read.diff, ...(read.omitted !== undefined && { omitted: read.omitted }), isNew: false },
+                      ruleReasons,
+                      ...(projectReasons.length > 0 && { projectReasons }),
+                      latestPrompt: state.latestPrompt,
+                      ...(notes.length > 0 && { notes }),
+                    },
                   },
                 },
           )
           continue
         }
         const asked: Seat = seat.member === 'aragorn' ? { member: 'aragorn', profile: seat.profile } : { member: seat.member }
-        sittings.push({ seat, who, brief: await briefOf($, asked, call, classification, cwd, realPath, state, preview, ctx) })
+        sittings.push({ seat, who, brief: await briefOf($, asked, call, classification, cwd, realPath, state, preview, previewNotes, ctx) })
       }
       const checks = checksIn(ctx)
+      // Checks the project asked for whose rules file is not trusted, or has errors, are not run: in their place one that could not be started, so the council blocks.
+      const loadedScopes = ctx.scopes.map(scope => scope.loaded)
+      const heldChecks = settings.gimliEnabled ? ignoredChecksOf(loadedScopes) : 0
+      const brokenChecks = settings.gimliEnabled ? brokenChecksOf(loadedScopes) : 0
+      const notRun = [
+        ...(heldChecks > brokenChecks ? [notRunCheck(text('gimli.untrustedName', {}, 'plain'), text('gimli.untrusted', {}, 'plain'))] : []),
+        ...(brokenChecks > 0 ? [notRunCheck(text('gimli.untrustedName', {}, 'plain'), text('gimli.broken', {}, 'plain'))] : []),
+      ]
       const debate = debateOf(
         'council',
         sittings.map(sitting => ({
@@ -1869,7 +2280,7 @@ export const register: Register = (on, options) => {
           status: sitting.brief === undefined ? ('skipped' as const) : ('waiting' as const),
           ...(sitting.brief === undefined && sitting.skip !== undefined && { reason: tidyReason(sitting.skip) }),
         })),
-        checks.map(check => ({ name: check.command.name, status: 'running' as const })),
+        [...checks.map(check => ({ name: check.command.name, status: 'running' as const })), ...notRun.map(run => ({ name: run.name, status: run.status }))],
       )
       await update($, session, value => openDebate(sessionOf(value), debate)).catch(() => undefined)
       await openDebatePane($).catch(() => undefined)
@@ -1894,7 +2305,7 @@ export const register: Register = (on, options) => {
         return finish({ deny: refusalText({ who: 'who.fullCouncil', verdict: 'interrupted', reason: text('reason.aborted'), alternative: '' }) }, false)
       }
       // Redact before capping: a cut could split a secret the patterns would catch whole.
-      const runs = held.runs.map(run => ({
+      const runs = [...held.runs, ...notRun].map(run => ({
         ...run,
         tail: redact(run.tail, ctx.patterns),
         ...(run.problem !== undefined && { problem: problemOf(redact(run.problem, ctx.patterns)) }),
@@ -1906,7 +2317,9 @@ export const register: Register = (on, options) => {
       isShadowed = shadow
       const isVerdict = combined.reviewed > 0 && !combined.isFailureOnly
       verdictText = isVerdict ? combined.verdict : 'failed'
-      isCouncilApproved = isVerdict && combined.verdict === 'approve'
+      // An approve of a call whose command a member saw only in part is no approve (see `isRunCut`): it goes to the person, as no verdict does.
+      const isCommandUnseen = sittings.some(sitting => sitting.brief !== undefined && isRunCut(sitting.brief))
+      isCouncilApproved = isVerdict && combined.verdict === 'approve' && !isCommandUnseen
       const debateVerdict = isVerdict ? combined.verdict : 'failed'
       await update($, session, value => closeDebate(sessionOf(value), debateId, debateVerdict)).catch(() => undefined)
       // The audit keeps no check output: the summary leaves it out.
@@ -1928,28 +2341,34 @@ export const register: Register = (on, options) => {
         }
         if (runs.length > 0) counted = count(counted, 'gimli', runs.some(isGimliBlock) ? 'block' : 'approve')
         counted = count(counted, 'council', isVerdict ? combined.verdict : 'failed')
-        return isVerdict && !shadow && thisPrompt(value) ? noteRound(counted, operation.key, combined.verdict === 'approve') : counted
+        return isVerdict && !shadow && thisPrompt(value) ? noteRound(counted, operation, combined.verdict === 'approve') : counted
       })
 
-      if (combined.reviewed === 0) return shadow ? passInShadow() : askUser('escalate.memberOff', combined.opinions)
-      if (combined.isFailureOnly) return shadow ? passInShadow() : askUser('escalate.councilFailed', combined.opinions)
-      if (combined.verdict === 'approve') {
-        await update($, session, value => {
-          const current = sessionOf(value)
-          if (!thisPrompt(current)) return current // do not cache into a newer prompt
-          return { ...current, cache: cacheApprove(current.cache, cacheKey) }
-        })
-        return finish(await proceed())
+      if (combined.reviewed === 0) return shadow ? passShadowed() : askUser('escalate.memberOff', combined.opinions)
+      if (combined.isFailureOnly) return shadow ? passShadowed() : askUser('escalate.councilFailed', combined.opinions)
+      if (combined.verdict === 'approve' && isCommandUnseen) {
+        reasonText = text('escalate.commandCut', {}, 'plain')
+        return shadow ? passShadowed() : askUser('escalate.commandCut', combined.opinions)
       }
+      // Not cached: a big operation convenes the council, and runs the project's checks, every time.
+      if (combined.verdict === 'approve' && projectAsk !== undefined) return askProject(combined.opinions)
+      if (combined.verdict === 'approve') return finish(await proceed())
       if (shadow) {
         $.ui.log(text('notice.shadowVerdict', { who: text('who.fullCouncil'), verdict: combined.verdict, tool: call.tool }), { to: 'debug' })
-        return passInShadow()
+        return passShadowed()
       }
       return refuse({ who: 'who.fullCouncil', verdict: combined.verdict, reason: combined.reason, alternative: combined.alternative }, true)
     }
 
     // 9. Route: a big operation to the full council; anything else to the rule's member, else the fallback.
-    if (isOutOfRounds(state, operation.key) && !shadow) return askUser('escalate.rounds', [])
+    // The counters are read afresh (a parallel call's rounds may have landed since the snapshot).
+    const roundsState = sessionOf(await read($, session))
+    if (operation.hasTooManyParts && !shadow) {
+      // More gated parts than the keys cover: a locked or spent part could be among the rest, so no model decides it.
+      reasonText = text('escalate.tooManyParts', {}, 'plain')
+      return askUser('escalate.tooManyParts', [])
+    }
+    if (isOutOfRounds(roundsState, operation) && !shadow) return askUser('escalate.rounds', [])
     if (settings.councilEnabled) {
       const compiled = ctx.loaded.compiled
       // A merge that would run elsewhere (-C, GIT_DIR, a folder outside the root) has an unknown branch, which counts as protected.
@@ -1959,11 +2378,11 @@ export const register: Register = (on, options) => {
       const big = bigOperationOf(classification, compiled, branch !== undefined ? { currentBranch: branch } : {})
       if (big !== undefined) return holdCouncil(big)
     }
-    if (seated === undefined || seated.kind === 'none') return shadow ? passInShadow() : askUser('escalate.memberOff', [])
-    if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passInShadow() : askUser('escalate.budget', [])
+    if (seated === undefined || seated.kind === 'none') return shadow ? passShadowed() : askUser('escalate.memberOff', [])
+    if (sessionOf(await read($, session)).tokensSpent >= settings.tokenBudget) return shadow ? passShadowed() : askUser('escalate.budget', [])
 
     // 10. Review, and act on the verdict.
-    const brief = await briefOf($, seated, call, classification, cwd, realPath, state, preview, ctx)
+    const brief = await briefOf($, seated, call, classification, cwd, realPath, state, preview, previewNotes, ctx)
     const who = whoOf(brief.member, brief.profile)
     member = brief.member
     profile = brief.profile ?? null
@@ -1993,28 +2412,36 @@ export const register: Register = (on, options) => {
       const spent = addReviewTime(addTokens(sessionOf(value), verdict.tokens), memberMs)
       const counted = count(spent, brief.member, verdict.ok ? verdict.verdict.verdict : 'failed')
       // A round is a verdict that enforces: in shadow, verdicts only log.
-      return verdict.ok && !shadow && thisPrompt(value) ? noteRound(counted, operation.key, verdict.verdict.verdict === 'approve') : counted
+      return verdict.ok && !shadow && thisPrompt(value) ? noteRound(counted, operation, verdict.verdict.verdict === 'approve') : counted
     })
 
     if (!verdict.ok) {
       verdictText = 'failed'
       reasonText = verdict.problem
-      return shadow ? passInShadow() : askUser('escalate.failed', [{ who, problem: verdict.problem }])
+      return shadow ? passShadowed() : askUser('escalate.failed', [{ who, problem: verdict.problem }])
     }
 
     verdictText = verdict.verdict.verdict
     reasonText = verdict.verdict.reason
+    if (verdict.verdict.verdict === 'approve' && isRunCut(brief)) {
+      // The reviewer saw only the ends of the command: its approve does not stand, and is not cached.
+      reasonText = text('escalate.commandCut', {}, 'plain')
+      return shadow ? passShadowed() : askUser('escalate.commandCut', [{ who, verdict: 'approve', reason: verdict.verdict.reason }])
+    }
+    if (verdict.verdict.verdict === 'approve' && projectAsk !== undefined) return askProject([{ who, verdict: 'approve', reason: verdict.verdict.reason }])
     if (verdict.verdict.verdict === 'approve') {
-      await update($, session, value => {
-        const current = sessionOf(value)
-        if (!thisPrompt(current)) return current // do not cache into a newer prompt
-        return { ...current, cache: cacheApprove(current.cache, cacheKey) }
-      })
+      if (isCacheable) {
+        await update($, session, value => {
+          const current = sessionOf(value)
+          if (!thisPrompt(current)) return current // do not cache into a newer prompt
+          return { ...current, cache: cacheApprove(current.cache, cacheKey) }
+        })
+      }
       return finish(await proceed())
     }
     if (shadow) {
       $.ui.log(text('notice.shadowVerdict', { who: text(who), verdict: verdict.verdict.verdict, tool: call.tool }), { to: 'debug' })
-      return passInShadow()
+      return passShadowed()
     }
     return refuse({ who, verdict: verdict.verdict.verdict, reason: verdict.verdict.reason, alternative: verdict.verdict.safer_alternative }, true)
   }).catch(($, e, next) =>

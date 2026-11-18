@@ -8,7 +8,7 @@ rest.
 
 | Path | Does |
 | :- | :- |
-| `.github/workflows/ci.yml` | On every push to `main` and every pull request: the three gates (`claude plugin test`, `tsc -p mods`, `claude plugin validate --strict`), the marketplace manifest, the "no `tool.check` hook" assertion, and the hygiene script. Needs no secrets: the tests stub everything. |
+| `.github/workflows/ci.yml` | On every push to `main` and every pull request. Job `hygiene`: the hygiene script, the guidance checker (`scripts/check-guidance.mjs`) and the script tests (`node --test scripts/tests/`). Job `checks`: the three gates (`claude plugin test`, `tsc -p mods`, `claude plugin validate --strict`), the marketplace manifest and the "no `tool.check` hook" assertion. Needs no secrets: the tests stub everything. |
 | `.github/workflows/release.yml` | On a tag `council-of-elrond--vX.Y.Z` (what `claude plugin tag` creates): checks the tag against `plugin.json` and `CHANGELOG.md`, re-runs the gates, publishes a GitHub release with that version's changelog section as the body. |
 | `.github/PULL_REQUEST_TEMPLATE.md` | The checklist every pull request carries: gates, tests, docs, decisions, strings, `$` only in register.ts, the safety statement and what was verified live. |
 | `.github/ISSUE_TEMPLATE/` | Bug report, rule gap or false positive, feature request, and a config that routes bypasses to private reporting and Claude Code problems upstream. |
@@ -16,12 +16,19 @@ rest.
 | `.github/release.yml` | Categories for GitHub's generated release notes, by label. |
 | `.github/labels.yml` | The labels the templates and release notes use. Created once with the commands below. |
 | `.github/dependabot.yml` | Monthly updates for the actions the workflows use. There are no package dependencies. |
-| `.githooks/pre-commit` | Runs the hygiene script on every commit, and the three gates when anything under `hooks/`, `tests/`, `types/` or the manifest is staged. |
+| `.githooks/pre-commit` | Runs `node scripts/verify.mjs --staged`: the hygiene script and the guidance checker on every commit, and the three gates on the pinned build when the mod changed. Falls back to hygiene and the gates alone where `node` is missing. |
 | `.githooks/commit-msg` | Summary under 72 characters, imperative, no trailing full stop, blank line after it. |
-| `scripts/setup.sh` | One-time contributor setup: tool check, `git config core.hooksPath .githooks`, the gates once. |
+| `scripts/setup.sh` | One-time contributor setup: tool check, `git config core.hooksPath .githooks`, the gates once, on the pinned build. |
+| `scripts/pinned-claude.sh` | Sourced by `setup.sh` and the pre-commit hook: reads the Claude Code build CI pins from `.github/workflows/ci.yml` and checks the binary the gates would run on. |
+| `scripts/verify.mjs` | The one verify command: picks the checks a change needs, prints one table and a summary line, exits non-zero on a failure. Used by the pre-commit hook and in sessions. |
+| `scripts/check-guidance.mjs` | The guidance checker: `CLAUDE.md`, `.claude/` and the pointers to them stay in step with each other and the repository. Runs in verify and in CI. |
+| `scripts/hooks/` | The session hooks wired in `.claude/settings.json`: a post-edit lint and a cloud-session setup. |
+| `scripts/tests/` | The tests of the scripts above (`node --test scripts/tests/`); run in CI's `hygiene` job. |
 | `scripts/check-hygiene.sh` | Shared by the hook and CI: no generated files committed, no plugin-root `CLAUDE.md`, no session links or attribution trailers in files, no local paths or real emails, a warning on any well-formed fake token (the test fixtures build theirs from two halves, so there is none), and every relative markdown link resolves. |
 | `.claude-plugin/marketplace.json` | Makes the repository a plugin marketplace, so `claude plugin marketplace add Deluha/council-of-elrond` works. Validated in CI. |
 | `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md` | Shown by GitHub in the repository's community profile and when someone opens an issue or pull request. |
+
+What verify selects, the pinned build, the hooks and the guidance checker's checks: [qa-ci.md](../.claude/skills/council-of-elrond-development/references/qa-ci.md).
 
 ## Settings checklist (owner)
 
@@ -35,7 +42,7 @@ Repository → Settings. None of this can be committed as a file.
 
 **Branches → Rulesets** (or classic branch protection) for `main`:
 - Require a pull request before merging; one approval; dismiss stale approvals on new commits; require review from code owners.
-- Require status checks to pass: `Test, typecheck, validate` and `Hygiene` (the job names in `ci.yml`); require branches to be up to date.
+- Require status checks to pass: `Test, typecheck, validate` and `Hygiene` (the job names in `ci.yml`); require branches to be up to date. The roadmap makes the jobs required when the workflows are split by concern (ROADMAP, Later, L4); until then check them by eye before merging.
 - Require linear history. Block force pushes. Restrict deletions.
 - Optionally require signed commits.
 

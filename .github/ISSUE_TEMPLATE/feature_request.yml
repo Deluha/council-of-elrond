@@ -5,8 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please check `mods/council-of-elrond/ROADMAP.md` first: Stage 6 (theme and UI) and the
-        "Known follow-ups" list may already cover it. Some limits are deliberate (SPEC §23:
+        Please check `mods/council-of-elrond/ROADMAP.md` first: its milestones and its "Later"
+        list may already cover it. Some limits are deliberate (SPEC §23:
         no debate between members, no automatic fixing of calls, three model members at most).
   - type: textarea
     id: problem

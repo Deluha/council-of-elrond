@@ -3,8 +3,8 @@
  * in one place, reset by `resetForPrompt` (hooks/state.ts) on a new prompt.
  */
 export type CouncilSession = {
-  /** Shape version; a value of another version reads as a fresh session (a valid v4 is migrated). */
-  v: 5
+  /** Shape version; a value of another version reads as a fresh session (a valid v4 or v5 is migrated). */
+  v: 6
   /** The user's latest prompt, redacted and cut, for reviewer context. */
   latestPrompt: string
   /** Bumped on every prompt the user sends. */
@@ -43,6 +43,14 @@ export type CouncilSession = {
   chatAllowances: readonly CouncilChatAllowance[]
   /** Calls a person refused in chat: cleared by the person's next prompt. */
   chatDenials: readonly CouncilChatDenial[]
+  /**
+   * A random 128-bit value (32 hex characters), made on first use and never shown, written to a file or logged: the
+   * code `/council trust` shows is derived from it, so no one who can read a rules file can work the code out.
+   * Empty until then.
+   */
+  trustNonce: string
+  /** Content hashes `/council trust` has listed in full this session (newest last, capped at 20): only these can be confirmed by code. */
+  trustListed: readonly string[]
 }
 
 /** A refusal that carried a code. `callKey` is the full 16-hex key; `code` is its first six characters. */

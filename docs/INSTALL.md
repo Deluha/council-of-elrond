@@ -6,8 +6,8 @@ options) is in the [user manual](../mods/council-of-elrond/README.md).
 
 ## Requirements
 
-- Claude Code **2.1.287 or later**. The mod was built on 2.1.289 and checked on 2.1.294; see the
-  top of [DESIGN.md](../mods/council-of-elrond/DESIGN.md) for the version it currently targets.
+- Claude Code **2.1.287 or later**. See the top of [DESIGN.md](../mods/council-of-elrond/DESIGN.md)
+  for the version it was built and checked on.
   Mods ("function hooks") are on by default; nothing has to be enabled.
 - `git` on the PATH, for the read-only previews. Without it, previews are left out and nothing
   else changes.
@@ -15,6 +15,29 @@ options) is in the [user manual](../mods/council-of-elrond/README.md).
   separate key.
 - **A POSIX system** (Linux, macOS, WSL). Windows is unsupported: the shell parser reads POSIX
   shells only, paths are resolved against `HOME`, and PowerShell is not parsed.
+
+## Upgrading from a build before the trust rule
+
+A project's rules file used to apply in full. Now its allow rules, disabled rules,
+models, patterns, allowlist and project checks wait until a person confirms the file; its block,
+ask and review rules apply at once and only add to what the shipped rules decide. After
+upgrading, run `/council trust` once per repository that has a rules file (it shows what would be
+switched on, with a code; type `/council trust <code>`), or set `trustProjectRules` to `always` on a
+host whose owner controls which repositories it opens. Until then a big operation whose project
+checks are held back is blocked.
+
+Three more things change for an existing setup:
+
+- **Names and sizes in a rules file are limited.** A rule id, a check name and a pattern id are at
+  most 64 characters of `[A-Za-z0-9._-]`, and a regular expression at most 1,000 characters. A file
+  that breaks a limit is partly applied: its entries that can only tighten still hold, the rest is
+  ignored, and `/council rules` says so.
+- **A script that starts Claude Code asks.** A command that starts a nested session (`claude -p`
+  and the like), or installs, removes or reconfigures a plugin or an MCP server, is put to you.
+- **A repeated push or migration convenes the council each time,** and runs the project's checks
+  again: an approve of a big operation is never reused.
+
+See [Trusting a project's rules file](../mods/council-of-elrond/README.md#trusting-a-projects-rules-file).
 
 ## Try it for one session
 
@@ -74,10 +97,10 @@ A repository's `.claude/settings.json` does not load plugins in a cloud session.
 
   ```sh
   claude plugin marketplace add 'Deluha/council-of-elrond#main'
-  claude plugin install council-of-elrond@council-of-elrond --config shadowMode=true
+  claude plugin install council-of-elrond@council-of-elrond --config shadowMode=true --config trustProjectRules=always
   ```
 
-  The part after `#` is a branch or a tag, not a commit. `#main` follows every merge; once releases are tagged, pin one (`#council-of-elrond--v0.6.0`) so the gate does not change under you. Both commands write to the user settings (`~/.claude/settings.json`): the marketplace with its ref, the plugin enabled, and each `--config` option under `pluginConfigs`. Add one `--config KEY=VALUE` per option; the keys are the ones under [Options](../mods/council-of-elrond/README.md#options-config), for example `gandalfModel=opus`, `councilModel=sonnet` or `tokenBudget=500000`. Shadow mode suits a team's first days, as on a local install. The clone needs network access to github.com; don't attach this repository to the session (see "Several repositories" below).
+  The part after `#` is a branch or a tag, not a commit. `#main` follows every merge; once releases are tagged, pin one so the gate does not change under you. The `#council-of-elrond--v0.6.0` pin is available once 0.6.0 is tagged; no version has been tagged yet. Both commands write to the user settings (`~/.claude/settings.json`): the marketplace with its ref, the plugin enabled, and each `--config` option under `pluginConfigs`. Add one `--config KEY=VALUE` per option; the keys are the ones under [Options](../mods/council-of-elrond/README.md#options-config), for example `gandalfModel=opus`, `councilModel=sonnet` or `tokenBudget=500000`. Shadow mode suits a team's first days, as on a local install. `trustProjectRules=always` makes the council honour every repository's `rules.json` in full, which is what a cloud environment needs because nobody there can type `/council trust`; use it only where the environment's owner decides which repositories it opens. Without it (the default is `confirm`), a rules file's allow rules, disabled rules, models, secret patterns, allowlist and project checks are ignored until a person confirms that exact file (its block, ask and review rules apply at once and only add to the shipped decision), and a big operation with project checks is refused with "not run: the rules file is not trusted". See [Trusting a project's rules file](../mods/council-of-elrond/README.md#trusting-a-projects-rules-file). The clone needs network access to github.com; don't attach this repository to the session (see "Several repositories" below).
 
 - **Organization server-managed settings** (Owner role: Organization settings, Claude Code, Managed settings). Put the same entries there; they apply to every user in the organization. This route has not been tried.
 
@@ -95,7 +118,7 @@ A repository's `.claude/settings.json` does not load plugins in a cloud session.
 What a cloud session does differently (recorded in [DESIGN.md §14](../mods/council-of-elrond/DESIGN.md#14-cloud-sessions)):
 
 - **Nothing the mod draws reaches you.** The web client is not a surface the mod draws on: no pane, no label, no toast, and the transcript lines `/council` prints are not shown. The audit log is still written. What reaches you instead goes through Claude: the session opens with a notice that the council is active, and when you type `/council` status, report, rules or test, Claude is given the output and asked to repeat it in its next reply (see [Where nothing draws](../mods/council-of-elrond/README.md#where-nothing-draws)). Every other subcommand shows nothing.
-- **Nobody can be asked.** Every call that would come to you is refused as "nobody can be asked", and each refusal counts as a failed attempt toward the lockout. The refusal tells Claude to tell you which operation was refused, which rule and which reviewers were behind it, and how you can let it run: add an allow rule for it to `.claude/council-of-elrond/rules.json` yourself, or continue the session in a terminal where the council can ask you. In shadow mode the reviewers never refuse, but the ask-tier rules, protected paths and the secrets scan still do.
+- **Nobody can be asked.** Every call that would come to you is refused as "nobody can be asked", and each refusal counts as a failed attempt toward the lockout. The refusal tells Claude to tell you which operation was refused, which rule and which reviewers were behind it, and how you can let it run. The first way is the chat approval route: you type `council allow <code>` (the code is in the refusal) as a line of your own in the chat, and the council lets that call run once; see [Approving in chat](../mods/council-of-elrond/README.md#approving-in-chat). The others: add an allow rule for it to `.claude/council-of-elrond/rules.json` yourself, or continue the session in a terminal where the council can ask you. In shadow mode the reviewers never refuse, but the ask-tier rules, protected paths and the secrets scan still do.
 - **Several repositories.** With two or more repositories attached, the session's root is their parent. If that folder has no `rules.json` and no `.git` of its own, the mod finds each repository's `.claude/council-of-elrond/rules.json` (at the top of a repository directly below the root, no other depth) and decides each call by the repositories it touches: the strictest wins, protected paths and the project checks resolve against their repository, and the audit log is written inside the repository that was touched. The log is lost when the container is reclaimed, so copy out what you need; a repository with no rules file gets the shipped defaults. A repository cloned after the session started is seen after `/council reload`. Allow rules and secrets-allowlist entries are offered only for a call in one repository, and written to its file; for any other call add them to the file by hand. How it decides: [the README](../mods/council-of-elrond/README.md#several-repositories-under-one-root). Never use an environment that holds this repository's own checkout: a session developing the mod must not be gated by it.
 
 If you see something else, report it in an issue.
@@ -121,15 +144,23 @@ Everything has a shipped default. The two places to change things:
    operations, the project checks (`gimli.commands`), secrets patterns and the allowlist, and
    per-reviewer models by full ID. Examples in the manual under
    [Editing rules](../mods/council-of-elrond/README.md#editing-rules). Reload with
-   `/council reload` after editing by hand.
+   `/council reload` after editing by hand. A file you edited by hand must then be confirmed
+   with `/council trust` (typed by a person: it shows what would be switched on, with a code, and
+   you type `/council trust <code>`). Until then its allow rules, disabled rules, models,
+   patterns, allowlist and project checks do not take effect (its block, ask and review rules do, and
+   only add to the shipped decision), and a big operation whose project
+   checks are held back is blocked. See [Trusting a project's rules file](../mods/council-of-elrond/README.md#trusting-a-projects-rules-file).
 
 Recommended first week:
 
 - Turn **shadow mode** on (in `/config`, or `/council shadow on` per session).
-- Add your **project checks** (`gimli.commands`) so a push or migration runs your tests.
+- Add your **project checks** (`gimli.commands`) so a push or migration runs your tests. Then run
+  `/council trust` and confirm the file: the checks do not run, and a big operation is blocked,
+  until you do.
 - After a few days read **`/council report`**: the "stopped, then allowed by you" list is your
   false-positive candidates; add allow rules for them (or accept the offer the mod makes after an
-  "allow once").
+  "allow once"; the mod's own write is recorded as confirmed). Allow rules you write into the file
+  by hand take effect only after `/council trust`.
 - Turn shadow mode off.
 
 ## What it writes, and where
@@ -139,6 +170,7 @@ Recommended first week:
 | `.claude/council-of-elrond/rules.json` | Your project overrides. Written by the mod only when you confirm an allow rule or an allowlist entry. | Commit it: it is the team's policy. The allowlist holds fingerprints, never secrets. |
 | `.claude/council-of-elrond/audit/audit.jsonl` (`.1`, `.2`) | One line per gated call: hashes, tiers, verdicts, tokens, timings. No file contents, diffs or secrets. 1 MiB each by default, three kept. | The mod writes a `.gitignore` beside it. |
 | `~/.claude/settings.json` | Your `/config` choices, under the plugin's keys. | Personal. |
+| The plugin's own store (under your Claude Code configuration folder) | The trust record: for each rules file you confirmed with `/council trust`, its real path and the SHA-256 of its content, at most 200 entries. Never in the repository. | Not in the repository. |
 
 Delete the audit folder whenever you like; the mod recreates it. A `.gitignore` in the folder
 keeps it out of your repository.
@@ -160,7 +192,7 @@ to you instead when spent. Details in the manual under
 
 Read [CHANGELOG.md](../CHANGELOG.md) before updating across a minor version: before 1.0.0 a minor
 bump may change shipped rules or defaults. Your `rules.json` carries a `schemaVersion`; a version
-the mod doesn't know is treated as a broken file (ignored whole, shipped rules enforce, errors
+the mod doesn't know is treated as an unreadable file (ignored whole, shipped rules enforce, errors
 listed in the transcript), never as a reason to drop the gate.
 
 ## Removing it
@@ -171,7 +203,9 @@ listed in the transcript), never as a reason to drop the gate.
 - Local checkout: remove the path from `CLAUDE_CODE_PLUGIN_DIRS`.
 
 Then, if you want a clean project: delete `.claude/council-of-elrond/` (overrides and the audit
-log) and the plugin's keys from `~/.claude/settings.json`. Nothing else is written.
+log) and the plugin's keys from `~/.claude/settings.json`. The trust record sits in the plugin's own
+store: `/council untrust` removes the entries for the files in scope, and uninstalling the plugin's
+data removes the rest. Nothing else is written.
 
 ## Troubleshooting
 
@@ -188,8 +222,15 @@ shows which.
 out. That is the fail-closed path working. Raise "Review deadline" in `/config`, or pick a faster
 model with `/council model <member> sonnet`.
 
-**The rules file is ignored.** The transcript lists the errors by field; `/council rules` shows what
-is in force. Fix the file and `/council reload`. Common causes: a missing `schemaVersion: 1`, a rule
+**The rules file is ignored, or only partly applied.** The transcript lists the errors by field;
+`/council status` and `/council rules` say "ignored: not readable" (not JSON, not an object, or
+another `schemaVersion`: the shipped rules stand) or "partly applied: N error(s)" (a file of this
+version with errors: its block, ask and review rules, protected paths and the like still apply and
+only add to the shipped rules, and everything else in it, its project checks included, is ignored
+until it is fixed; a big operation then blocks, "not run: the project rules file has errors"). Fix
+the file and `/council reload` (typed by you: it is refused from a plugin or the SDK). Common causes: the file is not confirmed, or was
+edited since it was confirmed (`/council rules` and `/council` say "not trusted" and how many settings
+are ignored; run `/council trust` and type the code); a missing `schemaVersion: 1`, a rule
 without an `id`, a regex with the `g` or `y` flag.
 
 **`/council` prints nothing in `claude -p`.** There is no pane in headless mode, and the transcript

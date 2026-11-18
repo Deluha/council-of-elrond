@@ -26,10 +26,10 @@ describe('parsing', () => {
 })
 
 describe('which subcommands need a person', () => {
-  test('only the ones that loosen the gate: bypass on, shadow on, a model switch or clearing it', () => {
-    const needing = ['off', 'shadow on', 'model gandalf opus', 'model gandalf default', 'model aragorn claude-opus-5-5 --save']
+  test('only the ones that loosen the gate: bypass on, shadow on, a model switch or clearing it, and reload (it reads the rules file again)', () => {
+    const needing = ['off', 'shadow on', 'model gandalf opus', 'model gandalf default', 'model aragorn claude-opus-5-5 --save', 'reload']
     for (const args of needing) expect(needsPerson(parseCouncil(args)), args).toBe(true)
-    const open = ['', 'status', 'on', 'shadow off', 'shadow', 'model', 'models', 'log 5', 'rules', 'test "ls"', 'reload', 'report', 'debate', 'frobnicate']
+    const open = ['', 'status', 'on', 'shadow off', 'shadow', 'model', 'models', 'log 5', 'rules', 'test "ls"', 'report', 'debate', 'frobnicate']
     for (const args of open) expect(needsPerson(parseCouncil(args)), args).toBe(false)
   })
 })
@@ -125,6 +125,12 @@ describe('/council', () => {
     expect(shown).toMatch(/\[legolas\]: off, model sonnet/)
     expect(shown).toMatch(/\[aragorn\]: on, model opus \(built-in\); approved 0, revised 0, blocked 1/)
     expect(shown).not.toContain('later version')
+  })
+
+  test('rules lists the paths protected against writes, apart from the protected paths', async ($, on) => {
+    const w = world(on, { surfaces: [] })
+    await council($, 'rules')
+    expect(w.logs.join('\n')).toContain('Protected against writes: **/.claude/plugins/**')
   })
 
   test('rules shows each rule with its source', async ($, on) => {
@@ -344,6 +350,24 @@ describe('who may run what', () => {
     expect(w.logs.join('\n')).toContain('gandalf: sonnet (built-in)')
   })
 
+  test('reload from them changes nothing and says so; from a person at the composer it reads the rules again', async ($, on) => {
+    const w = world(on, { surfaces: [] })
+    const rules = `${ROOT}/.claude/council-of-elrond/rules.json`
+    expect(await $.tool.call({ tool: 'Bash', command: 'make deploy' })).toEqual({ result: 'ran' })
+    w.files.set(rules, JSON.stringify({ schemaVersion: 1, rules: [{ id: 'deploy', tier: 'ask', tools: ['Bash'], command: '^make deploy', reason: 'Deploys.' }] }))
+    for (const origin of NOT_A_PERSON) {
+      await council($, 'reload', origin)
+      expect(w.logs.join('\n'), origin.kind).toContain(REFUSED)
+      expect(w.logs.join('\n'), origin.kind).not.toContain('Rules reloaded')
+      w.logs.length = 0
+    }
+    // Still the rules the session began with: the file is not read again.
+    expect(await $.tool.call({ tool: 'Bash', command: 'make deploy' })).toEqual({ result: 'ran' })
+    await council($, 'reload', { kind: 'composer' })
+    expect(w.logs.join('\n')).toContain('Rules reloaded')
+    expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'make deploy' }))).toContain('(not allowed)')
+  })
+
   test('the refusal is one line through the same path as any output: the pane where one draws, else the transcript', async ($, on) => {
     const quiet = world(on, { surfaces: [] })
     await council($, 'off', { kind: 'plugin', name: 'x' })
@@ -385,10 +409,10 @@ describe('who may run what', () => {
     await council($, 'shadow off', plugin)
     expect(denyOf(await $.tool.call({ tool: 'Bash', command: 'rm -rf build' }))).toContain('(block)')
     w.logs.length = 0
-    for (const args of ['', 'status', 'models', 'rules', 'log', 'reload', 'report', 'test "ls"', 'debate']) await council($, args, plugin)
+    for (const args of ['', 'status', 'models', 'rules', 'log', 'report', 'test "ls"', 'debate']) await council($, args, plugin)
     const shown = w.logs.join('\n')
     expect(shown).toContain('Mode: enforcing')
-    expect(shown).toContain('Rules reloaded')
+    expect(shown).toContain('Effective rules')
     expect(shown).not.toContain(REFUSED)
   })
 

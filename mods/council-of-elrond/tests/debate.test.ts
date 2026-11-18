@@ -107,7 +107,7 @@ describe('the debate pane', () => {
     expect(after('Bash: rm -rf dist')).not.toContain('Gandalf: ✓ approve')
   })
 
-  test('a full council: every member and check, then the combined verdict', async ($, on) => {
+  test('a full council: every member and check, then the combined verdict', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true, answer: KEEP_BLOCKED })
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
     w.spawnReply = () => ({ code: 1, output: 'FAIL\n' })
@@ -212,7 +212,7 @@ describe('the council check band', () => {
     }
   })
 
-  test('during a full council: a row per member and per check on terminal and desktop, a survey wins, and it passes again after', async ($, on) => {
+  test('during a full council: a row per member and per check on terminal and desktop, a survey wins, and it passes again after', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true, isBandDrawn: true, answer: KEEP_BLOCKED })
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
     w.spawnReply = () => ({ hang: true })
@@ -319,14 +319,16 @@ describe('the epic drop', () => {
     expect(w.toasts).not.toContain('Legendary commit acquired')
   })
 
-  test('a push that errors gets none; a cached approve gets none', async ($, on) => {
+  test('a push that errors gets none; the identical push is not served from the cache, so its council approve gets one', async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     w.toolResult = { result: 'remote rejected', isError: true, text: 'remote rejected' }
     await $.tool.call(PUSH)
     expect(w.toasts).not.toContain('Legendary commit acquired')
     w.toolResult = { result: 'ran' }
     await $.tool.call(PUSH)
-    expect(w.toasts.filter(toast => toast === 'Legendary commit acquired')).toHaveLength(0)
+    // A council approve is never cached (DESIGN §16), so the repeat sat again and the drop is its own.
+    expect(w.modelRequests).toHaveLength(6)
+    expect(w.toasts.filter(toast => toast === 'Legendary commit acquired')).toHaveLength(1)
   })
 
   test('in the plain mode there is no epic drop: no toast, no row, no state write', { options: { plainMode: true } }, async ($, on) => {
@@ -377,7 +379,7 @@ describe('a debate that cannot be written', () => {
     expect(await paneLines($, 'terminal')).toContain('No reviews yet in this view.')
   })
 
-  test('nor does it for a full council: the checks and the members go on, and the push runs', async ($, on) => {
+  test('nor does it for a full council: the checks and the members go on, and the push runs', { options: { trustProjectRules: 'always' } }, async ($, on) => {
     const w = world(on, { replies: [APPROVE], isClockMocked: true })
     withChecks(w, [{ name: 'tests', argv: ['npm', 'test'] }])
     on('state.set', ($$, e, next) => (JSON.stringify(e.value ?? '').includes('"debates":[{') ? { deny: 'disk full' } : next(e)))

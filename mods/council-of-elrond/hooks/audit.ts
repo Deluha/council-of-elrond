@@ -1,4 +1,5 @@
-import { redact } from './redact.js'
+import { redact, SECRET_PATTERNS } from './redact.js'
+import type { SecretPattern } from './redact.js'
 
 /**
  * The audit log: one JSONL line per gated call. It holds no file contents,
@@ -28,6 +29,11 @@ export type AuditRecord = {
   opKey: string | null
   tier: string
   ruleId: string | null
+  /**
+   * The ids of rules from a project rules file nobody had confirmed that also
+   * matched: they only added to the shipped decision, whose id `ruleId` keeps.
+   */
+  alsoRuleIds?: readonly string[]
   member: string | null
   profile: string | null
   model: string | null
@@ -67,33 +73,36 @@ export type AuditRecord = {
 
 const MAX_REASON_CHARS = 300
 
-/** The one line written for a record, newline included. */
-export function auditLine(record: AuditRecord): string {
+/**
+ * The one line written for a record, newline included. The operation key and the reason are redacted with the call's
+ * patterns (the shipped ones and a confirmed project file's), so a secret a key names verbatim never reaches the log.
+ */
+export function auditLine(record: AuditRecord, patterns: readonly SecretPattern[] = SECRET_PATTERNS): string {
   const reason =
     record.reason === null
       ? null
       : (() => {
-          const clean = redact(record.reason).replace(/\s+/g, ' ').trim()
+          const clean = redact(record.reason, patterns).replace(/\s+/g, ' ').trim()
           return clean.length > MAX_REASON_CHARS ? `${clean.slice(0, MAX_REASON_CHARS - 1)}…` : clean
         })()
-  return `${JSON.stringify({ ...record, reason })}\n`
+  const opKey = record.opKey === null ? null : redact(record.opKey, patterns)
+  return `${JSON.stringify({ ...record, opKey, reason })}\n`
 }
 
-// Fields whose whitespace carries no meaning, so a reformatted value is the
-// same call. A shell command is one; a file's content is NOT (indentation is
-// significant in YAML, Python, Makefiles), so it is hashed exactly, or a
-// re-indented write would reuse an earlier approve without review.
-const INSIGNIFICANT_WHITESPACE = new Set(['command'])
+// No field's whitespace is collapsed: every string is hashed exactly. In a
+// shell command a newline separates commands and whitespace inside quotes is
+// data, so a reformatted command can be a different call; in a file's content
+// indentation is significant too (YAML, Python, Makefiles). A reformatted call
+// is reviewed again rather than reusing an earlier approve.
 
-/** Sorts keys; collapses whitespace only in fields where it has no meaning. */
-function canonical(value: unknown, collapseWhitespace = false): unknown {
-  if (typeof value === 'string') return collapseWhitespace ? value.replace(/\s+/g, ' ').trim() : value
-  if (Array.isArray(value)) return value.map(item => canonical(item, collapseWhitespace))
+/** Sorts keys; every value is kept exactly as given. */
+export function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical)
   if (typeof value === 'object' && value !== null) {
     return Object.fromEntries(
       Object.keys(value)
         .sort()
-        .map(key => [key, canonical((value as Record<string, unknown>)[key], INSIGNIFICANT_WHITESPACE.has(key))]),
+        .map(key => [key, canonical((value as Record<string, unknown>)[key])]),
     )
   }
   return value
@@ -112,6 +121,13 @@ export async function fingerprintOf(tool: string, input: unknown, scope = ''): P
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
   return Array.from(digest.slice(0, 8), byte => byte.toString(16).padStart(2, '0')).join('')
 }
+
+/**
+ * The scope a call's approval is bound to: the repositories it touches (C5; empty
+ * for the root scope alone) and the folder the session is in. The folder follows a
+ * `cd` between calls, so the same words run elsewhere are another call.
+ */
+export const placeScopeOf = (scopeTag: string, cwd: string): string => (scopeTag === '' ? cwd : `${scopeTag}\u0000${cwd}`)
 
 export const ROTATED_FILES = 3
 

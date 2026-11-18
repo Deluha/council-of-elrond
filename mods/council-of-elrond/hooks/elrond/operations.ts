@@ -1,9 +1,11 @@
 import { CLIENT_OPTIONS } from '../members/aragorn.js'
-import { redact } from '../redact.js'
-import { PUSH_OPTIONS_WITH_ARG } from '../rules/checks.js'
+import { redact, SECRET_PATTERNS } from '../redact.js'
+import type { SecretPattern } from '../redact.js'
 import { FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
 import type { Call, Classification } from '../rules/classify.js'
 import { relativeTo, resolve } from '../rules/paths.js'
+import { isCurrentBranchRef, parsePush } from '../rules/push.js'
+import { splitShell } from '../rules/shell.js'
 import type { ShellPart } from '../rules/shell.js'
 
 /**
@@ -20,7 +22,27 @@ export type OperationContext = {
   realPath?: string
 }
 
-export type Operation = { key: string; verbKey: string }
+/**
+ * What a call attempts. `key` and `verbKey` name the whole call (as they always
+ * did); `partKeys` and `partVerbKeys` name each gated part of a shell call on
+ * its own, as a call made of that part alone would be named, so a part cannot
+ * be retried under a new key by appending another command to it. For a call of
+ * one part, a file tool or another tool they hold just `key` and `verbKey`.
+ */
+export type Operation = {
+  key: string
+  verbKey: string
+  /** Each gated part's own key, distinct, for at most the first MAX_PART_KEYS parts. */
+  partKeys: readonly string[]
+  /** Each gated part's own verb key, distinct, for at most the first MAX_PART_KEYS parts. */
+  partVerbKeys: readonly string[]
+  /**
+   * A shell call with more gated parts than MAX_PART_KEYS: the keys cover only the
+   * first ones, so a locked or out-of-rounds part could sit past them. No model
+   * reviews it; it goes to the person (present only when true).
+   */
+  hasTooManyParts?: boolean
+}
 
 /** Programs whose first word after the name is a subcommand that names the verb. */
 const SUBCOMMAND_PROGRAMS: ReadonlySet<string> = new Set([
@@ -47,6 +69,8 @@ const SQL_TARGET_OPTIONS: ReadonlySet<string> = new Set(['-d', '--dbname', '-h',
 
 const MAX_TARGETS = 8
 const MAX_KEY_CHARS = 300
+/** Gated parts of one call that get a key of their own: a compound command cannot grow the session state past this. */
+export const MAX_PART_KEYS = 8
 
 const programOf = (part: ShellPart): string => {
   const first = part.coreWords[0] ?? ''
@@ -65,19 +89,9 @@ const positionals = (words: readonly string[]): string[] => words.filter(word =>
 
 /** `git push [options] [remote] [refspec...]`: remote plus destination branches. */
 function pushTargets(args: readonly string[]): string[] {
-  const words: string[] = []
-  for (let i = 0; i < args.length; i++) {
-    const word = args[i] ?? ''
-    if (PUSH_OPTIONS_WITH_ARG.has(word)) i++ // `-o ci.skip`: the value is not the remote
-    else if (!word.startsWith('-') && word !== '') words.push(word)
-  }
-  const remote = words[0] ?? '(default remote)'
-  const branches = words.slice(1).map(refspec => {
-    const destination = refspec.includes(':') ? refspec.slice(refspec.indexOf(':') + 1) : refspec
-    const branch = destination.replace(/^\+/, '').replace(/^refs\/heads\//, '')
-    return branch === 'HEAD' || branch === '@' ? '(current branch)' : branch
-  })
-  return [remote, ...(branches.length > 0 ? branches : ['(current branch)'])]
+  const { remote, refspecs } = parsePush(args)
+  const branches = refspecs.map(spec => (isCurrentBranchRef(spec.destination) ? '(current branch)' : spec.destination))
+  return [remote ?? '(default remote)', ...(branches.length > 0 ? branches : ['(current branch)'])]
 }
 
 /**
@@ -85,7 +99,7 @@ function pushTargets(args: readonly string[]): string[] {
  * positional. The value of an inline-SQL option (`-c "..."`) is skipped, so a
  * rephrased statement is the same operation.
  */
-function sqlTargets(program: string, args: readonly string[]): string[] {
+function sqlTargets(program: string, args: readonly string[], patterns: readonly SecretPattern[]): string[] {
   const inline = CLIENT_OPTIONS[program]?.inline ?? []
   const rest: string[] = []
   for (let i = 0; i < args.length; i++) {
@@ -106,7 +120,7 @@ function sqlTargets(program: string, args: readonly string[]): string[] {
     const first = positionals(rest)[0]
     if (first !== undefined) out.push(first)
   }
-  return out.map(target => redact(target))
+  return out.map(target => redact(target, patterns))
 }
 
 /** Files a part's redirects write to (not `2>&1`, not /dev/null). */
@@ -115,20 +129,36 @@ const writtenFiles = (part: ShellPart, cwd: string, context: OperationContext): 
     .filter(redirect => redirect.op.includes('>') && !redirect.target.startsWith('&') && redirect.target !== '/dev/null')
     .map(redirect => normalPath(redirect.target, cwd, context))
 
+/** `git [global options] SUB rest`: the subcommand and what follows it, skipping the global options. */
+function gitCommand(args: readonly string[]): { sub: string; rest: readonly string[] } {
+  // `git -C dir push`: skip global options to find the subcommand.
+  let index = 0
+  while (index < args.length && (args[index] ?? '').startsWith('-')) index += ['-C', '-c'].includes(args[index] ?? '') ? 2 : 1
+  return { sub: args[index] ?? '', rest: args.slice(index + 1) }
+}
+
+/** What marks a force or delete push's own retry count: the part key plus this. */
+export const FORCE_SUFFIX = ' !force'
+
+/** Whether a shell part is a `git push` that forces or deletes (the shared push parser's reading, as the force-push check has it). */
+export function isForcePush(part: ShellPart): boolean {
+  if (programOf(part) !== 'git') return false
+  const { sub, rest } = gitCommand(part.coreWords.slice(1))
+  if (sub !== 'push') return false
+  const push = parsePush(rest)
+  return push.isForce || push.isDelete || push.refspecs.some(spec => spec.isPlus || spec.source === '')
+}
+
 /** One shell part's verb and targets. */
-export function partOperation(part: ShellPart, cwd: string, context: OperationContext): { verb: string; targets: string[] } {
+export function partOperation(part: ShellPart, cwd: string, context: OperationContext, patterns: readonly SecretPattern[] = SECRET_PATTERNS): { verb: string; targets: string[] } {
   const program = programOf(part)
   const args = part.coreWords.slice(1)
   if (program === 'git') {
-    // `git -C dir push`: skip global options to find the subcommand.
-    let index = 0
-    while (index < args.length && (args[index] ?? '').startsWith('-')) index += ['-C', '-c'].includes(args[index] ?? '') ? 2 : 1
-    const sub = args[index] ?? ''
-    const rest = args.slice(index + 1)
+    const { sub, rest } = gitCommand(args)
     if (sub === 'push') return { verb: 'git push', targets: pushTargets(rest) }
     return { verb: `git ${sub}`.trim(), targets: positionals(rest) }
   }
-  if (SQL_CLIENTS.has(program)) return { verb: program, targets: sqlTargets(program, args) }
+  if (SQL_CLIENTS.has(program)) return { verb: program, targets: sqlTargets(program, args, patterns) }
   if (SUBCOMMAND_PROGRAMS.has(program)) {
     const sub = positionals(args)[0]
     const rest = sub === undefined ? [] : args.slice(args.indexOf(sub) + 1)
@@ -151,27 +181,41 @@ const sortedUnique = (items: readonly string[]): string[] => [...new Set(items)]
  * targets (flags dropped, paths resolved, targets sorted); file tools share
  * the `file` family keyed on the real path; anything else is its tool.
  */
-export function operationOf(call: Call, classification: Classification, context: OperationContext): Operation {
+export function operationOf(call: Call, classification: Classification, context: OperationContext, patterns: readonly SecretPattern[] = SECRET_PATTERNS): Operation {
   if (SHELL_TOOLS.has(call.tool)) {
     const parts = classification.findings.filter(finding => finding.part !== undefined)
     if (parts.length === 0) {
       const text = typeof call.input.command === 'string' ? call.input.command.replace(/\s+/g, ' ').trim() : ''
-      return { key: cap(`shell:${redact(text)}`), verbKey: 'shell:(unparsed)' }
+      const key = cap(`shell:${redact(text, patterns)}`)
+      return { key, verbKey: 'shell:(unparsed)', partKeys: [key], partVerbKeys: ['shell:(unparsed)'] }
     }
-    const ops = parts.map(finding => partOperation(finding.part as ShellPart, finding.cwd ?? context.cwd, context))
+    const ops = parts.map(finding => partOperation(finding.part as ShellPart, finding.cwd ?? context.cwd, context, patterns))
     const verbs = sortedUnique(ops.map(op => op.verb))
-    const key = sortedUnique(ops.map(op => `${op.verb} ${sortedUnique(op.targets).slice(0, MAX_TARGETS).join(' ')}`.trim()))
+    const lines = ops.map(op => `${op.verb} ${sortedUnique(op.targets).slice(0, MAX_TARGETS).join(' ')}`.trim())
+    const key = sortedUnique(lines)
     // The key can hold a target a command named verbatim (a push URL with a
     // token, a connection string); it is written to the audit log, so redact.
-    return { key: cap(redact(`shell:${key.join(' ; ')}`)), verbKey: cap(`shell:${verbs.join(' ; ')}`) }
+    // A part's own key is the key of a call made of that part alone.
+    const partKeys = lines.slice(0, MAX_PART_KEYS).map(line => cap(redact(`shell:${line}`, patterns)))
+    // A force or delete push also keeps a count of its own, which a plain push of the same target never clears.
+    const variants = parts.slice(0, MAX_PART_KEYS).flatMap((finding, index) => (isForcePush(finding.part as ShellPart) ? [`${partKeys[index] as string}${FORCE_SUFFIX}`] : []))
+    return {
+      key: cap(redact(`shell:${key.join(' ; ')}`, patterns)),
+      verbKey: cap(`shell:${verbs.join(' ; ')}`),
+      partKeys: sortedUnique([...partKeys, ...variants]),
+      partVerbKeys: sortedUnique(ops.slice(0, MAX_PART_KEYS).map(op => cap(`shell:${op.verb}`))),
+      ...(parts.length > MAX_PART_KEYS && { hasTooManyParts: true }),
+    }
   }
   const field = FILE_PATH_FIELDS[call.tool]
   const given = field === undefined ? undefined : call.input[field]
   if (typeof given === 'string') {
     const path = context.realPath !== undefined ? normalPath(context.realPath, '/', context) : normalPath(given, context.cwd, context)
-    return { key: cap(`file:${path}`), verbKey: `file:${call.tool}` }
+    const key = cap(`file:${path}`)
+    return { key, verbKey: `file:${call.tool}`, partKeys: [key], partVerbKeys: [`file:${call.tool}`] }
   }
-  return { key: cap(`tool:${call.tool}`), verbKey: cap(`tool:${call.tool}`) }
+  const key = cap(`tool:${call.tool}`)
+  return { key, verbKey: key, partKeys: [key], partVerbKeys: [key] }
 }
 
 // ── Rounds, failed attempts, lockout ────────────────────────────────────────
@@ -188,6 +232,10 @@ export type OpsState = {
 }
 
 const MAX_OPS = 200
+/** Distinct verb keys the counters hold; a new verb past this counts on `OTHER_VERBS_KEY`. Nothing stored is evicted. */
+export const MAX_VERB_KEYS = 200
+/** The one shared key the verbs past MAX_VERB_KEYS count on. */
+export const OTHER_VERBS_KEY = 'shell:(other verbs)'
 
 const ZERO: OpState = { rounds: 0, wipes: 0 }
 
@@ -202,58 +250,115 @@ function withOp<T extends OpsState>(state: T, key: string, op: OpState): T {
 
 export type Lockout = { kind: 'key' | 'verb'; wipes: number } | undefined
 
-/** Whether the operation is locked out: 3 failed attempts on its key, or 5 on its verb. */
+/** The keys an operation's rounds and failed attempts are counted on: each part's own, then the whole call's. */
+const keysOf = (operation: Operation): string[] => [...new Set([...operation.partKeys, operation.key])]
+
+/**
+ * The verb keys a call is checked against: each part's own, and the joined
+ * verb key, which a version of the counters that counted it may have stored.
+ */
+const verbKeysChecked = (operation: Operation): string[] => [...new Set([...operation.partVerbKeys, operation.verbKey])]
+
+/** The most failed attempts on any verb of the call, and the verb key that holds them. */
+function worstVerb(state: OpsState, operation: Operation): { verbKey: string; wipes: number } | undefined {
+  let worst: { verbKey: string; wipes: number } | undefined
+  const consider = (verbKey: string, wipes: number): void => {
+    if (wipes >= VERB_WIPE_CAP && (worst === undefined || wipes > worst.wipes)) worst = { verbKey, wipes }
+  }
+  for (const verbKey of verbKeysChecked(operation)) consider(verbKey, state.verbWipes[verbKey] ?? 0)
+  // A part's verb with no entry of its own may have been counted on the shared key (the counters were full then).
+  const other = state.verbWipes[OTHER_VERBS_KEY] ?? 0
+  if (operation.partVerbKeys.some(verbKey => state.verbWipes[verbKey] === undefined)) consider(OTHER_VERBS_KEY, other)
+  return worst
+}
+
+/**
+ * Whether the operation is locked out: 3 failed attempts on its whole key or on
+ * any part's own key, or 5 on the verb of any part (or on its stored joined verb key).
+ */
 export function lockoutOf(state: OpsState, operation: Operation): Lockout {
-  const key = opOf(state, operation.key).wipes
+  const key = Math.max(...keysOf(operation).map(known => opOf(state, known).wipes))
   if (key >= KEY_WIPE_CAP) return { kind: 'key', wipes: key }
-  const verb = state.verbWipes[operation.verbKey] ?? 0
-  if (verb >= VERB_WIPE_CAP) return { kind: 'verb', wipes: verb }
-  return undefined
+  const verb = worstVerb(state, operation)
+  return verb === undefined ? undefined : { kind: 'verb', wipes: verb.wipes }
 }
 
-/** One review verdict on the operation: a non-approve verdict uses a round. */
-export function noteRound<T extends OpsState>(state: T, key: string, isApprove: boolean): T {
+/** The verb key that locks the operation out (for saying which kind is locked), when a verb does and no key does. */
+export const lockedVerbOf = (state: OpsState, operation: Operation): string | undefined => worstVerb(state, operation)?.verbKey
+
+/** One review verdict on the operation: a non-approve verdict uses a round, on its whole key and each part's own. */
+export function noteRound<T extends OpsState>(state: T, operation: Operation, isApprove: boolean): T {
   if (isApprove) return state
-  const op = opOf(state, key)
-  return withOp(state, key, { ...op, rounds: op.rounds + 1 })
+  return keysOf(operation).reduce((current, key) => {
+    const op = opOf(current, key)
+    return withOp(current, key, { ...op, rounds: op.rounds + 1 })
+  }, state)
 }
 
-export const roundsLeft = (state: OpsState, key: string): number => Math.max(0, ROUND_CAP - opOf(state, key).rounds)
+/** The rounds left on the operation: the fewest of its whole key and its parts' own. */
+export const roundsLeft = (state: OpsState, operation: Operation): number =>
+  Math.max(0, ROUND_CAP - Math.max(...keysOf(operation).map(key => opOf(state, key).rounds)))
 
 /**
  * Failed attempts since the user last wrote, for the status and the debate
- * pane: how many (the per-verb counter, which only a new prompt clears), over
- * how many operations, and how many of those are locked out.
+ * pane: how many (the per-verb counters, which only a new prompt clears; a call
+ * of several verbs counts once on each), over how many tracked keys, and how
+ * many of those are locked out: keys at their cap, and verbs at theirs.
  */
 export function attemptsOf(state: OpsState): { count: number; ops: number; locked: number } {
   const ops = Object.values(state.ops)
+  const verbs = Object.values(state.verbWipes)
   return {
-    count: Object.values(state.verbWipes).reduce((sum, n) => sum + n, 0),
+    count: verbs.reduce((sum, n) => sum + n, 0),
     ops: ops.length,
-    locked: ops.filter(op => op.wipes >= KEY_WIPE_CAP).length,
+    locked: ops.filter(op => op.wipes >= KEY_WIPE_CAP).length + verbs.filter(wipes => wipes >= VERB_WIPE_CAP).length,
   }
 }
 
-/** Out of rounds: the next attempt goes to the user, with no model call. */
-export const isOutOfRounds = (state: OpsState, key: string): boolean => opOf(state, key).rounds >= ROUND_CAP
+/** Out of rounds: the next attempt goes to the user, with no model call. Its whole key, or any part's own, is. */
+export const isOutOfRounds = (state: OpsState, operation: Operation): boolean => keysOf(operation).some(key => opOf(state, key).rounds >= ROUND_CAP)
 
-/** A failed attempt, counted on the key and on its verb. */
+/**
+ * A failed attempt, counted on the whole key, on each part's own key, and on
+ * each distinct part verb. The joined verb key is not counted: the per-verb
+ * counters replace it (a stored one is still read, by `lockoutOf`).
+ */
 export function noteWipe<T extends OpsState>(state: T, operation: Operation): T {
+  const counted = keysOf(operation).reduce((current, key) => {
+    const op = opOf(current, key)
+    return withOp(current, key, { ...op, wipes: op.wipes + 1 })
+  }, state)
+  const verbWipes = { ...counted.verbWipes }
+  let known = Object.keys(verbWipes).filter(verbKey => verbKey !== OTHER_VERBS_KEY).length
+  for (const verbKey of new Set(operation.partVerbKeys)) {
+    // A verb already counted keeps its entry; a new one past the bound shares one, each verb once.
+    const isNew = verbWipes[verbKey] === undefined
+    const target = isNew && known >= MAX_VERB_KEYS ? OTHER_VERBS_KEY : verbKey
+    if (isNew && target === verbKey) known++
+    verbWipes[target] = (verbWipes[target] ?? 0) + 1
+  }
+  return { ...counted, verbWipes }
+}
+
+/**
+ * The user typed an instruction: the call's own rounds start over, on its whole
+ * key only. A part's rounds stay: giving them back would lower a count a call of
+ * that part alone has used (DESIGN §15 item 20). For a call of one part, a file
+ * tool or another tool the whole key is the only key.
+ */
+export function resetRounds<T extends OpsState>(state: T, operation: Operation): T {
   const op = opOf(state, operation.key)
-  const counted = withOp(state, operation.key, { ...op, wipes: op.wipes + 1 })
-  return { ...counted, verbWipes: { ...counted.verbWipes, [operation.verbKey]: (counted.verbWipes[operation.verbKey] ?? 0) + 1 } }
+  return op.rounds === 0 ? state : withOp(state, operation.key, { ...op, rounds: 0 })
 }
 
-/** The user typed an instruction: the operation's rounds start over. */
-export function resetRounds<T extends OpsState>(state: T, key: string): T {
-  const op = opOf(state, key)
-  return op.rounds === 0 ? state : withOp(state, key, { ...op, rounds: 0 })
-}
-
-/** The call ran and succeeded: its own operation starts over (the verb counter stays). */
-export function resetOperation<T extends OpsState>(state: T, key: string): T {
-  if (state.ops[key] === undefined) return state
-  const { [key]: _done, ...rest } = state.ops
+/**
+ * The call ran and succeeded: its own whole key starts over. Part keys and the
+ * verb counters stay, so a success never lowers what a call of one part alone
+ * has counted (DESIGN §15 item 20).
+ */
+export function resetOperation<T extends OpsState>(state: T, operation: Operation): T {
+  if (state.ops[operation.key] === undefined) return state
+  const { [operation.key]: _done, ...rest } = state.ops
   return { ...state, ops: rest }
 }
 
@@ -273,6 +378,18 @@ const USER_REFUSAL: readonly RegExp[] = [
 /**
  * Claude Code's words when its permission check stops a call with nobody
  * asked: no one to ask (`-p`), or a deny rule. The first is verified live.
+ *
+ * A denial is the engine's whole message, so its words are the start of the
+ * text; a command that ran and failed has its own output after an exit-code
+ * line or its earlier output, and may print the same words (DESIGN §16). The
+ * wordings recorded as opening the text are anchored there. The others are
+ * recorded with something before the phrase (a subject: "rm in '<path>' needs
+ * approval", "Bash needs approval (...)", "The <name> connector requires
+ * approval", a first sentence: "Permission for this tool use was denied. It
+ * requires approval ...", "<who> requested permissions to ... but you haven't
+ * granted it yet"), so no start can be named for them; they are kept as they
+ * are, anywhere in the text, until the maintainer decides how much may come
+ * first.
  */
 const AUTOMATIC_DENIAL: readonly RegExp[] = [
   /needs? approval/i,
@@ -280,7 +397,8 @@ const AUTOMATIC_DENIAL: readonly RegExp[] = [
   /\brequires? approval\b/i,
   /requested permissions? to (use|write|edit|read|run)/i,
   /haven'?t granted it yet/i,
-  /permission to (use|edit|read) .+ has been denied/i,
+  // A deny rule on a tool, a file or a command: the sentence opens the text.
+  /^\s*permission to (use|edit|read) .+ has been denied/i,
 ]
 
 export const isUserRefusal = (text: string): boolean => USER_REFUSAL.some(re => re.test(text))
@@ -311,6 +429,49 @@ export const isWipeOutcome = (outcome: Outcome, policy: WipePolicy): boolean =>
 // ── Cache ───────────────────────────────────────────────────────────────────
 
 const MAX_CACHE = 100
+
+/**
+ * Whether a call has a `git` part, gated or not: the branch, the index and the
+ * history are not in a call's key, so the same words can mean another thing
+ * the next time. A command too long or too complex to split is read as text.
+ */
+export function hasGitPart(call: Call): boolean {
+  if (!SHELL_TOOLS.has(call.tool) || typeof call.input.command !== 'string') return false
+  const split = splitShell(call.input.command)
+  if (split.isTooLong || split.isCut) return /\bgit\b/.test(call.input.command)
+  return split.parts.some(part => programOf(part) === 'git')
+}
+
+/**
+ * Programs that run a recipe, a script or a task of the project (a Makefile, a package script, a build file),
+ * written in files the call text does not hold: the same call can run other code after an edit.
+ */
+const PROJECT_RUNNERS: ReadonlySet<string> = new Set([
+  'make', 'gmake', 'just', 'task', 'rake', 'ninja', 'npm', 'pnpm', 'yarn', 'bun', 'npx', 'pnpx', 'bunx', 'cargo', 'go',
+  'gradle', 'gradlew', 'mvn', 'mvnw', 'ant', 'tox', 'nox', 'poetry', 'pipenv', 'pdm', 'hatch', 'rye', 'uv', 'uvx', 'mise',
+  'bundle', 'composer', 'deno',
+])
+
+/** Whether a shell call has a part that is a script runner or `make`-style program, gated or not; one too long or too complex to split is read as one (the careful side). */
+function hasRunnerPart(call: Call): boolean {
+  if (!SHELL_TOOLS.has(call.tool) || typeof call.input.command !== 'string') return false
+  const split = splitShell(call.input.command)
+  if (split.isTooLong || split.isCut) return true
+  return split.parts.some(part => PROJECT_RUNNERS.has(part.coreWords[0] ?? '') || part.wrappers.some(wrapper => PROJECT_RUNNERS.has(wrapper.split(' ')[0] ?? '')))
+}
+
+/**
+ * Whether a call may be served from the approve cache, and its approve stored there (DESIGN §16). The key is the
+ * call's text and folder, so it must say what runs: not a call with a git part (the branch, the index and the
+ * history are not in it), none that runs a script file or code a `script-*` rule saw (the script can be edited
+ * between the two calls), none that runs a project's runner or `make` (its recipes and tasks can), and none that
+ * more than eight gated parts or an unconfirmed ask rule sends to the person.
+ */
+export function isCacheable(call: Call, classification: Classification, operation: Operation): boolean {
+  if (hasGitPart(call) || operation.hasTooManyParts === true || classification.alsoAsk !== undefined) return false
+  if (classification.isScript || classification.findings.some(finding => /^script-/.test(finding.ruleId))) return false
+  return !hasRunnerPart(call)
+}
 
 /** Notes an approved fingerprint; the cache lives until the next prompt. */
 export const cacheApprove = (cache: readonly string[], fingerprint: string): string[] =>

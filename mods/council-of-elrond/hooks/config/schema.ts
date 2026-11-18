@@ -1,6 +1,8 @@
 import { globToRegExp, protectedMatcher, slashRegex, toolMatcher } from '../rules/globs.js'
 import type { ProtectedMatcher } from '../rules/globs.js'
-import { SHIPPED } from './defaults.js'
+import { SHIPPED, WRITE_PROTECTED_PATHS } from './defaults.js'
+import { hasSettings, isConfirmable, splitByTrust } from './trust.js'
+import type { RulesFile, TrustCounts, TrustSummary } from './trust.js'
 import {
   BIG_CHECKS,
   CHECKS,
@@ -30,6 +32,12 @@ export const SCHEMA_VERSION = 1
 
 export type CompiledRule = Rule & {
   source: RuleSource
+  /**
+   * The rule is from a project rules file nobody has confirmed (or one with
+   * nothing to confirm): it can only add to what the shipped rules decide
+   * (`classify`), never replace it.
+   */
+  isUnconfirmed?: boolean
   matchesTool: (tool: string) => boolean
   commandRe?: RegExp
   pathRe?: RegExp
@@ -47,20 +55,43 @@ export type CompiledConfig = {
   /** Project rules first, in file order, then the enabled shipped rules. */
   rules: readonly CompiledRule[]
   protectedPaths: readonly ProtectedMatcher[]
+  /** Shipped and internal: a write asks, a plain read or a run does not (see `WRITE_PROTECTED_PATHS`). */
+  writeProtectedPaths: readonly ProtectedMatcher[]
   protectedBranches: readonly RegExp[]
   production: readonly RegExp[]
   bigOperations: readonly BigOperation[]
 }
 
+/** What the origin reads for a file with errors whose tightening entries still apply (DESIGN §16). */
+export const PARTLY_APPLIED = 'shipped+project (partly applied)'
+
+/**
+ * A rules file with problems: `partial`, it parsed as an object of this schema version and what can only
+ * tighten still applies; `ignored`, it could not be read at all and the shipped defaults stand. `checks`:
+ * how many project checks the file names, held back either way (they run outside the permission prompts).
+ */
+export type BrokenFile = { kind: 'partial' | 'ignored'; checks: number }
+
 export type LoadedConfig = {
   compiled: CompiledConfig
   /** Where the effective config came from. */
-  origin: 'shipped' | 'shipped+project'
-  /** Problems with the overrides file, by field; non-empty means it was ignored. */
+  origin: 'shipped' | 'shipped+project' | typeof PARTLY_APPLIED
+  /** Problems with the overrides file, by field; non-empty means it is broken (`broken` says how far it applies). */
   errors: readonly string[]
+  /** Set exactly when `errors` is not empty. A broken file is never confirmed and has nothing to confirm. */
+  broken?: BrokenFile
+  /**
+   * What confirming the file would change: the settings that take effect only once its content is trusted, and the rules of the file
+   * that would then decide before the shipped ones. Absent when confirming changes nothing (no rules, nothing that waits).
+   */
+  needsTrust?: { summary: TrustSummary; counts: TrustCounts; isIgnored: boolean }
+  /** The file holds at least one setting (a rule, a list, a model, ...): set only for a file that parsed with no errors. */
+  hasSettings?: boolean
+  /** How the file stands with trust, set by the caller that reads the trust record (register.ts). */
+  file?: RulesFile
 }
 
-const TOP_KEYS = [
+export const TOP_KEYS = [
   'schemaVersion',
   'rules',
   'disableRules',
@@ -73,8 +104,18 @@ const TOP_KEYS = [
   'gimli',
 ] as const
 
-const GIMLI_KEYS = ['commands'] as const
-const GIMLI_COMMAND_KEYS = ['name', 'argv', 'timeoutMs'] as const
+export const GIMLI_KEYS = ['commands'] as const
+export const GIMLI_COMMAND_KEYS = ['name', 'argv', 'timeoutMs'] as const
+
+/**
+ * What a rule id, a check name and a secret pattern's id may be: they are shown to the person and to
+ * Claude, so they are short and plain (DESIGN §16).
+ */
+export const MAX_NAME_CHARS = 64
+export const NAME_CHARS = /^[A-Za-z0-9._-]+$/
+
+const nameProblem = (value: string): string | undefined =>
+  value.length > MAX_NAME_CHARS || !NAME_CHARS.test(value) ? `at most ${MAX_NAME_CHARS} characters, each a letter, a digit, '.', '_' or '-'` : undefined
 
 /** A check command's timeout: 120 s unless set, between 1 s and 10 minutes (the most a process may run). */
 export const GIMLI_TIMEOUT = { default: 120_000, min: 1_000, max: 600_000 } as const
@@ -82,15 +123,15 @@ export const GIMLI_TIMEOUT = { default: 120_000, min: 1_000, max: 600_000 } as c
 /** At most this many project checks, in one rules file or across the repositories a call touches. */
 export const MAX_GIMLI_COMMANDS = 8
 
-const GOLLUM_KEYS = ['patterns', 'allowlist'] as const
-const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label', 'kind'] as const
+export const GOLLUM_KEYS = ['patterns', 'allowlist'] as const
+export const GOLLUM_PATTERN_KEYS = ['id', 'level', 'regex', 'label', 'kind'] as const
 
 /** A fingerprint as the dialog shows it; anything else in the allowlist is an exact string. */
 export const SECRET_FINGERPRINT = /^sha256:[0-9a-f]{16}$/
 
 const MAX_ALLOWLIST_ENTRY = 500
 
-const RULE_KEYS = [
+export const RULE_KEYS = [
   'id',
   'tier',
   'tools',
@@ -105,6 +146,17 @@ const RULE_KEYS = [
 
 export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._\-[\]@:/]{0,99}$/
 
+/**
+ * Limits on what a rules file may ask the mod to compile and run on every call (denial of service only; the
+ * file comes with a cloned repository). Over one is a validation error like any other.
+ */
+export const MAX_REGEX_CHARS = 1000
+export const MAX_RULES = 200
+export const MAX_PATTERNS = 200
+
+/** The source of a `/source/flags` pattern, as `slashRegex` reads it; undefined for anything else. */
+const slashSource = (pattern: string): string | undefined => /^\/(.+)\/([a-z]*)$/.exec(pattern)?.[1]
+
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
@@ -113,6 +165,7 @@ const includes = <T extends string>(list: readonly T[], value: unknown): value i
 
 function regexError(source: unknown, flags = ''): string | undefined {
   if (typeof source !== 'string' || source === '') return 'must be a non-empty regex string'
+  if (source.length > MAX_REGEX_CHARS) return `a regex of at most ${MAX_REGEX_CHARS} characters`
   try {
     new RegExp(source, flags)
     return undefined
@@ -144,12 +197,17 @@ function validateRule(raw: unknown, field: string, errors: string[]): Rule | und
     if (!includes(RULE_KEYS, key)) errors.push(`${field}.${key}: unknown field`)
   }
   if (typeof raw.id !== 'string' || raw.id === '') errors.push(`${field}.id: required string`)
+  else if (nameProblem(raw.id) !== undefined) errors.push(`${field}.id: ${nameProblem(raw.id)}`)
   if (!includes(TIERS, raw.tier)) errors.push(`${field}.tier: one of ${TIERS.join(', ')}`)
   const tools = stringList(raw.tools, `${field}.tools`, errors)
   if (Array.isArray(raw.tools) && raw.tools.length === 0) {
     errors.push(`${field}.tools: name at least one tool`)
   }
   tools.forEach((pattern, index) => {
+    if ((slashSource(pattern)?.length ?? 0) > MAX_REGEX_CHARS) {
+      errors.push(`${field}.tools[${index}]: a regex of at most ${MAX_REGEX_CHARS} characters`)
+      return
+    }
     try {
       toolMatcher(pattern)
     } catch (error) {
@@ -208,7 +266,8 @@ function validateGollum(raw: unknown, errors: string[]): Overrides['gollum'] {
     } else {
       const seen = new Set<string>()
       out.patterns = []
-      raw.patterns.forEach((item, index) => {
+      if (raw.patterns.length > MAX_PATTERNS) errors.push(`gollum.patterns: at most ${MAX_PATTERNS} patterns (${raw.patterns.length} given); only the first ${MAX_PATTERNS} are read`)
+      raw.patterns.slice(0, MAX_PATTERNS).forEach((item, index) => {
         const field = `gollum.patterns[${index}]`
         if (!isObject(item)) {
           errors.push(`${field}: must be an object`)
@@ -219,6 +278,7 @@ function validateGollum(raw: unknown, errors: string[]): Overrides['gollum'] {
           if (!includes(GOLLUM_PATTERN_KEYS, key)) errors.push(`${field}.${key}: unknown field`)
         }
         if (typeof item.id !== 'string' || item.id === '') errors.push(`${field}.id: required string`)
+        else if (nameProblem(item.id) !== undefined) errors.push(`${field}.id: ${nameProblem(item.id)}`)
         else if (seen.has(item.id)) errors.push(`${field}.id: "${item.id}" is used twice`)
         if (!includes(SECRET_LEVELS, item.level)) errors.push(`${field}.level: one of ${SECRET_LEVELS.join(', ')}`)
         const problem = regexError(item.regex, 'g')
@@ -278,6 +338,7 @@ function validateGimli(raw: unknown, errors: string[]): Overrides['gimli'] {
       if (!includes(GIMLI_COMMAND_KEYS, key)) errors.push(`${field}.${key}: unknown field`)
     }
     if (typeof item.name !== 'string' || item.name.trim() === '') errors.push(`${field}.name: required string`)
+    else if (nameProblem(item.name) !== undefined) errors.push(`${field}.name: ${nameProblem(item.name)}`)
     else if (seen.has(item.name.trim())) errors.push(`${field}.name: "${item.name.trim()}" is used twice`)
     if (!Array.isArray(item.argv) || item.argv.length === 0) {
       errors.push(`${field}.argv: a non-empty list of strings (the command and its arguments; no shell)`)
@@ -304,36 +365,47 @@ function validateGimli(raw: unknown, errors: string[]): Overrides['gimli'] {
  */
 function validateBigOperations(raw: unknown, ruleIds: ReadonlySet<string>, errors: string[]): string[] {
   const entries = stringList(raw, 'bigOperations', errors)
-  entries.forEach((entry, index) => {
+  return entries.filter((entry, index) => {
     const field = `bigOperations[${index}]`
     if (entry.startsWith('/')) {
+      if ((slashSource(entry)?.length ?? 0) > MAX_REGEX_CHARS) {
+        errors.push(`${field}: a regex of at most ${MAX_REGEX_CHARS} characters`)
+        return false
+      }
       try {
-        if (slashRegex(entry) === undefined) errors.push(`${field}: a regex is written /source/flags`)
+        if (slashRegex(entry) === undefined) {
+          errors.push(`${field}: a regex is written /source/flags`)
+          return false
+        }
       } catch (error) {
         errors.push(`${field}: invalid regex: ${error instanceof Error ? error.message : String(error)}`)
+        return false
       }
     } else if (!includes(BIG_CHECKS, entry) && !ruleIds.has(entry)) {
       errors.push(`${field}: "${entry}" is not a rule id, a /regex/ or one of ${BIG_CHECKS.join(', ')}`)
+      return false
     }
+    return true
   })
-  return entries
 }
 
 /**
- * Validates the parsed overrides file against this build's schema, reporting
- * every problem by field. Any problem means the whole file is ignored.
+ * What a parsed rules file comes to, entry by entry: `unreadable` when it is not a JSON object or not of this
+ * schema version (nothing of it can be read); else the entries that validate on their own, and every problem.
+ * An entry with a problem is left out, so `overrides` is what a broken file may still contribute.
  */
-export function validateOverrides(
-  raw: unknown,
-  shipped: Config = SHIPPED,
-): { overrides: Overrides; errors: [] } | { overrides: undefined; errors: string[] } {
+export type Inspected =
+  | { kind: 'unreadable'; errors: string[] }
+  | { kind: 'readable'; overrides: Overrides; errors: string[] }
+
+export function inspectOverrides(raw: unknown, shipped: Config = SHIPPED): Inspected {
   const errors: string[] = []
   if (!isObject(raw)) {
-    return { overrides: undefined, errors: ['(file): must be a JSON object'] }
+    return { kind: 'unreadable', errors: ['(file): must be a JSON object'] }
   }
   if (raw.schemaVersion !== SCHEMA_VERSION) {
     return {
-      overrides: undefined,
+      kind: 'unreadable',
       errors: [
         `schemaVersion: ${JSON.stringify(raw.schemaVersion)} is not a version this build reads (${SCHEMA_VERSION})`,
       ],
@@ -352,18 +424,27 @@ export function validateOverrides(
     } else {
       const seen = new Set<string>()
       const rules: Rule[] = []
-      raw.rules.forEach((item, index) => {
+      if (raw.rules.length > MAX_RULES) errors.push(`rules: at most ${MAX_RULES} rules (${raw.rules.length} given); only the first ${MAX_RULES} are read`)
+      raw.rules.slice(0, MAX_RULES).forEach((item, index) => {
         const rule = validateRule(item, `rules[${index}]`, errors)
         if (rule === undefined) return
-        if (seen.has(rule.id)) errors.push(`rules[${index}].id: "${rule.id}" is used twice`)
-        if (includes(BIG_CHECKS, rule.id)) errors.push(`rules[${index}].id: "${rule.id}" is the name of a big-operation check`)
+        let isFine = true
+        if (seen.has(rule.id)) {
+          errors.push(`rules[${index}].id: "${rule.id}" is used twice`)
+          isFine = false
+        }
+        if (includes(BIG_CHECKS, rule.id)) {
+          errors.push(`rules[${index}].id: "${rule.id}" is the name of a big-operation check`)
+          isFine = false
+        }
         if (shippedIds.has(rule.id)) {
           errors.push(
             `rules[${index}].id: "${rule.id}" is a shipped rule's id; disable it with disableRules and give yours another id`,
           )
+          isFine = false
         }
         seen.add(rule.id)
-        rules.push(rule)
+        if (isFine) rules.push(rule)
       })
       overrides.rules = rules
     }
@@ -390,11 +471,11 @@ export function validateOverrides(
   }
   if (raw.productionPatterns !== undefined) {
     const patterns = stringList(raw.productionPatterns, 'productionPatterns', errors)
-    patterns.forEach((pattern, index) => {
+    overrides.productionPatterns = patterns.filter((pattern, index) => {
       const problem = regexError(pattern, 'i')
       if (problem !== undefined) errors.push(`productionPatterns[${index}]: ${problem}`)
+      return problem === undefined
     })
-    overrides.productionPatterns = patterns
   }
 
   if (raw.models !== undefined) {
@@ -430,9 +511,23 @@ export function validateOverrides(
     if (gimli !== undefined) overrides.gimli = gimli
   }
 
-  return errors.length > 0
-    ? { overrides: undefined, errors }
-    : { overrides, errors: [] }
+  return { kind: 'readable', overrides, errors }
+}
+
+/**
+ * Validates the parsed overrides file against this build's schema, reporting
+ * every problem by field. Here any problem means no overrides: what a file
+ * with problems may still contribute is `loadConfig`'s question
+ * (`inspectOverrides`).
+ */
+export function validateOverrides(
+  raw: unknown,
+  shipped: Config = SHIPPED,
+): { overrides: Overrides; errors: [] } | { overrides: undefined; errors: string[] } {
+  const inspected = inspectOverrides(raw, shipped)
+  return inspected.kind === 'readable' && inspected.errors.length === 0
+    ? { overrides: inspected.overrides, errors: [] }
+    : { overrides: undefined, errors: inspected.errors }
 }
 
 const union = (a: readonly string[], b: readonly string[] = []): string[] => [
@@ -474,12 +569,17 @@ function compileBigOperation(entry: string): BigOperation {
 
 const branchToRegExp = (branch: string): RegExp => globToRegExp(branch)
 
-export function compileConfig(config: Config, projectRuleIds: ReadonlySet<string>): CompiledConfig {
+export function compileConfig(
+  config: Config,
+  projectRuleIds: ReadonlySet<string>,
+  unconfirmedRuleIds: ReadonlySet<string> = new Set(),
+): CompiledConfig {
   const rules = config.rules.map((rule): CompiledRule => {
     const matchers = rule.tools.map(toolMatcher)
     return {
       ...rule,
       source: projectRuleIds.has(rule.id) ? 'project' : 'shipped',
+      ...(projectRuleIds.has(rule.id) && unconfirmedRuleIds.has(rule.id) && { isUnconfirmed: true }),
       matchesTool: tool => matchers.some(matches => matches(tool)),
       ...(rule.command !== undefined && { commandRe: new RegExp(rule.command) }),
       ...(rule.path !== undefined && { pathRe: new RegExp(rule.path) }),
@@ -490,39 +590,80 @@ export function compileConfig(config: Config, projectRuleIds: ReadonlySet<string
     config,
     rules,
     protectedPaths: config.protectedPaths.map(protectedMatcher),
+    writeProtectedPaths: WRITE_PROTECTED_PATHS.map(protectedMatcher),
     protectedBranches: config.protectedBranches.map(branchToRegExp),
     production: config.productionPatterns.map(pattern => new RegExp(pattern, 'i')),
     bigOperations: config.bigOperations.map(compileBigOperation),
   }
 }
 
+/** The shipped defaults alone, for a file that could not be read at all. `checks`: the project checks it names, if known. */
+export function ignoredConfig(errors: readonly string[], shipped: Config = SHIPPED, checks = 0): LoadedConfig {
+  return { compiled: compileConfig(shipped, new Set()), origin: 'shipped', errors, broken: { kind: 'ignored', checks } }
+}
+
+/** How many project checks a parsed file names, valid or not: a broken file's checks are held back whole. */
+function checksNamed(raw: unknown): number {
+  const commands = isObject(raw) && isObject(raw.gimli) ? raw.gimli.commands : undefined
+  return commands === undefined ? 0 : Array.isArray(commands) ? commands.length : 1
+}
+
 /**
  * The effective config from the overrides file's text (undefined: no file).
- * A file that does not parse or validate is ignored whole, and the shipped
- * defaults stand, with the errors reported. It never turns the gate off.
+ *
+ * A file that is not JSON, not an object or of another schema version is
+ * ignored whole: the shipped defaults stand, with the error reported. A file
+ * of this version with validation errors keeps only the entries that validate
+ * on their own and that `FIELD_TRUST` and `TIER_TRUST` class as applying at
+ * once, read as an unconfirmed file's are (they only add to the shipped
+ * decision), whatever `isTrusted` says: a broken file is never confirmed, and
+ * its checks are held back. Neither ever turns the gate off or loosens it
+ * (DESIGN §16).
+ *
+ * `isTrusted` false: only the settings that cannot loosen the gate apply
+ * (`splitByTrust`); the rest are held back, as if absent, and reported in
+ * `needsTrust`; and the file's rules only add to the shipped decision
+ * (`isUnconfirmed`). A file with nothing that waits loads the same either way,
+ * save for that mark: `isTrusted` false is also how a file nobody can confirm
+ * is loaded. The default is the file in full.
  */
-export function loadConfig(fileText: string | undefined, shipped: Config = SHIPPED): LoadedConfig {
-  const shippedOnly = (errors: readonly string[]): LoadedConfig => ({
-    compiled: compileConfig(shipped, new Set()),
-    origin: 'shipped',
-    errors,
-  })
-  if (fileText === undefined) return shippedOnly([])
+export function loadConfig(fileText: string | undefined, shipped: Config = SHIPPED, isTrusted = true): LoadedConfig {
+  if (fileText === undefined) return { compiled: compileConfig(shipped, new Set()), origin: 'shipped', errors: [] }
 
   let raw: unknown
   try {
     raw = JSON.parse(fileText)
   } catch (error) {
-    return shippedOnly([`(file): not valid JSON: ${error instanceof Error ? error.message : String(error)}`])
+    return ignoredConfig([`(file): not valid JSON: ${error instanceof Error ? error.message : String(error)}`], shipped)
   }
-  const result = validateOverrides(raw, shipped)
-  if (result.overrides === undefined) return shippedOnly(result.errors)
+  const inspected = inspectOverrides(raw, shipped)
+  if (inspected.kind === 'unreadable') return ignoredConfig(inspected.errors, shipped)
 
-  const merged = mergeConfig(shipped, result.overrides)
-  const projectIds = new Set((result.overrides.rules ?? []).map(rule => rule.id))
+  if (inspected.errors.length > 0) {
+    const kept = splitByTrust(inspected.overrides).always
+    const ids = new Set((kept.rules ?? []).map(rule => rule.id))
+    const checks = checksNamed(raw)
+    try {
+      return { compiled: compileConfig(mergeConfig(shipped, kept), ids, ids), origin: PARTLY_APPLIED, errors: inspected.errors, broken: { kind: 'partial', checks } }
+    } catch (error) {
+      return ignoredConfig([...inspected.errors, `(file): ${error instanceof Error ? error.message : String(error)}`], shipped, checks)
+    }
+  }
+
+  const split = splitByTrust(inspected.overrides)
+  const used = isTrusted ? inspected.overrides : split.always
+  const merged = mergeConfig(shipped, used)
+  const projectIds = new Set((used.rules ?? []).map(rule => rule.id))
+  const needsTrust = isConfirmable(split.counts) ? { needsTrust: { summary: split.summary, counts: split.counts, isIgnored: !isTrusted } } : {}
   try {
-    return { compiled: compileConfig(merged, projectIds), origin: 'shipped+project', errors: [] }
+    return {
+      compiled: compileConfig(merged, projectIds, isTrusted ? new Set() : projectIds),
+      origin: 'shipped+project',
+      errors: [],
+      ...needsTrust,
+      ...(hasSettings(inspected.overrides) && { hasSettings: true }),
+    }
   } catch (error) {
-    return shippedOnly([`(file): ${error instanceof Error ? error.message : String(error)}`])
+    return ignoredConfig([`(file): ${error instanceof Error ? error.message : String(error)}`], shipped, checksNamed(raw))
   }
 }

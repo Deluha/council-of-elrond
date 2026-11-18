@@ -24,6 +24,7 @@ export type ModelSlot = (typeof MODEL_SLOTS)[number]
 export const CHECKS = [
   'rm-outside-repo',
   'force-push-protected',
+  'force-push-unknown-branch',
   'destructive-sql-production',
   'privileged',
   'redirect-write',
@@ -31,6 +32,11 @@ export const CHECKS = [
   'git-config-injection',
   'dangerous-env-assignment',
   'raw-disk-write',
+  'interpreter-stdin',
+  'claude-session',
+  'unreadable-command',
+  'terminal-input',
+  'extract-outside-repo',
 ] as const
 export type CheckName = (typeof CHECKS)[number]
 
@@ -131,6 +137,3 @@ export type Overrides = Partial<Omit<Config, 'schemaVersion' | 'gollum' | 'gimli
 export type RuleSource = 'shipped' | 'project'
 
 export const strictness = (tier: Tier): number => TIERS.indexOf(tier)
-
-export const stricter = (a: Tier, b: Tier): Tier =>
-  strictness(a) >= strictness(b) ? a : b

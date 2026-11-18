@@ -1,8 +1,11 @@
 import { OVERRIDES_PATH } from '../config/defaults.js'
+import { heldCount } from '../config/trust.js'
+import type { TrustCounts } from '../config/trust.js'
 import { untrusted } from '../members/shared.js'
 import { redact } from '../redact.js'
 import type { SecretPattern } from '../redact.js'
 import { text } from '../strings.js'
+import { appliedText, countsText } from './commands.js'
 import type { CouncilCommand, Output } from './commands.js'
 import type { MemberOpinion } from './escalation.js'
 
@@ -36,6 +39,16 @@ export const routeText = (): string => text('relay.route', { path: OVERRIDES_PAT
 
 /** The session-start notice appended as a row the model reads. */
 export const noticeText = (): string => text('notice.noSurface', { chatRoute: text('relay.chatRoute', {}, 'plain'), route: routeText() }, 'plain')
+
+/** Where nothing draws: that a project rules file waits for the person's confirmation. Counts only, never a word from the file. */
+export const untrustedNotice = (counts: TrustCounts): string =>
+  heldCount(counts) > 0
+    ? text('relay.rulesUntrusted', { summary: countsText(counts, 'plain') }, 'plain')
+    : text('relay.rulesUnconfirmed', { summary: appliedText(counts, 'plain') }, 'plain')
+
+/** Where nothing draws: that a project rules file has errors, and how far it applies. The count only, never a word from the file. */
+export const brokenNotice = (kind: 'partial' | 'ignored', errors: number): string =>
+  text(kind === 'partial' ? 'relay.rulesPartial' : 'relay.rulesIgnored', { n: errors }, 'plain')
 
 /** The nobody-to-ask refusal: what was refused, what is behind it (names only) and the way forward. */
 export type NobodyToAsk = {

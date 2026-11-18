@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { fingerprintOf } from '../hooks/audit.js'
+import { fingerprintOf, placeScopeOf } from '../hooks/audit.js'
 import { callKeyOf, codeOf, parseChatLines } from '../hooks/elrond/chat.js'
 import { INITIAL_SESSION } from '../hooks/state.js'
 import type { CouncilSession } from '../types'
@@ -24,6 +24,8 @@ const SUDO = { tool: 'Bash', command: 'sudo ls' } as const
 const MULTI = { tool: 'Bash', command: 'sudo ls\nid' } as const
 const BLOCKED = { tool: 'Bash', command: 'rm -rf /' } as const
 const PROTECTED = { tool: 'Bash', command: 'cat .env' } as const
+/** Where a call at the project root is keyed: the folder is part of it. */
+const HERE = placeScopeOf('', ROOT)
 const WRITE_LOW = { tool: 'Write', file_path: `${ROOT}/src/b.ts`, content: 'const password = "hunter2xyz"' } as const
 
 const say = ($: unknown, text: string, origin: Origin = COMPOSER): Promise<Result> =>
@@ -59,7 +61,7 @@ describe('the refusal carries a code', () => {
     const deny = denyOf(await run($, { ...SUDO, description: 'List the files' }))
     const code = codeIn(deny)
     expect(code).toMatch(/^[0-9a-f]{6}$/)
-    const key = await fingerprintOf('Bash', { command: 'sudo ls' })
+    const key = await fingerprintOf('Bash', { command: 'sudo ls' }, HERE)
     expect(code).toBe(key.slice(0, 6))
     expect(deny).toContain(`give them its code, council:${code}.`)
     expect(deny).toContain(`they type council allow ${code} on its own line in their next message (or council allow ${code} session to allow it for the rest of this session); council deny ${code} refuses it.`)
@@ -146,6 +148,23 @@ describe('council allow <code>', () => {
     expect((await auditLines(w))[1]).toMatchObject({ decision: 'chat-allow', outcome: 'ran' })
   })
 
+  test('the folder is part of the call: allowed in one folder it does not run in another (DESIGN §16)', async ($, on) => {
+    const w = world(on, { surfaces: [] })
+    sink(on)
+    const code = await refusedCode($, SUDO)
+    await say($, `council allow ${code}`)
+    w.cwd = `${ROOT}/a`
+    const elsewhere = denyOf(await run($, SUDO))
+    expect(elsewhere).toContain('nobody can be asked')
+    // Another folder, another call: its own code.
+    expect(codeIn(elsewhere)).not.toBe(code)
+    expect(w.ran).toEqual([])
+    // The allowance is still held for the folder it was given for.
+    w.cwd = ROOT
+    expect(await run($, SUDO)).toEqual({ result: 'ran' })
+    expect(w.ran).toHaveLength(1)
+  })
+
   test('a different call is not covered', async ($, on) => {
     const w = world(on, { surfaces: [] })
     sink(on)
@@ -209,6 +228,20 @@ describe('council allow <code> session', () => {
     expect(w.ran).toHaveLength(3)
     const lines = await auditLines(w)
     expect(lines.slice(1).map(line => line.decision)).toEqual(['chat-session', 'chat-session', 'chat-session'])
+  })
+
+  test('the folder is part of the call: a session allowance given in one folder does not run the call in another (DESIGN §16)', async ($, on) => {
+    const w = world(on, { surfaces: [] })
+    sink(on)
+    const code = await refusedCode($, SUDO)
+    await say($, `council allow ${code} session`)
+    expect(await run($, SUDO)).toEqual({ result: 'ran' })
+    w.cwd = `${ROOT}/b`
+    expect(denyOf(await run($, SUDO))).toContain('nobody can be asked')
+    expect(w.ran).toHaveLength(1)
+    w.cwd = ROOT
+    expect(await run($, SUDO)).toEqual({ result: 'ran' })
+    expect(w.ran).toHaveLength(2)
   })
 
   test('survives a prompt that is not a person\'s', async ($, on) => {
@@ -483,10 +516,10 @@ describe('never for what the dialog could not allow either', () => {
     const known = await refusedCode($, SUDO)
     for (const call of [BLOCKED, PROTECTED]) {
       expect(denyOf(await run($, call))).not.toContain('council:')
-      const code = codeOf(await callKeyOf({ tool: call.tool, input: { command: call.command } }))
+      const code = codeOf(await callKeyOf({ tool: call.tool, input: { command: call.command } }, HERE))
       const reply = await say($, `council allow ${code}\ncouncil allow ${known}\ncouncil allow ${code} session`)
       expect(reply.context?.[0], call.command).toContain('no call refused since their previous message has that code')
-      expect(lastOf(state.written).chatAllowances.map(allowance => allowance.callKey), call.command).not.toContain(await callKeyOf({ tool: call.tool, input: { command: call.command } }))
+      expect(lastOf(state.written).chatAllowances.map(allowance => allowance.callKey), call.command).not.toContain(await callKeyOf({ tool: call.tool, input: { command: call.command } }, HERE))
       expect(denyOf(await run($, call)), call.command).toContain(call === BLOCKED ? '(block)' : 'nobody can be asked')
     }
     expect(w.ran).toEqual([])
@@ -500,7 +533,7 @@ describe('never for what the dialog could not allow either', () => {
     const deny = denyOf(await run($, call))
     expect(deny).toContain('high confidence')
     expect(deny).not.toContain('council:')
-    const code = codeOf(await callKeyOf({ tool: 'Bash', input: { command: call.command } }))
+    const code = codeOf(await callKeyOf({ tool: 'Bash', input: { command: call.command } }, HERE))
     const reply = await say($, `council allow ${code}`)
     expect(reply.context?.[0]).toContain('no call refused since their previous message has that code')
     expect(denyOf(await run($, call))).toContain('high confidence')

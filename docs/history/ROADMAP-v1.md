@@ -3,16 +3,19 @@
 > **History, not open work.** This is the roadmap as it stood on 2026-11-13, kept for the task
 > lists and the reasoning of Stages 0 to 6, H1 to H3 and C1 to C6. The plan in force is
 > [ROADMAP.md](../../mods/council-of-elrond/ROADMAP.md). Its "Resuming" and "Approved decisions"
-> sections were carried into that file unchanged; where the two differ, that file wins.
+> sections were carried into that file; the decisions in this file that stay binding are listed in
+> its "Carried over from v1", and the open items of this file are placed in its milestones and in
+> "Later". Where the two differ, that file wins.
 
 How to finish the mod from where it stands, written so a new dev session can pick it up cold.
 
 - **The spec:** [SPEC.md](../../mods/council-of-elrond/SPEC.md) (§ numbers below refer to it).
 - **What exists and why:** [DESIGN.md](../../mods/council-of-elrond/DESIGN.md).
 - **Decisions approved after the spec:** listed below; they win over the spec where they differ.
-- **ROADMAP v2 (proposal):** [docs/REVIEW-2026-11.md](../REVIEW-2026-11.md) holds the
-  November review, the next milestones (M0 to M7), suggested new functionality and the decisions
-  they need. Until the maintainer takes those decisions, everything below stays binding.
+- **ROADMAP v2:** [docs/REVIEW-2026-11.md](../REVIEW-2026-11.md) holds the November review that
+  the maintainer accepted on 2026-11-13, and
+  [docs/REVIEW-2026-11-INDEPENDENT.md](../REVIEW-2026-11-INDEPENDENT.md) the independent review of
+  it; ROADMAP.md holds the milestones (M0 to M7) and the decisions.
 
 | Stage | Scope (SPEC §20) | Status |
 | :- | :- | :- |

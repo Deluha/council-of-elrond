@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { SHIPPED } from '../hooks/config/defaults.js'
-import { loadConfig } from '../hooks/config/schema.js'
+import { SHIPPED, WRITE_PROTECTED_PATHS } from '../hooks/config/defaults.js'
+import { loadConfig, TOP_KEYS } from '../hooks/config/schema.js'
 import { resolveModel } from '../hooks/elrond/models.js'
 import { classify } from '../hooks/rules/classify.js'
 import { CONTEXT } from './fixtures.js'
@@ -17,6 +17,19 @@ describe('config', () => {
     expect(loaded.compiled.rules.length).toBe(SHIPPED.rules.length)
   })
 
+  test('the November hardening rules are shipped, with the tiers they were decided at', () => {
+    const tiers = Object.fromEntries(SHIPPED.rules.map(rule => [rule.id, rule.tier]))
+    expect(tiers['plugin-manage']).toBe('ask')
+    for (const id of ['shell-dynamic-program', 'shell-runner-unresolved', 'script-stdin', 'script-inline']) expect(tiers[id], id).toBe('review')
+    // The plugin folders ask for a write only: a second, internal list, not a field of the rules file.
+    expect(SHIPPED.protectedPaths).not.toContain('**/.claude/plugins/**')
+    expect(WRITE_PROTECTED_PATHS).toEqual(['**/.claude/plugins/**'])
+    expect(TOP_KEYS).not.toContain('writeProtectedPaths')
+    // The check a rule names is one the schema knows, so a project rule can name it too.
+    const named = loadConfig(JSON.stringify({ schemaVersion: 1, rules: [{ id: 'mine', tier: 'review', tools: ['Bash'], check: 'interpreter-stdin', reason: 'r' }] }))
+    expect(named.errors).toEqual([])
+  })
+
   test('a file that is not JSON falls back to the shipped rules, with the error', () => {
     const loaded = loadConfig('{ not json')
     expect(loaded.origin).toBe('shipped')
@@ -30,7 +43,7 @@ describe('config', () => {
     expect(loaded.errors).toEqual(['schemaVersion: 2 is not a version this build reads (1)'])
   })
 
-  test('errors are reported by field, and any error ignores the whole file', () => {
+  test('errors are reported by field, and a file with any error is only partly applied (DESIGN §16)', () => {
     const loaded = loadConfig(
       JSON.stringify({
         schemaVersion: 1,
@@ -45,7 +58,8 @@ describe('config', () => {
         models: { gimli: 'opus', gandalf: '' },
       }),
     )
-    expect(loaded.origin).toBe('shipped')
+    expect(loaded.origin).toBe('shipped+project (partly applied)')
+    expect(loaded.broken).toEqual({ kind: 'partial', checks: 0 })
     expect(loaded.errors).toEqual(
       expect.arrayContaining([
         'rulez: unknown field',

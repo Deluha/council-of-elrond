@@ -1,8 +1,30 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { appendPlan, byteLength, isRotation } from '../hooks/audit.js'
+import { appendPlan, byteLength, fingerprintOf, isRotation } from '../hooks/audit.js'
 
 const PATH = '/work/audit.jsonl'
+
+describe('the fingerprint hashes a shell command exactly', () => {
+  const differs = async (a: string, b: string) =>
+    expect(await fingerprintOf('Bash', { command: a })).not.toBe(await fingerprintOf('Bash', { command: b }))
+
+  test('a newline is not a space: it separates commands', async () => {
+    await differs('echo note: rm -rf src > todo.txt', 'echo note:\nrm -rf src > todo.txt')
+  })
+
+  test('whitespace inside quotes is data', async () => {
+    await differs('rm -rf "a b"', 'rm -rf "a  b"')
+  })
+
+  test('a leading or trailing space is a different command text', async () => {
+    await differs('rm -rf build', ' rm -rf build')
+    await differs('rm -rf build', 'rm -rf build ')
+  })
+
+  test('the same text, with keys in any order, is the same fingerprint', async () => {
+    expect(await fingerprintOf('Bash', { command: 'ls', timeout: 5 })).toBe(await fingerprintOf('Bash', { timeout: 5, command: 'ls' }))
+  })
+})
 
 describe('audit rotation is measured in bytes', () => {
   test('byteLength counts UTF-8 bytes, not characters', () => {

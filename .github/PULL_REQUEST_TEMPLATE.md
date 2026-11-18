@@ -2,20 +2,26 @@
 
 <!-- One paragraph. Link the issue or the roadmap item. -->
 
-Type: <!-- fix / rules / reviewer / pipeline / ui / docs / ci --> · Stage: <!-- 6, hardening, n/a -->
+Type: <!-- fix / rules / reviewer / pipeline / ui / docs / ci --> · Milestone or brief: <!-- M0 to M7, hardening, n/a -->
 
 ## Checks
 
 - [ ] `claude plugin test mods/council-of-elrond` passes
 - [ ] `tsc -p mods` passes
-- [ ] `claude plugin validate mods/council-of-elrond` passes, and `DESIGN.md` §2 carries its `hooks:`/`calls:` lines if they changed
+- [ ] `claude plugin validate --strict mods/council-of-elrond` passes, and `DESIGN.md` §2 carries its `hooks:`/`calls:` lines if they changed
 - [ ] New or changed behaviour has a test that fails without the change
 - [ ] User-visible changes are in `mods/council-of-elrond/README.md` and `CHANGELOG.md` ("Unreleased")
 - [ ] Any decision the spec or roadmap didn't cover is recorded in `DESIGN.md`
 - [ ] No new text in logic: strings are in `hooks/strings.ts`
 - [ ] Only `hooks/register.ts` touches `$`
 - [ ] Hooks installed (`scripts/setup.sh`) and the pre-commit hook passed, or the same checks were run by hand
-- [ ] If this touches `hooks/rules/`, `config/defaults.ts`, `redact.ts` or `register.ts`: labelled `security` or `rules`, and no bypass input is quoted in the title or description
+- [ ] If this touches a path in the safety-boundary block of `.github/CODEOWNERS`: labelled `security` or `rules`, and no bypass input is quoted in the title or description
+
+## Gate
+
+**Gate:** tightens / neutral / loosens (approved by: …). Lower than `main`: none, or the list.
+
+**Lessons:** each review finding became a checker rule, a test, a hook or one guidance line, in that order of preference; list them, and each finding declined with the reason.
 
 ## Safety
 

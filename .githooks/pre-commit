@@ -1,43 +1,66 @@
-#!/usr/bin/env bash
-# Pre-commit: the three gates the project requires before every commit, plus hygiene.
-# Install once with scripts/setup.sh (it sets core.hooksPath to .githooks).
-# Skip deliberately with `git commit --no-verify`; CI runs the same checks.
+#!/bin/sh
+# Pre-commit: the checks the staged files need, through scripts/verify.mjs (hygiene, the guidance
+# checker, and when the mod changed the three gates on the pinned build). The commit is refused on an
+# unpinned build unless COUNCIL_ALLOW_UNPINNED=1. Install once with scripts/setup.sh (it sets
+# core.hooksPath to .githooks). Skip deliberately with `git commit --no-verify`; CI runs the same checks.
 
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
-staged=$(git diff --cached --name-only --diff-filter=ACMRD)
-[ -z "$staged" ] && exit 0
-
-red()   { printf '\033[31m%s\033[0m\n' "$*"; }
-green() { printf '\033[32m%s\033[0m\n' "$*"; }
-
-# Hygiene runs on every commit (fast).
-if ! scripts/check-hygiene.sh --staged; then
-  red "pre-commit: hygiene checks failed"
-  exit 1
+if command -v node >/dev/null 2>&1; then
+  exec node scripts/verify.mjs --staged
 fi
 
-# The gates run only when something that can change the mod's behaviour is staged.
-if echo "$staged" | grep -qE '^mods/(council-of-elrond/(hooks|tests|types|\.claude-plugin)/|tsconfig\.json|types/)'; then
-  for tool in claude tsc; do
-    command -v "$tool" >/dev/null || { red "pre-commit: $tool not found on PATH (see CONTRIBUTING.md)"; exit 1; }
-  done
-  echo "pre-commit: tests"
-  claude plugin test mods/council-of-elrond || { red "pre-commit: tests failed"; exit 1; }
-  echo "pre-commit: typecheck"
-  tsc -p mods || { red "pre-commit: tsc failed"; exit 1; }
-  echo "pre-commit: validate"
-  out=$(claude plugin validate --strict mods/council-of-elrond 2>&1) || { echo "$out"; red "pre-commit: validate failed"; exit 1; }
-  if echo "$out" | grep -q 'tool.check'; then
-    red "pre-commit: register.ts registers a tool.check hook; the mod must never take part in the permission decision"
-    exit 1
+echo "pre-commit: node not found, so scripts/verify.mjs cannot run; falling back to hygiene and the gates only (no guidance check)" >&2
+
+fallback() {
+  # shellcheck source=scripts/pinned-claude.sh
+  . scripts/pinned-claude.sh
+
+  staged=$(git diff --cached --name-only --diff-filter=ACMRD)
+  [ -z "$staged" ] && return 0
+
+  red()   { printf '\033[31m%s\033[0m\n' "$*"; }
+  green() { printf '\033[32m%s\033[0m\n' "$*"; }
+
+  # Hygiene runs on every commit (fast).
+  if ! scripts/check-hygiene.sh --staged; then
+    red "pre-commit: hygiene checks failed"
+    return 1
   fi
-fi
 
-# The marketplace manifest, when it changes.
-if echo "$staged" | grep -qx '.claude-plugin/marketplace.json'; then
-  claude plugin validate --strict . >/dev/null || { red "pre-commit: marketplace.json is invalid"; exit 1; }
-fi
+  # The gates run only when something that can change the mod's behaviour is staged.
+  if echo "$staged" | grep -qE '^mods/(council-of-elrond/(hooks|tests|types|\.claude-plugin)/|tsconfig\.json|types/)'; then
+    for tool in "${COUNCIL_CLAUDE:-claude}" tsc; do
+      command -v "$tool" >/dev/null || { red "pre-commit: $tool not found on PATH (see CONTRIBUTING.md)"; return 1; }
+    done
+    if ! check_pinned_claude; then
+      if [ "${COUNCIL_ALLOW_UNPINNED:-}" = 1 ]; then
+        red "pre-commit: COUNCIL_ALLOW_UNPINNED=1, so the gates run on an unpinned build"
+      else
+        red "pre-commit: the gates must run on the pinned Claude Code build"
+        return 1
+      fi
+    fi
+    echo "pre-commit: tests"
+    "$CLAUDE_BIN" plugin test mods/council-of-elrond || { red "pre-commit: tests failed"; return 1; }
+    echo "pre-commit: typecheck"
+    tsc -p mods || { red "pre-commit: tsc failed"; return 1; }
+    echo "pre-commit: validate"
+    out=$("$CLAUDE_BIN" plugin validate --strict mods/council-of-elrond 2>&1) || { echo "$out"; red "pre-commit: validate failed"; return 1; }
+    if echo "$out" | grep -q 'tool.check'; then
+      red "pre-commit: register.ts registers a tool.check hook; the mod must never take part in the permission decision"
+      return 1
+    fi
+  fi
 
-green "pre-commit: ok"
+  # The marketplace manifest, when it changes.
+  if echo "$staged" | grep -qx '.claude-plugin/marketplace.json'; then
+    "${COUNCIL_CLAUDE:-claude}" plugin validate --strict . >/dev/null || { red "pre-commit: marketplace.json is invalid"; return 1; }
+  fi
+
+  green "pre-commit: ok"
+}
+
+fallback
+exit $?

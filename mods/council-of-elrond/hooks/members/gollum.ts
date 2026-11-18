@@ -1,3 +1,4 @@
+import { canonical } from '../audit.js'
 import { isPlaceholder, isRandomLooking, LONG_TOKEN, redact, SECRET_PATTERNS } from '../redact.js'
 import type { SecretLevel, SecretPattern } from '../redact.js'
 import { FILE_PATH_FIELDS, SHELL_TOOLS } from '../rules/classify.js'
@@ -5,8 +6,8 @@ import type { Call } from '../rules/classify.js'
 
 /**
  * Gollum: the secrets scan, in code. It reads what a call would write or run
- * (a command and its heredocs, Write content, an Edit's new text, a notebook
- * cell, an MCP call's input), never what is already on disk. A high finding
+ * (a command, its description and its heredocs; a file tool's path and what it
+ * writes; every other tool's whole input), never what is already on disk. A high finding
  * is refused outright; a low one goes to the user with a redacted snippet.
  */
 
@@ -22,29 +23,41 @@ export type GollumFinding = {
   fingerprint: string
 }
 
-export type GollumScan = { high: GollumFinding[]; low: GollumFinding[] }
+export type GollumScan = {
+  high: GollumFinding[]
+  low: GollumFinding[]
+  /** True when the text was too long to scan in full: its start and its last 100,000 characters were read, not the middle. */
+  partial: boolean
+}
 
 /** Whether the allowlist confirm warns that this finding's fingerprint can be guessed offline. */
 export const warnsPasswordFingerprint = (finding: Pick<GollumFinding, 'kind'>): boolean => finding.kind === 'password'
 
-/** The text a call would write or run, by tool. */
+/**
+ * The text a call would write or run, by tool. A shell call: its description, then its command. A file tool: its path, then
+ * what it writes (Write content, an Edit's new text, a notebook cell). Any other tool, whatever its name (a fetch, an
+ * agent, an MCP call, a read): its whole input as canonical JSON, so a secret in a URL, a prompt or a pattern is read too.
+ */
 export function scannedText(call: Call): string {
   const input = call.input
-  if (SHELL_TOOLS.has(call.tool)) return typeof input.command === 'string' ? input.command : ''
-  if (call.tool === 'Write') return typeof input.content === 'string' ? input.content : ''
+  const only = (value: unknown): string[] => (typeof value === 'string' ? [value] : [])
+  if (SHELL_TOOLS.has(call.tool)) return [...only(input.description), ...only(input.command)].join('\n')
+  const pathField = FILE_PATH_FIELDS[call.tool]
+  if (pathField === undefined) return JSON.stringify(canonical(input))
+  const path = only(input[pathField])
+  if (call.tool === 'Write') return [...path, ...only(input.content)].join('\n')
   if (call.tool === 'Edit') {
     const edits = Array.isArray(input.edits) ? input.edits : []
-    return [input.new_string, ...edits.map(edit => (edit as { new_string?: unknown } | null)?.new_string)]
-      .filter((value): value is string => typeof value === 'string')
-      .join('\n')
+    return [...path, ...only(input.new_string), ...edits.flatMap(edit => only((edit as { new_string?: unknown } | null)?.new_string))].join('\n')
   }
-  if (call.tool === 'NotebookEdit') return typeof input.new_source === 'string' ? input.new_source : ''
-  if (FILE_PATH_FIELDS[call.tool] !== undefined) return ''
-  if (call.tool.startsWith('mcp__')) return JSON.stringify(input)
-  return ''
+  return [...path, ...only(input.new_source)].join('\n')
 }
 
 const MAX_SCAN_CHARS = 500_000
+/** A longer text is scanned from its start and, too, from this many characters at its end. */
+const TAIL_SCAN_CHARS = 100_000
+/** When a middle is skipped, the head and the tail each reach this far into it, so a token at either seam is read whole. */
+const SEAM_OVERLAP_CHARS = 512
 const MAX_FINDINGS = 10
 const SNIPPET_CHARS = 160
 
@@ -77,8 +90,13 @@ export async function scanText(
   patterns: readonly SecretPattern[] = SECRET_PATTERNS,
   allowlist: readonly string[] = [],
 ): Promise<GollumScan> {
-  const scan: GollumScan = { high: [], low: [] }
-  const body = text.length > MAX_SCAN_CHARS ? text.slice(0, MAX_SCAN_CHARS) : text
+  // Head and tail together cover a text up to the cap plus the tail; only a longer one has a middle that is skipped.
+  const scan: GollumScan = { high: [], low: [], partial: text.length > MAX_SCAN_CHARS + TAIL_SCAN_CHARS }
+  // A head and a tail that meet or overlap are the text whole: no join, so nothing is cut in two. Over a skipped middle, each
+  // reaches SEAM_OVERLAP_CHARS into it, so a token at either seam is intact; the two are joined by a line break so no match spans the gap.
+  const headEnd = MAX_SCAN_CHARS + SEAM_OVERLAP_CHARS
+  const tailStart = text.length - TAIL_SCAN_CHARS - SEAM_OVERLAP_CHARS
+  const body = tailStart > headEnd ? `${text.slice(0, headEnd)}\n${text.slice(tailStart)}` : text
   const covered: [number, number][] = []
   const seen = new Set<string>()
 
@@ -100,7 +118,7 @@ export async function scanText(
       const secret = whole.slice(kept.length)
       const index = (match.index ?? 0) + kept.length
       covered.push([match.index ?? 0, (match.index ?? 0) + whole.length])
-      if (pattern.level === 'low' && isPlaceholder(secret)) continue
+      if (pattern.level === 'low' && (isPlaceholder(secret) || pattern.isNoise?.(kept, secret) === true)) continue
       await add(pattern, secret, index, secret.length)
     }
   }

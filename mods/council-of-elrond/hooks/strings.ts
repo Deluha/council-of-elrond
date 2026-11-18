@@ -43,11 +43,22 @@ const TABLE = {
   'gimli.stopped': { plain: '"{name}" was stopped: the council had already blocked.' },
   'gimli.tail': { plain: 'Its last lines:\n{tail}' },
   'gimli.problem': { plain: 'The error: {problem}' },
+  // In place of the project's checks while its rules file is not trusted: counts as a check that could not be started.
+  'gimli.untrustedName': { plain: 'project checks' },
+  'gimli.untrusted': {
+    plain: 'not run: the rules file is not trusted (the user can confirm it with /council trust, or set the trustProjectRules option to always)',
+  },
+  // Likewise while the rules file has errors: its checks are held back whole.
+  'gimli.broken': {
+    plain: 'not run: the project rules file has errors, so its checks are held back (the user can fix the file and run /council reload)',
+  },
 
   // Refusals Claude reads
   'refusal.head': { plain: 'This call was refused before it ran.' },
   'refusal.decided': { plain: 'Decided by: {who} ({verdict}).' },
   'refusal.reason': { plain: 'Reason: {reason}' },
+  // A rule from the project's rules file: its words come from the repository, so they are introduced as the project's, never as the council's own.
+  'refusal.reasonProject': { plain: "The project's rules file says (its text, not the council's): {reason}" },
   'refusal.alternative': { plain: 'Safer alternative: {alternative}' },
   'refusal.rounds': { plain: 'Review rounds left on this operation: {rounds}.' },
   'refusal.noRetry': { plain: 'Do not retry the same call unchanged.' },
@@ -58,14 +69,13 @@ const TABLE = {
   'reason.userKeptBlocked': { plain: 'The user chose to keep this call blocked.' },
   'reason.userDismissed': { plain: 'The user dismissed the question without allowing the call.' },
   'reason.allowlistNotWritten': {
-    plain: 'You chose to add this finding to the allowlist, but the entry could not be written, so the call stays blocked.',
+    plain: 'The user chose to add this finding to the allowlist, but the entry could not be written, so the call stays blocked.',
   },
   'reason.chatDenied': { plain: 'The user refused this call in chat (council deny).' },
   'reason.userWantsChat': { plain: 'The user wants to discuss this call before anything runs.' },
   'reason.nobodyToAsk': {
     plain: 'The call needs the user, and nobody can be asked in this session. {why} Operation: {operation}. Behind it: {behind}.',
   },
-  'reason.failure': { plain: 'The council could not complete its review ({problem}), and it fails closed.' },
   'reason.internal': { plain: 'The council failed while checking this call, and it fails closed.' },
   'reason.aborted': { plain: 'The review was interrupted before it finished. Nothing was decided; run the command again if you still want it.' },
   'alternative.ask': { plain: 'Stop and ask the user how they want to proceed.' },
@@ -77,6 +87,9 @@ const TABLE = {
   'reason.secretHigh': { plain: 'The call contains a {label} (high confidence): {snippet}' },
   'reason.lockoutKey': { plain: 'The same operation was refused or failed {count} times since the user last wrote.' },
   'reason.lockoutVerb': { plain: 'Operations of this kind ({verb}) were refused or failed {count} times since the user last wrote.' },
+  'alternative.shorterCall': {
+    plain: 'Make the call shorter: split it into smaller writes or commands, or have a script read long text from a file instead of passing it in the call.',
+  },
   'alternative.removeSecret': {
     plain: 'Remove the secret from the call: read it from an environment variable or a secrets manager instead of writing it out.',
   },
@@ -91,8 +104,16 @@ const TABLE = {
   // The escalation's header: the dialog caps it at 12 characters.
   'ask.rollHeader': { plain: 'Council', themed: 'Loot roll' },
   'ask.title': { plain: 'A gated call needs your decision.', themed: 'Loot roll: a gated call needs your decision.' },
-  'ask.call': { plain: 'Call: {call}' },
+  // Text the call supplies (the call, a preview) is shown after this gutter on every line, so none of it can pass for a line of the dialog.
+  'ask.gutter': { plain: '  | ' },
+  'ask.call': { plain: 'Call:\n{call}' },
+  // The dialog's own marker where an excerpt was cut: it starts with two spaces and no gutter, which a line of the call never does.
+  'ask.omitted': { plain: '  [... {lines} line(s) and {chars} character(s) not shown ...]' },
+  // Where a reviewer's reason or a secret's snippet was cut to fit the dialog: said at the cut, on the same line.
+  'ask.reasonCut': { plain: ' [... {chars} character(s) not shown ...]' },
   'ask.rule': { plain: 'Why it was gated: {reason}' },
+  // A rule from the project's rules file: its words come from the repository, so they sit after the gutter like the call's.
+  'ask.ruleProject': { plain: "Why it was gated (the project's own words):\n{reason}" },
   'ask.verdict': { plain: '{who}: {verdict}. {reason}' },
   'ask.failed': { plain: '{who}: no verdict ({problem}).' },
   'ask.preview': { plain: 'What it would touch:\n{preview}' },
@@ -111,9 +132,6 @@ const TABLE = {
   },
   'ask.confirmAdd': { plain: 'Add it' },
   'ask.confirmCancel': { plain: 'Cancel' },
-  'ask.suggestRule': {
-    plain: 'You allowed this call once. Add an allow rule to {path}, so the same call passes from now on without review or a question? Block rules, protected paths and the secrets scan of other calls are unaffected. The exact rule:\n{json}',
-  },
   'ask.suggestAdd': { plain: 'Add the rule' },
   'ask.suggestDecline': { plain: 'Not now' },
 
@@ -123,8 +141,20 @@ const TABLE = {
   'escalate.budget': { plain: "The session's review token budget is spent." },
   'escalate.failed': { plain: 'The reviewer could not give a verdict.' },
   'escalate.councilFailed': { plain: 'A big operation went to the full council, and members of it could not give a verdict.' },
+  'escalate.commandCut': {
+    plain: "The command, or a script or SQL file it runs, was too long to review in full, so a reviewer's approval of it does not count.",
+  },
+  'escalate.tooManyParts': {
+    plain: 'The command has too many separate gated parts to track (more than eight), so no reviewer decides it; split it into smaller commands.',
+  },
   'escalate.rounds': { plain: 'The reviewer refused this operation twice since you last wrote; it comes to you before any further review.' },
   'escalate.secretLow': { plain: 'The secrets scan found something that may be a secret.' },
+  'escalate.secretPartial': { plain: 'The call is too long for the secrets scan to read in full, so a secret could be in the part it did not read.' },
+  'escalate.secretLowPartial': {
+    plain: 'The secrets scan found something that may be a secret, and the call is too long for it to read in full, so another could be in the part it did not read.',
+  },
+  // The review approved, and a project rule from a rules file nobody has confirmed also asks about this call.
+  'escalate.askProject': { plain: "The project's rules file asks you about this call too, after its review." },
 
   // Notices for the user (not Claude). The engine labels toasts with the
   // plugin's name itself; that label is outside the mod's reach.
@@ -132,6 +162,11 @@ const TABLE = {
     plain: 'Council: {path} was ignored and the shipped rules are in force: {errors}',
   },
   'notice.configBrokenShort': { plain: 'Council: project rules ignored (see transcript); shipped rules in force' },
+  // A file with errors whose entries that can only tighten still stand.
+  'notice.configPartial': {
+    plain: 'Council: {path} has errors and is only partly applied: what can only tighten (its block, ask and review rules, protected paths and branches, production patterns and big operations) still applies and adds to the shipped rules; everything else in it is ignored, and its project checks are not run: {errors}',
+  },
+  'notice.configPartialShort': { plain: 'Council: project rules file has errors; partly applied (see transcript)' },
   'notice.bypass': { plain: 'Council: bypass is on; {tool} passed without review' },
   'notice.modelFailed': { plain: 'Council: {who} could not use model "{model}" ({problem}); set its model in /config' },
   'notice.allowedOnce': { plain: 'Council: you allowed this once' },
@@ -145,10 +180,27 @@ const TABLE = {
   },
   'notice.commandFailed': { plain: 'Council: /council could not be registered ({problem})' },
   'notice.auditFailed': { plain: 'Council: audit write failed: {problem}' },
+  // The first failure of the session: said once in the transcript and as a toast; /council status counts them.
+  'notice.auditFailedFirst': {
+    plain: 'Council: an audit line could not be written ({problem}). The audit log may be missing calls from here on; /council status counts the lines that failed.',
+  },
+  'notice.auditFailedShort': { plain: 'Council: the audit log could not be written (see transcript)' },
   'notice.noSurface': {
     plain: "The council-of-elrond plugin is active in this session: it reviews risky tool calls before they run, and some calls need the user's approval. This client cannot show the council's questions, so a call that needs the user is refused here instead, with the reason. When that happens, tell the user which call was refused and why. {chatRoute} {route} Here /council status, report, rules and test answer through you.",
   },
   'notice.appendFailed': { plain: 'Council: the start notice could not be added to the conversation ({problem})' },
+  'notice.rulesUntrusted': {
+    plain: 'Council: the project rules file has settings that are ignored until you confirm them: {summary}. Run /council trust to see them and confirm, or set trustProjectRules to always in the plugin configuration if you control which repositories this host opens. Its block, ask and review rules apply meanwhile and only add to what the shipped rules decide; so do its protected paths and the like. Once you confirm the file, all of its rules decide before the shipped ones.',
+  },
+  'notice.rulesUntrustedShort': { plain: 'Council: project rules file not confirmed; some settings ignored (run /council trust)' },
+  // A file with rules that apply now and only add, and nothing that waits: confirming it changes which rules decide.
+  'notice.rulesUnconfirmed': {
+    plain: 'Council: the project rules file has rules that apply now and only add to what the shipped rules decide: {summary}. If you confirm it, its rules decide before the shipped ones. Run /council trust to see them and confirm, or set trustProjectRules to always in the plugin configuration if you control which repositories this host opens.',
+  },
+  'notice.rulesUnconfirmedShort': { plain: 'Council: project rules file not confirmed; its rules only add for now (run /council trust)' },
+  'notice.trustNotSaved': {
+    plain: 'Council: the rules file was changed, but the trust record could not be saved ({problem}); its settings that need confirming are ignored until you run /council trust',
+  },
   'notice.sessionMalformed': { plain: 'Council: the stored session record has an unexpected shape; it is read as a fresh one' },
 
   // Where nothing draws, the model is the only channel to the person (ROADMAP C2): text Claude reads, plain only.
@@ -162,6 +214,19 @@ const TABLE = {
   'relay.chatSession': { plain: ' (or council allow {code} session to allow it for the rest of this session)' },
   'relay.chatRoute': {
     plain: 'When a refusal gives a code such as council:1a2b3c, give the user that code exactly as written: they can let that exact call run once by typing council allow 1a2b3c on its own line in their next message, or refuse it with council deny 1a2b3c.',
+  },
+  // Counts only: nothing from the rules file reaches the model.
+  'relay.rulesUntrusted': {
+    plain: 'The council-of-elrond plugin found a project rules file with settings that need the user to confirm them: {summary}. They are ignored until the user runs /council trust, and a big operation whose project checks are among them is refused meanwhile, because the checks are not run. Tell the user this in your next reply, once. Do not edit the rules file to change it: it is a protected path. If this client cannot show the output of /council trust, the user can set the trustProjectRules plugin option to always, or confirm in a terminal.',
+  },
+  'relay.rulesUnconfirmed': {
+    plain: 'The council-of-elrond plugin found a project rules file with rules ({summary}) that apply now and only add to what the shipped rules decide. If the user confirms the file with /council trust, its rules decide before the shipped ones. Tell the user this in your next reply, once. Do not edit the rules file to change it: it is a protected path. If this client cannot show the output of /council trust, the user can set the trustProjectRules plugin option to always, or confirm in a terminal.',
+  },
+  'relay.rulesPartial': {
+    plain: 'The council-of-elrond plugin found a project rules file with {n} error(s). Only what can make the gate stricter in it is applied (block, ask and review rules, protected paths and the like), added to the shipped rules; everything else in it is ignored, and a big operation whose project checks it names is refused meanwhile, because the checks are not run. Tell the user this in your next reply, once; /council rules lists the errors. Do not edit the rules file to change it: it is a protected path.',
+  },
+  'relay.rulesIgnored': {
+    plain: 'The council-of-elrond plugin found a project rules file it could not read ({n} error(s)), so none of it is applied and the shipped rules are in force. Tell the user this in your next reply, once; /council rules lists the errors. Do not edit the rules file to change it: it is a protected path.',
   },
   'relay.join': { plain: ', ' },
   'relay.behindRule': { plain: 'rule {id}' },
@@ -194,14 +259,14 @@ const TABLE = {
   // /council output (shown to the user; where nothing draws, four subcommands also go to Claude: see relay.*)
   'cmd.title': { plain: 'Council' },
   'cmd.help': {
-    plain: 'Usage: /council [on | off | shadow on|off | log [n] | rules | test "<command>" | model [<member> <model> [--save]] | reload | report | debate]',
+    plain: 'Usage: /council [on | off | shadow on|off | log [n] | rules | test "<command>" | model [<member> <model> [--save]] | trust [<code>] | untrust | reload | report | debate]',
   },
-  'cmd.description': { plain: 'The council: status, bypass, shadow mode, log, rules, test a command, models, reload, report, debate pane' },
+  'cmd.description': { plain: 'The council: status, bypass, shadow mode, log, rules, test a command, models, trust a project rules file, reload, report, debate pane' },
   'cmd.argumentHint': {
-    plain: '[on|off|shadow on|off|log [n]|rules|test "<cmd>"|model [<member> <model> [--save]]|reload|report|debate]',
+    plain: '[on|off|shadow on|off|log [n]|rules|test "<cmd>"|model [<member> <model> [--save]]|trust [<code>]|untrust|reload|report|debate]',
   },
   'cmd.needsPerson': {
-    plain: 'Nothing was changed: off, shadow on and model only run when a person types them, not from a plugin, another session or a scheduled prompt.',
+    plain: 'Nothing was changed: off, shadow on, model, trust and reload only run when a person types them, not from a plugin, another session or a scheduled prompt.',
   },
   'cmd.unknown': { plain: 'Unknown subcommand "{sub}".' },
   'cmd.mode': { plain: 'Mode: {mode}' },
@@ -236,13 +301,16 @@ const TABLE = {
   'cmd.ruleLine': { plain: '  {tier}  {id}  [{source}]  {reason}' },
   'cmd.listLine': { plain: '{name}: {items}' },
   'cmd.list.protectedPaths': { plain: 'Protected paths' },
+  'cmd.list.writeProtected': { plain: 'Protected against writes' },
   'cmd.list.protectedBranches': { plain: 'Protected branches' },
   'cmd.list.production': { plain: 'Production-looking patterns' },
   'cmd.list.secretPatterns': { plain: 'Extra secret patterns' },
   'cmd.list.allowlist': { plain: 'Secret allowlist entries' },
-  // In place of an exact-string allowlist entry in the copy Claude relays: not even its first characters.
+  // In place of an exact-string allowlist entry, in every copy: not even its first characters.
   'cmd.allowlistHidden': { plain: '(an exact string, not shown)' },
   'cmd.configErrors': { plain: 'The project rules file was ignored: {errors}' },
+  'cmd.configPartial': { plain: 'The project rules file has errors and is partly applied (what only tightens stands, the rest is ignored): {errors}' },
+  'cmd.auditFailures': { plain: 'Audit lines that could not be written this session: {n}' },
   'cmd.testTitle': { plain: 'Test of {command} (nothing runs)' },
   'cmd.testUsage': { plain: 'Usage: /council test "<command>". The command is classified only; nothing runs.' },
   'cmd.testTier': { plain: 'Tier: {tier}' },
@@ -260,6 +328,12 @@ const TABLE = {
   'cmd.testCouncilNobody': { plain: 'Reviewer: none: it is a big operation ({entry}), but no member of {who} is switched on; it would come to you.' },
   'cmd.testCouncilOff': { plain: '  It is a big operation ({entry}), but {who} is switched off in /config, so one reviewer takes it.' },
   'cmd.testCouncilChecks': { plain: '  {who} would run alongside: {names}.' },
+  'cmd.testCouncilChecksUntrusted': {
+    plain: '  {who} would not run the project checks: the rules file is not trusted, so the council would block until it is confirmed (/council trust).',
+  },
+  'cmd.testCouncilChecksBroken': {
+    plain: '  {who} would not run the project checks: the rules file has errors, so the council would block until it is fixed (/council reload).',
+  },
   'cmd.testCouncilNoChecks': { plain: '  No project checks are configured in the rules file.' },
   'cmd.testCouncilBranch': { plain: '  A merge goes to {who} when the current branch is protected; /council test runs nothing, so it assumed so.' },
   'cmd.testOperation': { plain: 'Operation key: {key}' },
@@ -278,10 +352,117 @@ const TABLE = {
   'cmd.modelNotOption': { plain: '/config offers only {options} for it' },
   'cmd.reloaded': { plain: 'Rules reloaded: {count} rules ({origin}).' },
 
-  // The allow rule offered after "allow once" (its reason, as written to the rules file)
-  'suggest.reason': { plain: 'You allowed this exact call after the council stopped it, and added this rule.' },
+  // Trusting a project's rules file (/council trust, untrust, and the status lines). Values taken from the file are shown after the gutter.
+  'trust.count.rules': { plain: '{n} allow rule(s)' },
+  'trust.count.disabled': { plain: '{n} disabled shipped rule(s)' },
+  'trust.count.allowlist': { plain: '{n} allowlisted secret(s)' },
+  'trust.count.models': { plain: '{n} model choice(s)' },
+  'trust.count.checks': { plain: '{n} project check(s)' },
+  'trust.count.patterns': { plain: '{n} secret pattern(s)' },
+  // What applies now and only adds, counted apart from what confirming switches on.
+  'trust.count.appliedRules': { plain: '{n} block, ask or review rule(s)' },
+  'trust.count.appliedLists': { plain: '{n} protected path, branch, production pattern or big operation entr(y/ies)' },
+  'trust.state.confirmed': { plain: 'Project rules file: trusted (you confirmed this content); its settings are in force.' },
+  'trust.state.option': { plain: 'Project rules file: trusted by the trustProjectRules option (always).' },
+  'trust.state.untrusted': {
+    plain: 'Project rules file: not trusted. Ignored until you run /council trust: {summary}. Its block, ask and review rules apply and only add to what the shipped rules decide, as do its protected paths and the like. Once you confirm the file, all of its rules decide before the shipped ones. No allow rule or allowlist entry is offered for it meanwhile, and a big operation whose project checks are among the ignored settings is refused.',
+  },
+  'trust.state.unconfirmed': {
+    plain: 'Project rules file: not confirmed. It has rules that apply now and only add to what the shipped rules decide ({summary}); nothing in it is ignored. Confirming it with /council trust lets its rules decide before the shipped ones. No allow rule or allowlist entry is offered for it meanwhile.',
+  },
+  'config.state.partial': {
+    plain: 'Project rules file: partly applied: {n} error(s). Its block, ask and review rules, protected paths and the like apply and only add to what the shipped rules decide; everything else in it is ignored, and a big operation whose project checks it names is refused. /council rules lists the errors.',
+  },
+  'config.state.ignored': {
+    plain: 'Project rules file: ignored: not readable ({n} error(s)). The shipped rules are in force. /council rules lists the errors.',
+  },
+  'trust.usage': { plain: 'Usage: /council trust [<code>] | untrust. The code is 8 hex characters, shown by /council trust after it lists the file.' },
+  'trust.none': { plain: 'No rules file in this scope is waiting for your confirmation.' },
+  'trust.option': { plain: 'The trustProjectRules option is "always": every rules file is trusted, so there is nothing to confirm.' },
+  'trust.file': { plain: '{where}: waiting for your confirmation. Ignored until you confirm this content: {summary}.' },
+  'trust.fileApplied': { plain: '{where}: waiting for your confirmation. Nothing in it is ignored; its rules apply now and only add to the shipped rules.' },
+  'trust.group.applied': { plain: 'Applies now and only adds to the shipped rules:' },
+  'trust.group.held': { plain: 'Switched on by confirming:' },
+  'trust.decideFirst': {
+    plain: 'After you confirm, these rules decide before the shipped ones, so a review rule here can replace a shipped question.',
+  },
+  'trust.rule': { plain: '  rule {n}:' },
+  'trust.protectedPath': { plain: '  protected path:' },
+  'trust.protectedBranch': { plain: '  protected branch:' },
+  'trust.productionPattern': { plain: '  production pattern:' },
+  'trust.bigOperation': { plain: '  big operation:' },
+  // Under a rule that names no command, path or input pattern, or names every tool: what that comes to.
+  'trust.matchesAll': { plain: '  This rule has no command, path or input pattern: it matches every call of the tools it names.' },
+  'trust.allTools': { plain: '  Its tools match every tool.' },
+  'trust.disabled': { plain: '  switches off the shipped rule:' },
+  'trust.allowlist': { plain: '  allowlists {n} secret(s) (the entries are not shown)' },
+  'trust.model': { plain: '  uses a model for {slot}:' },
+  'trust.check': { plain: '  project check {n}, run outside the permission prompts:' },
+  'trust.pattern': { plain: '  secret pattern {n}:' },
+  // One field of an item: the name is the schema's, the value is the file's, shown whole.
+  'trust.field': { plain: '{name}: {value}' },
+  'trust.fieldItem': { plain: '{name}[{index}]: {value}' },
+  'trust.quoted': { plain: '"{value}"' },
+  'trust.secretHidden': { plain: '[not shown: looks like a secret]' },
+  'trust.markLong': { plain: ' [over {max} characters: {n}]' },
+  'trust.markUnclean': { plain: ' [had control, invisible or direction-changing characters]' },
+  'trust.moreItems': { plain: '  ... {n} more setting(s) are not listed' },
+  'trust.moreFiles': { plain: '{n} more rules file(s) are not listed and cannot be confirmed from here.' },
+  'trust.why.items': { plain: 'it holds {n} settings to list, and at most {max} can be listed' },
+  'trust.why.secret': { plain: '{n} value(s) look like a secret and are not shown' },
+  'trust.why.long': { plain: '{n} value(s) are longer than {max} characters' },
+  'trust.why.unclean': { plain: '{n} value(s) hold control, invisible or direction-changing characters' },
+  'trust.why.files': { plain: 'too many rules files are waiting to list them all' },
+  'trust.unconfirmable': {
+    plain: 'This file cannot be confirmed from the session because {why}. Shorten or fix the file, or set trustProjectRules to always in the plugin configuration if you control which repositories this host opens.',
+  },
+  'trust.code': {
+    plain: 'Its code is {code}. To confirm exactly this content, type: /council trust {code}. Any change to the file makes it untrusted again.',
+  },
+  'trust.confirmedFile': { plain: '{where}: confirmed. Now in force: {summary}.' },
+  'trust.confirmedRules': { plain: '{where}: confirmed. Its rules now decide before the shipped ones: {summary}.' },
+  'trust.noMatch': {
+    plain: 'Nothing was confirmed: no rules file in this scope has the code {code} now (it may have changed since). Run /council trust and read what it lists.',
+  },
+  'trust.notListed': {
+    plain: 'Nothing was confirmed: this content has not been listed in this session. Run /council trust first, read what it lists, then type its code.',
+  },
+  'trust.ambiguous': {
+    plain: 'Nothing was confirmed: the code {code} fits rules files with different content. Start a new session and run /council trust again.',
+  },
+  'trust.saveFailed': { plain: 'Nothing was confirmed: the trust record could not be saved ({problem}).' },
+  'trust.untrusted': {
+    plain: 'The trust record was removed for {n} rules file(s) in this scope; their settings that need confirming are ignored again.',
+  },
+  'trust.untrustNone': { plain: 'No rules file in this scope had a trust record.' },
+  'trust.writeRefused': {
+    plain: 'the rules file has not been confirmed (/council trust), so the mod does not change it',
+  },
+  'trust.untrustOption': { plain: 'The trustProjectRules option is "always", so rules files stay trusted until it is changed.' },
 
-  // /council report (shown to the user, never to Claude)
+  // The allow rule offered after "allow once" (its reason, as written to the rules file)
+  // The question asked about that rule, by what the rule covers. Each kind says what it really allows.
+  'suggest.question.shell': {
+    plain: 'You allowed this call once. Add an allow rule to {path}? The rule allows this exact command text, in any folder, without review. Block rules, protected paths and the secrets scan of other calls are unaffected. The exact rule:\n{json}',
+  },
+  'suggest.question.file': {
+    plain: 'You allowed this call once. Add an allow rule to {path}? The rule allows every later write to this file by this tool, whatever it writes, without review. Block rules, protected paths and the secrets scan of other calls are unaffected. The exact rule:\n{json}',
+  },
+  'suggest.question.tool': {
+    plain: 'You allowed this call once. Add an allow rule to {path}? The rule allows this tool with exactly these arguments. Block rules, protected paths and the secrets scan of other calls are unaffected. The exact rule:\n{json}',
+  },
+  // The reason written into the rule, as it reads in the rules file
+  'suggest.reason.shell': {
+    plain: 'You allowed this call once after the council stopped it, and added this rule: it allows this exact command text, in any folder, without review.',
+  },
+  'suggest.reason.file': {
+    plain: 'You allowed this call once after the council stopped it, and added this rule: it allows every later write to this file by this tool, whatever it writes, without review.',
+  },
+  'suggest.reason.tool': {
+    plain: 'You allowed this call once after the council stopped it, and added this rule: it allows this tool with exactly these arguments.',
+  },
+
+  // /council report (shown to the user; where nothing draws it also reaches Claude, redacted line by line: see relay.*)
   'report.title': { plain: 'Council report (the audit log, rotated files included)' },
   'report.empty': { plain: 'No gated calls are logged yet.' },
   'report.unreadable': { plain: 'Left out: {problem}' },
