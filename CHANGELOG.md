@@ -143,7 +143,19 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   read as `env`'s own words (options, assignments, then the command), not as a plain command. Everyday
   `env -S 'node --check' f.js` stays reviewed (a script file; 0.5.0 allowed it), `env -S node --experimental-vm-modules
   node_modules/.bin/jest` is reviewed as a script path, as in 0.5.0, and a loop `env -S "node --check" "$f"` is
-  reviewed (a program computed at run time). **With three exceptions** this is never lower than `origin/main`: `nsenter` with one ambiguous `-S`/`-G` option in front of an `env` whose string is glued to the option or clustered, the `gosu` wrapper in front, and the `busybox` wrapper in front (a review or an ask in each, an allow for `busybox`; none runs the command `origin/main` blocked on, as far as was reasoned). A split string that holds the program and its first arguments, followed by more arguments, gets the tier `origin/main` gave to those following words read as a command (an argument that names a privileged program asks, one that reads like a delete is reviewed, a remote-exec string followed by a destructive command is refused). A chain of four wrapper strings followed by one very long dash word with expansions takes about 1 s at 20,000 characters.
+  reviewed (a program computed at run time). This is never lower than 0.5.0, also behind `nsenter` with an ambiguous `-S`/`-G` option, behind `gosu` and behind `busybox` (next entry). A split string that holds the program and its first arguments, followed by more arguments, gets the tier `origin/main` gave to those following words read as a command (an argument that names a privileged program asks, one that reads like a delete is reviewed, a remote-exec string followed by a destructive command is refused). A chain of four wrapper strings followed by one very long dash word with expansions takes about 1 s at 20,000 characters.
+- **`gosu` and `busybox` are read both ways, and the second `nsenter` reading reads an `env` split string as the first does.**
+  The word after `gosu` is read as the user and also as the program, as 0.5.0 read it, so `gosu rm -rf /home/me` is
+  blocked again (an ask before), and the command 0.5.0 read after a split string keeps its program behind `gosu`.
+  `busybox` is read as a wrapper of its applet and also as 0.5.0 read it: the value of a later `-c` word (or of a
+  cluster of letters holding a `c`, or `--command`) is classified as a script, so `busybox x -c '<script>'` gets the
+  script's tier again, and the command after a split string behind `busybox` is read. Where `nsenter -S` or `-G` is
+  followed by a separate word, the reading in which the option takes that word now makes every added reading the
+  first one makes (the string alone, 0.5.0's command), so a split string glued to `env`'s option or in a cluster
+  behind it is read as in 0.5.0. Everyday `gosu <user> <command>` and `busybox <applet>` keep their tier, with one
+  class of exceptions that 0.5.0 had too: a `busybox` applet option that is a cluster holding a `c` and is followed
+  by a path (`busybox tar -czf /tmp/out.tgz .`, `busybox wget -c <url>`) is reviewed as a program run by its path.
+  Each added reading is one more part charged to the added readings' budget.
 - **An `env -S` string that holds a `${NAME}` expansion is reviewed and read three ways.** `env` expands the name
   from its environment, and one that is unset expands to nothing, so its word vanishes, an option before it takes the
   next word, and the words after the string can become the command. The classifier cannot know the value, so the

@@ -492,6 +492,10 @@ type Core = {
   extraScripts: string[]
   /** An `nsenter` option whose separate next word may or may not be its value was met: the part is also read as if every one takes it. */
   isAmbiguous: boolean
+  /** A `gosu` with a word after its options was met: the part is also read with that word as the program (§16 item 48). */
+  hasGosuWord: boolean
+  /** This reading met an `env -S` string, so `origin/main`'s reading of the part was made (or was the part's own words). */
+  hasMainReading: boolean
   /**
    * The words from a wrapper or runner whose options could not be read for
    * sure (one the tables do not know): they are classified again as they stand,
@@ -820,7 +824,35 @@ const MAIN_WRAPPERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['run0', new Set(['--uid', '--gid', '-u', '-g', '--setenv', '--chdir', '-D'])],
   ['chpst', new Set(['-u', '-U', '-e', '-/', '-n', '-l', '-L'])],
   ['pkexec', new Set(['--user'])],
+  // Not a wrapper on `origin/main` (its walk stopped there and read the part as a shell's): the walk goes on behind it, as
+  // behind the others, so an `env -S` string after it is found and the command after the string is read (§16 item 48).
+  ['busybox', new Set()],
 ])
+
+/**
+ * The script `origin/main` took from a part whose program was `busybox`, which it read as a shell: the word after the
+ * first `-c`, `--command` or cluster of letters holding a `c` among the words from `from` on (after a `--`, the word
+ * after that). Read as an added script beside the applet (§16 item 48). One pass, no backtracking.
+ */
+function mainShellScriptOf(words: readonly string[], from: number): string | undefined {
+  for (let i = from; i < words.length; i++) {
+    const word = words[i] as string
+    if (word === '--command' || (word.startsWith('-') && word.includes('c') && /^-[a-zA-Z]+$/.test(word))) {
+      return words[i + 1] === '--' ? words[i + 2] : words[i + 1]
+    }
+  }
+  return undefined
+}
+
+/**
+ * Which reading of a part `coreOf` makes. The first is the part as the tables read it. The added ones are whole readings
+ * of the same words, each one more part charged to the extras' budgets: `takesAmbiguous`, where every ambiguous `nsenter`
+ * option takes its next word (§16 items 40, 42), and `isGosuProgram`, where the word after `gosu` is the program, as
+ * `origin/main` read it, and not the user (§16 item 48). `hasMainReading` says an earlier reading of the part already made
+ * `origin/main`'s reading of it, which is the same for all of them.
+ */
+type Reading = { takesAmbiguous: boolean; isGosuProgram: boolean; hasMainReading: boolean }
+const FIRST_READING: Reading = { takesAmbiguous: false, isGosuProgram: false, hasMainReading: false }
 const MAIN_TWO_WORD_RUNNERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['npm', new Set(['exec', 'x'])], ['pnpm', new Set(['exec', 'dlx'])], ['yarn', new Set(['exec', 'dlx'])], ['poetry', new Set(['run'])],
   ['pipenv', new Set(['run'])], ['pdm', new Set(['run'])], ['rye', new Set(['run'])], ['hatch', new Set(['run'])], ['uv', new Set(['run'])],
@@ -877,6 +909,7 @@ function mainEnvWalk(words: readonly string[]): { strings: string[]; rest: strin
   const found: string[] = []
   const privileged: string[] = []
   const scripts: string[] = []
+  let hasMetBusybox = false
   let k = caseArmEnd(words)
   for (;;) {
     k = triviaEnd(words, k)
@@ -919,6 +952,12 @@ function mainEnvWalk(words: readonly string[]): { strings: string[]; rest: strin
     if (takesValue === undefined) break
     if (PRIVILEGE_WRAPPERS.has(name)) privileged.push(name)
     k++
+    // Main read the part as a shell's from its first `busybox` on: the script it took stays read when the walk goes on.
+    if (name === 'busybox' && !hasMetBusybox) {
+      hasMetBusybox = true
+      const script = mainShellScriptOf(words, k)
+      if (script !== undefined) scripts.push(script)
+    }
     while (k < words.length) {
       const option = words[k] as string
       if (option === '--') {
@@ -962,10 +1001,17 @@ function braceWords(word: string): string[] | undefined {
 }
 
 /**
- * Strips assignments, keywords, wrappers and git's global options. With `isReadingA` an `nsenter` option whose separate
- * next word may or may not be its value takes it (the other of the two readings; `Core.isAmbiguous` says there is one).
+ * Strips assignments, keywords, wrappers and git's global options. With `reading.takesAmbiguous` an `nsenter` option whose
+ * separate next word may or may not be its value takes it (the other of the two readings; `Core.isAmbiguous` says there
+ * is one); with `reading.isGosuProgram` the word after `gosu` is the program (`Core.hasGosuWord` says there is one).
  */
-function coreOf(input: readonly string[], isReadingA = false): Core {
+function coreOf(input: readonly string[], reading: Reading = FIRST_READING): Core {
+  const isReadingA = reading.takesAmbiguous
+  const isAdded = reading.takesAmbiguous || reading.isGosuProgram
+  let hasGosuWord = false
+  // 0.5.0's script of the first `busybox` of the part (see `mainShellScriptOf`).
+  let hasMetBusybox = false
+  let busyboxScript: string | undefined
   let words = input
   let k = 0
   const wrappers: string[] = []
@@ -980,7 +1026,8 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
   // that repeats one makes main's parts run out, and so ours: the same count, in the extras' budget). The strings main's own
   // walk over the words found (`mainEnvWalk`) are read first, whatever env's splitting leaves of them; the loop below
   // reads the others (an attached `-Sx` is a string for env and was a flag for main) and not again those already read.
-  // The second reading of `nsenter` has the same words and the same walk, so it makes none.
+  // An added reading (`Reading`) has the same words, so main's walk finds the same strings and the first reading has read
+  // them; its own walk can differ (it can reach an `env` the first did not), so it reads the others it meets (§16 item 48).
   const aloneToRead = new Map<string, number>()
   // `origin/main`'s whole reading of the part (§16 item 47): the strings were an option's values, the words after them went
   // on as env's own (options, assignments) and the first that is none was the command. Whatever env's own splitting makes of
@@ -996,12 +1043,12 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
     if (left > 0) aloneToRead.set(text, left - 1)
     else extraScripts.push(text)
   }
-  if (!isReadingA) {
+  {
     const main = mainEnvWalk(input)
     for (const alone of main.strings) {
       if (alone === '') continue
       aloneToRead.set(alone, (aloneToRead.get(alone) ?? 0) + 1)
-      extraScripts.push(alone)
+      if (!isAdded) extraScripts.push(alone)
     }
     mainReading = [...main.privileged, ...main.rest]
     mainScripts = main.scripts
@@ -1021,7 +1068,7 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
   // stopped at the first): a text in such a word that a rule matches (`env 'dd if=/dev/zero of=/dev/sda' ""`) still reviews.
   let hasReadAsProgram = false
   const readAsProgram = (at: number) => {
-    if (hasReadAsProgram || isReadingA) return
+    if (hasReadAsProgram) return
     hasReadAsProgram = true
     extraScripts.push(words.slice(at).map(quoted).join(' '))
   }
@@ -1154,6 +1201,10 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
     if (spec === undefined) break
     wrappers.push(name)
     k++
+    if (canonical === 'busybox' && !hasMetBusybox) {
+      hasMetBusybox = true
+      busyboxScript = mainShellScriptOf(words, k)
+    }
     if (spec.movesDir) movesDir = true
     let isPidForm = false
     const splits: { raw: string; rest: string[] }[] = []
@@ -1207,7 +1258,7 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
             const split = envSplit(raw)
             // Each string is also read alone as a script, as `origin/main` read it: an extra (the splice below and the readings
             // past the bound add to it and never stand for it, and it can neither use up the room of the text nor be cut by it).
-            if (!isReadingA) readAlone(raw)
+            readAlone(raw)
             // Past the bound the strings are no longer spliced (that copies every word after them, and a crafted command
             // made it quadratic): they are read together, in order, with the words between and after them, as two scripts
             // (extras): the env reading (each string split as env splits it, each word quoted) and the shell reading (the
@@ -1267,7 +1318,14 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
       skipOptions()
     }
     if (canonical === 'timeout' && k < words.length) k++ // the duration
-    if (canonical === 'gosu' && k < words.length) k++ // the user
+    // gosu USER CMD. `origin/main` read the word after `gosu` as the program, so the part is read both ways (§16 item 48):
+    // here the word is the user, and in the added reading it is the program (a wrapper there is stripped in its turn, as
+    // main's walk did). What the added reading found before its first `gosu` the first reading has found: not read twice.
+    if (canonical === 'gosu' && k < words.length) {
+      if (!reading.isGosuProgram) k++
+      else if (!hasGosuWord) extraScripts.length = 0
+      hasGosuWord = true
+    }
     // chroot NEWROOT CMD, flock LOCKFILE CMD: one positional before the command.
     if ((canonical === 'chroot' || canonical === 'flock') && k < words.length && !(words[k] as string).startsWith('-')) {
       k++
@@ -1278,7 +1336,10 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
     // The second reading of a spliced string (the shell scanner's, beside env's own that is in the part): an extra.
     for (const split of splits) extraScripts.push([split.raw, ...split.rest.map(quoted)].join(' '))
   }
-  if (hasMainEnvString || envSplices > 0) {
+  const hasMainReading = hasMainEnvString || envSplices > 0
+  // An added reading makes it when no reading before it did: it met an `env -S` string that the first reading did not reach
+  // (`nsenter -S 0 env -Sx cmd`, where the first reading takes `0` for the program).
+  if (hasMainReading && !reading.hasMainReading) {
     // Not when it is the part's own words again (the walk of main stopped at the first word: a wrapper main did not know, a
     // brace word): its reading would be this one, and so on to the extras' depth, and the call refused.
     if (mainReading.length > 0 && !(mainReading.length === input.length && mainReading.every((word, index) => word === input[index]))) {
@@ -1318,7 +1379,23 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
     }
     coreWords.splice(1, g - 1)
   }
-  return { wrappers, coreWords, nestedScripts, extraScripts, isAmbiguous, movesDir, optionValues, ...(unresolved !== undefined && { unresolved }) }
+  // `origin/main` read `busybox` as a shell: the value of a later `-c` word was a script. Read too, as an extra, unless the
+  // applet reading holds that very script already (`busybox sh -c '...'`).
+  if (busyboxScript !== undefined && busyboxScript !== '' && !nestedScripts.includes(busyboxScript) && !inlineOf(coreWords).scripts.includes(busyboxScript)) {
+    extraScripts.push(busyboxScript)
+  }
+  return {
+    wrappers,
+    coreWords,
+    nestedScripts,
+    extraScripts,
+    isAmbiguous,
+    hasGosuWord,
+    hasMainReading: hasMainReading || reading.hasMainReading,
+    movesDir,
+    optionValues,
+    ...(unresolved !== undefined && { unresolved }),
+  }
 }
 
 /** `script` options that take the next word. */
@@ -1946,8 +2023,22 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
       return true
     }
     if (words.length > 0 || redirects.length > 0) {
+      // The added readings of the part (`Reading`): the ambiguous `nsenter` options taking their word, the word after
+      // `gosu` as the program, and both, each made only when it can differ from one made before it.
       const core = coreOf(words)
-      if (makePart(core, false) && core.isAmbiguous) makePart(coreOf(words, true), true)
+      if (makePart(core, false)) {
+        let hasMainReading = core.hasMainReading
+        const added = (takesAmbiguous: boolean, isGosuProgram: boolean): Core | undefined => {
+          const more = coreOf(words, { takesAmbiguous, isGosuProgram, hasMainReading })
+          hasMainReading = more.hasMainReading
+          return makePart(more, true) ? more : undefined
+        }
+        const taking = core.isAmbiguous ? added(true, false) : undefined
+        if (!core.isAmbiguous || taking !== undefined) {
+          const program = core.hasGosuWord ? added(false, true) : undefined
+          if ((!core.hasGosuWord || program !== undefined) && (taking?.hasGosuWord === true || program?.isAmbiguous === true)) added(true, true)
+        }
+      }
     }
     if (out.parts.length > owner) {
       pendingHeredocs.push(...heredocTags.map(({ tag, isExpanded }) => ({ tag, owner, isExpanded })))
