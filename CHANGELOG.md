@@ -132,7 +132,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   nested inside one of those; four `env -S` strings that each hold a `${NAME}` expansion followed by a nested script
   (`bash -c ...`), or five followed by anything; 81 commands of one such string each joined in one call, or 134 of
   one string without an expansion (the extra readings share their depth and their parts with the scripts that
-  follow); and four `-Senv` strings with a 19,000-character word. Write the command plainly, or put it in a script
+  follow); a script behind one plain split string is refused from 199 commands (the previous commit: 399), behind one with an expansion from 99 (previous: 133), two plain strings per command joined from 81 commands, and a script with three nested command substitutions behind one split string is refused (already at the previous commit); and four `-Senv` strings with a 19,000-character word. Write the command plainly, or put it in a script
   file and run that.
 - **`origin/main`'s reading of a part with an `env -S` string is always also made, and `env`'s own words are read as
   `env` reads them.** Besides the readings above, the command that 0.5.0 read after the string (it took the string for
@@ -143,7 +143,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   read as `env`'s own words (options, assignments, then the command), not as a plain command. Everyday
   `env -S 'node --check' f.js` stays reviewed (a script file; 0.5.0 allowed it), `env -S node --experimental-vm-modules
   node_modules/.bin/jest` is reviewed as a script path, as in 0.5.0, and a loop `env -S "node --check" "$f"` is
-  reviewed (a program computed at run time).
+  reviewed (a program computed at run time). **With three exceptions** this is never lower than `origin/main`: `nsenter` with one ambiguous `-S`/`-G` option in front of an `env` whose string is glued to the option or clustered, the `gosu` wrapper in front, and the `busybox` wrapper in front (a review or an ask in each, an allow for `busybox`; none runs the command `origin/main` blocked on, as far as was reasoned). A split string that holds the program and its first arguments, followed by more arguments, gets the tier `origin/main` gave to those following words read as a command (an argument that names a privileged program asks, one that reads like a delete is reviewed, a remote-exec string followed by a destructive command is refused). A chain of four wrapper strings followed by one very long dash word with expansions takes about 1 s at 20,000 characters.
 - **An `env -S` string that holds a `${NAME}` expansion is reviewed and read three ways.** `env` expands the name
   from its environment, and one that is unset expands to nothing, so its word vanishes, an option before it takes the
   next word, and the words after the string can become the command. The classifier cannot know the value, so the
@@ -269,7 +269,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   (its blanks, quotes, `\_`, `\c`, `#` comments and `${NAME}`), and is also read alone, as a shell reads it, and as
   the earlier versions read it, so a string `env` cannot read (an error in it) is reviewed and still classified. A
   string that holds a `${NAME}` is reviewed and read three ways, and the command 0.5.0 read after any `env -S` string is
-  read too, so no `env -S` form is read below 0.5.0 (see "Changed"); `env`'s own words after `--` are read as `env`
+  read too, so, with three exceptions (see "Changed"), no `env -S` form is read below 0.5.0; `env`'s own words after `--` are read as `env`
   reads them (a lone `-`, any word with a `=`).
   **The readings the parser adds beside the text have budgets of their own** (400,000 characters scanned, 400
   parts, 4 levels deep): the second `nsenter` reading, the shell scanner's reading of an `env -S` string, the

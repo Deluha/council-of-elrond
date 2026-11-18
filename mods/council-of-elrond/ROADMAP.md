@@ -484,10 +484,10 @@ P1, S3.
   - if M1.1c slipped (OD10 unanswered), the notes and the threat model say that reads of
     credential files are not gated in 0.6.0;
   - confirm with the maintainer the cost of DESIGN §16 item 47: for a command with an `env`
-    split string, `origin/main`'s reading is always made as well, so such commands are never
-    lower than `origin/main`, a shebang-style split string is reviewed as on `origin/main`, and
-    a single call that joins more than about 130 of them is refused (the added readings'
-    budget); raising that budget loosens and is the maintainer's decision;
+    split string, `origin/main`'s reading is always made as well, so such commands are not
+    lower than `origin/main` except for the classes in item 47's list of what is still lower, a shebang-style split string is reviewed as on `origin/main`, and
+    a single call that joins more than about 130 of them is refused, and a script behind one
+    plain split string is refused from 199 commands (the added readings' budget); raising that budget loosens and is the maintainer's decision;
   - the maintainer pushes the tag (MA4); the release workflow is green; a fresh machine installs
     with the one-line command.
 
@@ -812,6 +812,15 @@ and the code it concerns; a session that takes one writes it a brief first.
 - `cleanText` misses some invisible code points (DESIGN §16 item 28, `cleanText`).
 - The 6-character segment rule of the `PWD` exemption redacts ordinary directories named with
   letters and digits (DESIGN §16 item 43); loosening it is the maintainer's decision.
+- `nsenter` with one ambiguous `-S`/`-G` option in front of an `env` whose split string is glued to
+  the option or clustered is read lower than `origin/main` (DESIGN §16 item 47).
+- A `gosu` wrapper in front of an `env` split string takes the first word of `origin/main`'s command
+  as the user, so it is read lower than `origin/main` (DESIGN §16 item 47).
+- A `busybox` wrapper in front is read as a wrapper of the applet, where `origin/main` read a shell
+  and a script, so it is read lower (an allow; DESIGN §16 item 47).
+- A chain of four `env` split strings that each hold a wrapper, followed by one very long dash word
+  with brace lists or expansions, takes about 1 s at 20,000 characters, growing linearly (a known
+  cost, DESIGN §16 item 47).
 
 ## 6. Open decisions
 
