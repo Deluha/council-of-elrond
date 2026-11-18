@@ -516,6 +516,21 @@ describe('redaction noise this release added is gone, and what must be caught st
     for (const line of ['PWD=/correct horse;UID=sa', `PWD=/abcde/fgh${' '.repeat(17)};UID=sa`, 'UID=sa PWD=/home/me/project']) await quiet(line)
   })
 
+  // DESIGN §16 item 47: the context before the name is a space, a tab or a line feed (or the start of the text), as the comment
+  // always said; every other white space code point (which a shell does not read as a blank) makes the name a key.
+  test('(b4) PWD after any white space but a space, a tab or a line feed is the password keyword', async () => {
+    const path = '/home/me/project'
+    for (const before of ['\r', '\v', '\f', ' ', ' ', ' ', ' ', '　', '﻿', 'x\r', 'cd /x ']) {
+      await loud(`${before}PWD=${path}`)
+      await loud(`${before}OLDPWD=${path}`)
+    }
+    // A carriage return before the line feed of a Windows line end is not the character before the name.
+    for (const before of ['', ' ', '\t', '\n', '\r\n', 'cd /x\r\n', '   ', ' \n']) {
+      await quiet(`${before}PWD=${path} make`)
+      await quiet(`${before}OLDPWD=${path} make`)
+    }
+  })
+
   test('(c) a call expression, a subscript chain, a positional default and a small number are code, not secrets', async () => {
     for (const line of [
       'const schema = { password: z.string().min(8) }',

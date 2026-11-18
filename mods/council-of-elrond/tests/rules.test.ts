@@ -3317,9 +3317,11 @@ describe('the extra readings have budgets of their own, and one that is used up 
 
   test('readings added to a part never use up the room of the text the command holds', () => {
     // Each of these parts makes an extra part (the second nsenter reading) or an unresolved copy besides its own: 150 of
-    // them are 150 parts of the text's own, and the 151st command is read, as on main.
-    for (const unit of ['nsenter -S x ls; ', 'sudo --zz ls; ', 'env -S "ls" x; ']) {
-      const command = `${unit.repeat(150)}rm -rf /home/me`
+    // them are 150 parts of the text's own, and the 151st command is read, as on main. An `env -S` command makes three extra
+    // parts (the string alone, the shell's second reading, and what main read as the command: §16 item 47): 130 of those fit
+    // the extras' 400 parts, and the command after them is read.
+    for (const [unit, times] of [['nsenter -S x ls; ', 150], ['sudo --zz ls; ', 150], ['env -S "ls" x; ', 130]] as const) {
+      const command = `${unit.repeat(times)}rm -rf /home/me`
       const split = splitShell(command)
       expect(split.isCut, unit).toBe(false)
       expect(split.isExhausted, unit).toBe(false)
@@ -3372,13 +3374,15 @@ describe('the extra readings have budgets of their own, and one that is used up 
     }
     // A string of 150 commands fits, and so does everything ordinary.
     expect(splitShell(`env -S '${'a;'.repeat(150)}'`).isExhausted).toBe(false)
-    // The characters: the copies of four `-Senv` strings and a 19,000-character word scan about 250,000 of the 400,000 the
-    // extras may; a budget of 100,000 refuses it (no command of 20,000 characters reaches 400,000 without also reaching
+    // The characters: the copies of three `-Senv` strings and a 19,000-character word scan about 210,000 of the 400,000 the
+    // extras may (four scan about 437,000 since main's reading of the part is one more copy of the word: refused; 285,000 before
+    // §16 item 47); a budget of 100,000 refuses it (no command of 20,000 characters reaches 400,000 without also reaching
     // the depth or the parts, so the budget is shown with a smaller one).
-    const wide = `env ${'-Senv '.repeat(4)}echo ${'A'.repeat(19_000)}`
+    const wide = `env ${'-Senv '.repeat(3)}echo ${'A'.repeat(19_000)}`
     expect(splitShell(wide).isExhausted).toBe(false)
     expect(splitShell(wide, 100_000).isExhausted).toBe(true)
     expect(splitShell(wide, 100_000).isCut).toBe(false)
+    expect(splitShell(`env ${'-Senv '.repeat(4)}echo ${'A'.repeat(19_000)}`).isExhausted).toBe(true)
     for (const command of ["env -S 'FOO=1 python3 -u' x.py", 'env -i FOO=1 make', "env -S 'ls -la'", 'nsenter -t 1 -m ls', 'nsenter -t 1 -S 0 ls']) {
       expect(ruleOf(command), command).not.toBe(TOO_COMPLEX_TO_READ)
       expect(splitShell(command).isExhausted, command).toBe(false)
@@ -3634,6 +3638,134 @@ describe('env -S strings are split as GNU env 9.4 splits them, and the first ver
         expect(result.tier).toBe('block')
       }
     })
+  })
+})
+
+describe('env: origin/main\'s reading of a part with an env -S string is always also made, and env\'s own words are read as env reads them (DESIGN §16 item 47)', () => {
+  const hasCore = (command: string, text: string) => splitShell(command).parts.some(part => part.core === text)
+  const BLOCKS = 'rm -rf /home/me'
+
+  test('A: the words origin/main read as the command after a string are read too, with the wrappers that mark a part privileged', () => {
+    // A string that holds the program (or two words) is the program for env; for main it was an option's value and `rm` the command.
+    expectCases([
+      ["env -S 'x y' rm -rf /home/me", 'block', RM],
+      ['env -S printf rm -rf /home/me', 'block', RM],
+      ["env -S 'a b' git push --force origin main", 'block', 'force-push-protected-branch'],
+      // An attached `-S-u` is a string for env and a flag for main: the walk of main ended at `git`.
+      ["env -S'-u' git push --force origin main", 'block', 'force-push-protected-branch'],
+      ["env '-S-i --chdir' rm -rf /home/me", 'block', RM],
+      // The wrapper that marks the part privileged stays in front of what main read as the command.
+      ["env -S 'a b' sudo ls", 'ask', 'privileged'],
+      ["env -S 'a b' doas ls", 'ask', 'privileged'],
+      // A runner's `-c` script that main's walk passed is a script of main's reading too.
+      ["env -S 'a b' npx -c 'rm -rf /home/me' x", 'block', RM],
+      // A shebang-style line is reviewed as the script path main made of the word after the string.
+      ['/usr/bin/env -S node --experimental-vm-modules node_modules/.bin/jest', 'review', 'script-path'],
+    ])
+    // The reading is one more part of the call, and the words are the ones main left as the command.
+    expect(hasCore("env -S 'x y' rm -rf /home/me", 'rm -rf /home/me')).toBe(true)
+    expect(hasCore("env -S 'a b' sudo ls", 'ls')).toBe(true)
+    // Behind wrappers and inside a substitution, as for every reading.
+    for (const form of [(c: string) => `nice ${c}`, (c: string) => `timeout 5 ${c}`, (c: string) => `echo $(${c})`, (c: string) => `bash -c "${c}"`]) {
+      expect(tierOf(form("env -S 'x y' rm -rf /home/me")), form("env -S 'x y' rm -rf /home/me")).toBe('block')
+    }
+    // A part with no env string makes no such reading: `rm` behind a plain `env` is the part's own command and no extra part is added.
+    expect(splitShell('env rm -rf /home/me').parts.filter(part => part.core === BLOCKS)).toHaveLength(1)
+    // The walk is main's whole walk: past a function header and a `case` arm, as main's was.
+    expectCases([
+      ["function deploy { env -S 'x y' rm -rf /home/me; }", 'block', RM],
+      ["deploy() { env -S 'x y' rm -rf /home/me; }", 'block', RM],
+      ["case a in a) env -S 'x y' rm -rf /home/me ;; esac", 'block', RM],
+    ])
+  })
+
+  test('A: a wrapper main did not know ends its walk at the first word: that reading is the part itself and is not made again (no refusal of an ordinary call)', () => {
+    for (const command of [
+      "npm --prefix web exec env -S 'node --flag' script.js",
+      "setarch x86_64 env -S 'x y' rm -rf /home/me",
+      "fakeroot env -S 'x y' rm -rf /home/me",
+      "sudo setarch x86_64 env -S 'x y' ls",
+      "sudo nice setarch x86_64 env -S 'x y' ls",
+      "{env,-S,x} rm -rf /home/me",
+    ]) {
+      expect(splitShell(command).isExhausted, command).toBe(false)
+      expect(ruleOf(command), command).not.toBe(TOO_COMPLEX_TO_READ)
+    }
+    expect(tierOf("sudo setarch x86_64 env -S 'x y' ls")).toBe('ask')
+  })
+
+  test('B: after `--` a lone `-` is env\'s -i and a word with a `=` is an assignment, with or without -S; the earlier reading as the program stays', () => {
+    expectCases([
+      ['env -- - rm -rf /home/me', 'block', RM],
+      ['env -- - A=1 rm -rf /home/me', 'block', RM],
+      ['env =1 rm -rf /home/me', 'block', RM],
+      ['env -- =1 rm -rf /home/me', 'block', RM],
+      ['env -i =1 rm -rf /home/me', 'block', RM],
+      ['env a-b=c rm -rf /home/me', 'block', RM],
+      ['env 1a=b a.b=c rm -rf /home/me', 'block', RM],
+      ['sudo env =1 rm -rf /home/me', 'block', RM],
+      ["env -S '-- - rm -rf /home/me'", 'block', RM],
+      ["env -S '=1 rm -rf /home/me'", 'block', RM],
+      ["env -S '-- =1 rm -rf /home/me'", 'block', RM],
+    ])
+    // The program is the first word after them: `-i` after `--` is the program (env runs a command named `-i`), as before.
+    expect(tierOf('env -- -i rm -rf /home/me')).toBe('allow')
+    // The word that env now reads as its own was the program for the earlier versions: a text in it that a rule matches is still reviewed.
+    expect(ruleOf("env 'dd if=/dev/zero of=/dev/sda' ''")).toBe('shell-overwrite-tools')
+    expect(ruleOf("env 'dd if=/dev/zero of=/dev/sda' =1 ls")).toBe('shell-overwrite-tools')
+    expect(splitShell('env =1 ls').parts.some(part => part.core === '=1 ls')).toBe(true)
+    expect(splitShell('env -- - ls').parts.some(part => part.core === '- ls')).toBe(true)
+  })
+
+  test('C: `${NAME}=value` is an assignment of env\'s whatever the name holds, in the kept and in the vanished reading', () => {
+    // Kept: `${X}=v` is a word with a `=`; vanished: `=v` is one. Either way the next word is the program.
+    expectCases([
+      ["env -S '${X}=v rm' -rf /home/me", 'block', RM],
+      ["env -S '${X}=v' rm -rf /home/me", 'block', RM],
+      ["env -S 'A=1 ${X}=v rm -rf /home/me'", 'block', RM],
+      ["env -S '${X}${Y}=v rm -rf /home/me'", 'block', RM],
+    ])
+    expect(hasCore("env -S '${X}=v rm' -rf /home/me", 'rm -rf /home/me')).toBe(true)
+    // The part itself (the expansion kept as written): the program is the word after the assignment.
+    expect(splitShell("env -S '${X}=v rm' -rf /home/me").parts[0]?.coreWords).toEqual(['rm', '-rf', '/home/me'])
+    expect(splitShell("env -S 'A=${X} ${Y}=v rm' -rf /home/me").parts[0]?.coreWords).toEqual(['rm', '-rf', '/home/me'])
+  })
+
+  test('D: the words after a string that holds an expansion are read as env\'s own words (env -a takes a value there), not as a plain command', () => {
+    // Neither reading with the expansions kept (`${Y}` is the program) nor with them replaced by nothing (`-u` takes `-a`) reads
+    // `rm`, and main's walk read `X` as the program (`-a` is a flag for it): only `env <the words after the string>` does.
+    expectCases([
+      ["env -S '-u ${X} ${Y}' -a X rm -rf /home/me", 'block', RM],
+      [`${'env ' + '-S "" '.repeat(8)}-S '-u \${X} \${Y}' -a X rm -rf /home/me`, 'block', RM],
+      ["nice env -S '-u ${X} ${Y}' -a X rm -rf /home/me", 'block', RM],
+    ])
+    expect(hasCore("env -S '-u ${X} ${Y}' -a X rm -rf /home/me", 'rm -rf /home/me')).toBe(true)
+  })
+
+  test('the refusals are the extras\' own bounds, shared with the scripts that follow: four strings with an expansion and a nested script, 81 commands of one string', { timeoutMs: 20_000 }, () => {
+    const withExpansion = (count: number, tail: string) => `env ${"-S 'A=${X}' ".repeat(count)}${tail}`
+    // The depth is shared: four strings read a command, but four followed by a nested script are refused; five are refused anyway.
+    expect(splitShell(withExpansion(4, 'make')).isExhausted).toBe(false)
+    expect(splitShell(withExpansion(3, "bash -c 'echo hi'")).isExhausted).toBe(false)
+    expect(splitShell(withExpansion(4, "bash -c 'echo hi'")).isExhausted).toBe(true)
+    expect(ruleOf(withExpansion(4, "bash -c 'echo hi'"))).toBe(TOO_COMPLEX_TO_READ)
+    expect(tierOf(withExpansion(4, "bash -c 'echo hi'"))).toBe('block')
+    // A block the text's own parts found keeps its own rule.
+    expect(ruleOf(withExpansion(4, "bash -c 'rm -rf /home/me'"))).toBe(RM)
+    expect(splitShell(withExpansion(5, 'make')).isExhausted).toBe(true)
+    // The parts are shared too: N commands of one string each, joined in one call. Each adds three parts of the extras' 400.
+    const joined = (count: number, one: string) => Array.from({ length: count }, () => one).join(' && ')
+    const honest = "env -S 'node ${NODE_OPTS}' build.js"
+    expect(splitShell(joined(80, honest)).isExhausted).toBe(false)
+    expect(splitShell(joined(81, honest)).isExhausted).toBe(true)
+    expect(tierOf(joined(80, honest))).toBe('review')
+    expect(ruleOf(joined(81, honest))).toBe(TOO_COMPLEX_TO_READ)
+    // A string without an expansion costs the same three parts.
+    const plain = "env -S 'node --check' f.js"
+    expect(splitShell(joined(133, plain)).isExhausted).toBe(false)
+    expect(splitShell(joined(134, plain)).isExhausted).toBe(true)
+    // And a command with no env string is not charged at all.
+    expect(splitShell(joined(190, 'env FOO=1 make')).isExhausted).toBe(false)
   })
 })
 

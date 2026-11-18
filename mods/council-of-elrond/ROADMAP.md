@@ -483,12 +483,11 @@ P1, S3.
     gate `balanced` and 1.0.0, not this tag, and nothing in the release claims a rate;
   - if M1.1c slipped (OD10 unanswered), the notes and the threat model say that reads of
     credential files are not gated in 0.6.0;
-  - confirm with the maintainer that this reading is wanted: an `env -S` string that holds the
-    program, or ends in an option that takes a value, is read as env reads it (the words after it
-    are arguments or that value), where `origin/main` blocked on the command after it (class
-    (iii), DESIGN §16 items 45 and 46);
-  - decide whether an `env -S` string with two or more `${NAME}` expansions, some set and some
-    not, needs more readings than the two made (DESIGN §16 item 46, "what remains unknown");
+  - confirm with the maintainer the cost of DESIGN §16 item 47: for a command with an `env`
+    split string, `origin/main`'s reading is always made as well, so such commands are never
+    lower than `origin/main`, a shebang-style split string is reviewed as on `origin/main`, and
+    a single call that joins more than about 130 of them is refused (the added readings'
+    budget); raising that budget loosens and is the maintainer's decision;
   - the maintainer pushes the tag (MA4); the release workflow is green; a fresh machine installs
     with the one-line command.
 

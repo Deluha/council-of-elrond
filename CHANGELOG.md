@@ -52,9 +52,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   took the command for `-d`'s value and reviewed it.
 - Wrapper and runner options are read as the programs read them, so a word after an option that takes a value is that
   value and not a command; a few commands an old, wrong reading made review or block are now classified as what they
-  are (for example `systemd-run --expand-environment` and `nsenter -W`). The same holds for an `env -S` string that
-  holds the program, or ends in an option that takes a value: the words after it are the program's arguments, or that
-  value, and not the command, as `env` reads them (0.5.0 took them for the command).
+  are (for example `systemd-run --expand-environment` and `nsenter -W`).
 - A long command that 0.5.0 reviewed only because the readings it made of its split strings used up its 200 parts is
   read completely, and gets the tier of what it holds.
 - A merge's current branch is read in the repository that decides the call, so a merge into a branch that is not
@@ -131,9 +129,21 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   It is a finding of the classifier like `command-too-long`, so a project rule cannot lower it, and no allow rule is
   offered for it. **Honest but extreme commands that were reviewed are now refused:** more than 200 commands inside
   one `env -S` string, or inside the script of a command behind ambiguous `nsenter` options; four or more scripts
-  nested inside one of those; and a chain of `env -S` strings that each hold a `${NAME}` expansion (five of the
-  plainest are enough).
-  Write the command plainly, or put it in a script file and run that.
+  nested inside one of those; four `env -S` strings that each hold a `${NAME}` expansion followed by a nested script
+  (`bash -c ...`), or five followed by anything; 81 commands of one such string each joined in one call, or 134 of
+  one string without an expansion (the extra readings share their depth and their parts with the scripts that
+  follow); and four `-Senv` strings with a 19,000-character word. Write the command plainly, or put it in a script
+  file and run that.
+- **`origin/main`'s reading of a part with an `env -S` string is always also made, and `env`'s own words are read as
+  `env` reads them.** Besides the readings above, the command that 0.5.0 read after the string (it took the string for
+  an option's value and went on with the words after it) is read too, with the privilege wrapper (`sudo`, `doas`, ...)
+  in front of it, so `env -S 'x y' rm -rf /home/me` and `env -S'-u' git push --force origin main` are blocked as in 0.5.0,
+  and a shebang-style `env -S node --flag script.js` is reviewed as the script it runs. After `--` a lone `-` is `env`'s `-i`, and any word with a `=` in it
+  (`=1`, `a-b=c`, `${X}=v`) is an assignment, not the program; the words after a string that holds an expansion are
+  read as `env`'s own words (options, assignments, then the command), not as a plain command. Everyday
+  `env -S 'node --check' f.js` stays reviewed (a script file; 0.5.0 allowed it), `env -S node --experimental-vm-modules
+  node_modules/.bin/jest` is reviewed as a script path, as in 0.5.0, and a loop `env -S "node --check" "$f"` is
+  reviewed (a program computed at run time).
 - **An `env -S` string that holds a `${NAME}` expansion is reviewed and read three ways.** `env` expands the name
   from its environment, and one that is unset expands to nothing, so its word vanishes, an option before it takes the
   next word, and the words after the string can become the command. The classifier cannot know the value, so the
@@ -258,7 +268,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   option taking its next word; the strictest reading wins. Each `env -S` string is split as GNU `env` 9.4 splits it
   (its blanks, quotes, `\_`, `\c`, `#` comments and `${NAME}`), and is also read alone, as a shell reads it, and as
   the earlier versions read it, so a string `env` cannot read (an error in it) is reviewed and still classified. A
-  string that holds a `${NAME}` is reviewed and read three ways (see "Changed").
+  string that holds a `${NAME}` is reviewed and read three ways, and the command 0.5.0 read after any `env -S` string is
+  read too, so no `env -S` form is read below 0.5.0 (see "Changed"); `env`'s own words after `--` are read as `env`
+  reads them (a lone `-`, any word with a `=`).
   **The readings the parser adds beside the text have budgets of their own** (400,000 characters scanned, 400
   parts, 4 levels deep): the second `nsenter` reading, the shell scanner's reading of an `env -S` string, the
   strings past the eighth, and every script nested in one of those. The text the command holds (its parts, `-c`
@@ -378,9 +390,10 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   `OLDPWD`, written with `=` and not as a quoted key, and the value must be shaped like a path (a start of `/`, `~/`,
   `./`, `../`, an expansion or a plain substitution; letters, digits and `. _ / ~ + @ % -` only; no `; ! : & ? #`, quote
   or space; no segment that is a word of 6 or more characters that mixes letters and digits), and the name must stand
-  where a shell reads an assignment word: at the start of the text or of a line, after a blank, after `(`, `{`, a
+  where a shell reads an assignment word: at the start of the text or of a line, after a space or a tab, after `(`, `{`, a
   backtick or `$(`, or glued to a `|`, `||` or `&&`. After any other character (`db.PWD=`, `--PWD=`, `&PWD=`,
-  `,PWD=`, `#PWD=`, `$PWD=`, a quote) it is a key of a query, an option or a field, and is redacted and reported.
+  `,PWD=`, `#PWD=`, `$PWD=`, a quote, and any white space but those: a carriage return, a no-break space) it is a key of
+  a query, an option or a field, and is redacted and reported.
   Any other value is the password keyword of a connection string and is redacted and reported, and so is any value
   after a `;` earlier on the same line, a value (bare or quoted, up to 1,000 characters, a closing quote allowed, up
   to 16 blanks or tabs allowed before the `;`) followed by `;` and then a character that is no blank and up to 64 more

@@ -85,12 +85,13 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     level: 'low',
     label: 'secret',
     // `PWD` and `OLDPWD` are exempt (the `assignment` pattern lets them go) only where a shell reads an assignment word: the
-    // name at the start of the text or of a line, after a blank, after `(` (`$(` too), `{`, a backtick, or glued to a `|`, `||` or
-    // `&&`. After any other character (`db.PWD=`, `--PWD=`, `&PWD=`, `,PWD=`, `#PWD=`, `$PWD=`, a quote) it is a key of a
+    // name at the start of the text or of a line (after a line feed), after a space or a tab, after `(` (`$(` too), `{`, a
+    // backtick, or glued to a `|`, `||` or `&&`. No other white space is a blank to a shell (a carriage return, a vertical tab,
+    // a form feed, a no-break space, a line or paragraph separator): after one the name is a key, as after any other character. After any other character (`db.PWD=`, `--PWD=`, `&PWD=`, `,PWD=`, `#PWD=`, `$PWD=`, a quote) it is a key of a
     // query, an option, a field or a connection string, and is read as the password keyword, whatever the value is. The
     // same value forms as `assignment`; a plain word, number or short path is noise there as everywhere. The name is looked
     // for first (`(?=PWD|OLDPWD)`), so each start costs a fixed amount.
-    re: /\b(?=PWD|OLDPWD)(?<!^|[\s({`|]|&&)((?:PWD|OLDPWD)\\?["']?\s*=\s*\\?["']?)(?!\[REDACTED)((?<=")[^"\\\n]{4,1000}(?=\\?")|(?<=')[^'\\\n]{4,1000}(?=\\?')|[^\s"'&;,\\]{4,})/g,
+    re: /\b(?=PWD|OLDPWD)(?<!^|[ \t\n({`|]|&&)((?:PWD|OLDPWD)\\?["']?\s*=\s*\\?["']?)(?!\[REDACTED)((?<=")[^"\\\n]{4,1000}(?=\\?")|(?<=')[^'\\\n]{4,1000}(?=\\?')|[^\s"'&;,\\]{4,})/g,
     keep: 1,
     isNoise: (kept, value) => isPlainNoise(kept, value),
   },

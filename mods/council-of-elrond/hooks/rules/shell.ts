@@ -582,6 +582,31 @@ function readOption(spec: Spec, words: readonly string[], k: number, takesUnknow
   return { next: k + 1, isUnknown: false }
 }
 
+/**
+ * A word of env's own that sets a variable: any word with a `=` in it that is not an option (checked with harmless `printf`
+ * calls on env 9.4: `=1`, `a-b=c`, `1a=b` and `a.b=c` all set one). A shell's assignment word needs a name; env's does not.
+ */
+const isEnvAssignment = (word: string): boolean => !word.startsWith('-') && word.includes('=')
+
+/**
+ * Where env's own words end after a `--`: env 9.4 reads a lone `-` there as its `-i`, then every word with a `=` in it as an
+ * assignment. `isNew` says a word was skipped that the earlier versions read as the program (the `-`, a word that is no
+ * shell assignment): that reading is made too, as an extra (§16 item 47), so that no tier is lower than it was.
+ */
+function envOwnWordsEnd(words: readonly string[], from: number): { end: number; isNew: boolean } {
+  let k = from
+  let isNew = false
+  if (words[k] === '-') {
+    k++
+    isNew = true
+  }
+  while (k < words.length && (words[k] as string).includes('=')) {
+    if (!isAssignment(words[k] as string)) isNew = true
+    k++
+  }
+  return { end: k, isNew }
+}
+
 /** `env -S` splits on these six blanks (the C locale's `isspace`), not on every character a regular expression's `\s` holds. */
 const ENV_BLANKS = ' \t\n\v\f\r'
 const ENV_VARIABLE = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}/
@@ -803,18 +828,58 @@ const MAIN_TWO_WORD_RUNNERS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
 ])
 const MAIN_ONE_WORD_RUNNERS: ReadonlySet<string> = new Set(['npx', 'bunx', 'pnpx', 'uvx'])
 
+/** Where the command of a `case SUBJECT in PATTERN)` arm starts (0 when the words are no arm). */
+function caseArmEnd(words: readonly string[]): number {
+  if (words[0] !== 'case') return 0
+  let k = 1
+  while (k < words.length && words[k] !== 'in') k++
+  if (words[k] === 'in') k++
+  while (k < words.length && !(words[k] as string).includes(')')) k++
+  if (k < words.length) k++
+  return k
+}
+
 /**
- * The `env -S` and `--split-string` strings that `origin/main`'s walk over a part's words found: its wrappers (each with
- * the options that take a value in the table above) and runners stripped in turn, an `env` taking `-S` and
- * `--split-string` strings anywhere among its options, the first word that is no option ending them. Each is read alone
- * as an extra, so that what that reading found stays found whatever env's own splitting does with the string before it
- * (`env -S x watch env -S 'rm -rf /'`: for env `x` is the program; for main the walk went on). One pass over the words.
+ * Where the command starts after the assignments, plain keywords and function-definition headers that may stand before
+ * it (a definition body or a keyword must not hide the command they wrap). `function NAME` goes with the name.
  */
-function mainEnvStrings(words: readonly string[]): string[] {
-  const found: string[] = []
-  let k = 0
+function triviaEnd(words: readonly string[], from: number): number {
+  let k = from
   for (;;) {
     while (k < words.length && (isAssignment(words[k] as string) || KEYWORDS.has(words[k] as string))) k++
+    const word = words[k]
+    if (word === undefined) return k
+    if (word === 'function') {
+      k++
+      if (k < words.length && !KEYWORDS.has(words[k] as string)) k++ // the name
+      continue
+    }
+    if (FUNCTION_HEADER.test(word)) {
+      k++
+      continue
+    }
+    return k
+  }
+}
+
+/**
+ * `origin/main`'s walk over a part's words, as it made it: assignments, keywords and function headers skipped, its
+ * wrappers (each with the options in the table above that take a value) and runners stripped in turn, an `env` taking
+ * `-S` and `--split-string` strings anywhere among its options (and `-`, `-i`, assignments and `--ignore-environment`
+ * as its own words), the first word that is no option ending them. It gives the `env -S` and `--split-string` strings it
+ * found, each time one stands, and, when it found any, the words it left as the command (`rest`). Each string is read
+ * alone as an extra and the rest as one more (§16 item 47), so that what that reading found stays found whatever env's
+ * own splitting does with a string before it (`env -S x watch env -S 'rm -rf /'`: for env `x` is the program; for main
+ * the walk went on; `env -S 'x y' rm -rf /`: for env the string holds the program, for main `rm` was the command).
+ * One pass over the words.
+ */
+function mainEnvWalk(words: readonly string[]): { strings: string[]; rest: string[]; privileged: string[]; scripts: string[] } {
+  const found: string[] = []
+  const privileged: string[] = []
+  const scripts: string[] = []
+  let k = caseArmEnd(words)
+  for (;;) {
+    k = triviaEnd(words, k)
     const word = words[k]
     if (word === undefined) break
     const name = word.includes('/') && SYSTEM_BIN.test(word) ? word.slice(word.lastIndexOf('/') + 1) : word
@@ -841,6 +906,7 @@ function mainEnvStrings(words: readonly string[]): string[] {
           break
         }
         if (option === '-c' || option === '--call') {
+          scripts.push(words[k + 1] ?? '')
           k += 2
           continue
         }
@@ -851,6 +917,7 @@ function mainEnvStrings(words: readonly string[]): string[] {
     }
     const takesValue = MAIN_WRAPPERS.get(name)
     if (takesValue === undefined) break
+    if (PRIVILEGE_WRAPPERS.has(name)) privileged.push(name)
     k++
     while (k < words.length) {
       const option = words[k] as string
@@ -873,7 +940,7 @@ function mainEnvStrings(words: readonly string[]): string[] {
     if (name === 'timeout' && k < words.length) k++
     if ((name === 'chroot' || name === 'flock') && k < words.length && !(words[k] as string).startsWith('-')) k++
   }
-  return found
+  return { strings: found, rest: words.slice(k), privileged, scripts }
 }
 
 const MAX_BRACE_ELEMENTS = 16
@@ -911,10 +978,18 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
   let envSplices = 0
   // Each `env -S` string read alone, as a script, as `origin/main` read it: an extra. Each time it stands (a crafted command
   // that repeats one makes main's parts run out, and so ours: the same count, in the extras' budget). The strings main's own
-  // walk over the words found (`mainEnvStrings`) are read first, whatever env's splitting leaves of them; the loop below
+  // walk over the words found (`mainEnvWalk`) are read first, whatever env's splitting leaves of them; the loop below
   // reads the others (an attached `-Sx` is a string for env and was a flag for main) and not again those already read.
   // The second reading of `nsenter` has the same words and the same walk, so it makes none.
   const aloneToRead = new Map<string, number>()
+  // `origin/main`'s whole reading of the part (§16 item 47): the strings were an option's values, the words after them went
+  // on as env's own (options, assignments) and the first that is none was the command. Whatever env's own splitting makes of
+  // a string, that command is read too (one extra, made once the walk below has seen whether any `env -S` string stands in
+  // the part), so no part with an `env -S` string is read below what `origin/main` read. The wrappers that mark a part
+  // privileged stay in front of it (the rules ask about them), the others are not needed to read the command.
+  let mainReading: string[] = []
+  let mainScripts: string[] = []
+  let hasMainEnvString = false
   const readAlone = (text: string) => {
     if (text === '') return
     const left = aloneToRead.get(text) ?? 0
@@ -922,11 +997,15 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
     else extraScripts.push(text)
   }
   if (!isReadingA) {
-    for (const alone of mainEnvStrings(input)) {
+    const main = mainEnvWalk(input)
+    for (const alone of main.strings) {
       if (alone === '') continue
       aloneToRead.set(alone, (aloneToRead.get(alone) ?? 0) + 1)
       extraScripts.push(alone)
     }
+    mainReading = [...main.privileged, ...main.rest]
+    mainScripts = main.scripts
+    hasMainEnvString = main.strings.length > 0
   }
   // The `env -S` strings past the bound, each as env reads it and as a shell reads it, with the words between them, and where the words not yet added start.
   let pastEnv: string[] | undefined
@@ -937,6 +1016,15 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
   let pastVanished: string[] | undefined
   let hasPastExpansion = false
   let pastBoundFrom = 0
+  // The word the earlier versions read as env's program and env reads as its own (a `-` after `--`, a word with a `=` that is no
+  // shell assignment: `=1`, `a-b=c`, `${X}=v`) is also read as the program, as an extra, once for the part (the earlier walk
+  // stopped at the first): a text in such a word that a rule matches (`env 'dd if=/dev/zero of=/dev/sda' ""`) still reviews.
+  let hasReadAsProgram = false
+  const readAsProgram = (at: number) => {
+    if (hasReadAsProgram || isReadingA) return
+    hasReadAsProgram = true
+    extraScripts.push(words.slice(at).map(quoted).join(' '))
+  }
   // A call whose options were not all read: its words as they stand are classified
   // again, and where it runs is not known either.
   // The words are made only the first time: a crafted run of unknown options must not copy the rest for each.
@@ -948,30 +1036,10 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
   // a `case SUBJECT in PATTERN)` arm, so the command they wrap is what the
   // rules see. Without this a definition body or a case arm hides its command.
   const skipTrivia = () => {
-    for (;;) {
-      while (k < words.length && (isAssignment(words[k] as string) || KEYWORDS.has(words[k] as string))) k++
-      const word = words[k]
-      if (word === undefined) return
-      if (word === 'function') {
-        k++
-        if (k < words.length && !KEYWORDS.has(words[k] as string)) k++ // the name
-        continue
-      }
-      if (FUNCTION_HEADER.test(word)) {
-        k++
-        continue
-      }
-      return
-    }
+    k = triviaEnd(words, k)
   }
   // A `case` arm: the subject, `in`, and the pattern up to its `)`.
-  if (words[0] === 'case') {
-    k = 1
-    while (k < words.length && words[k] !== 'in') k++
-    if (words[k] === 'in') k++
-    while (k < words.length && !(words[k] as string).includes(')')) k++
-    if (k < words.length) k++
-  }
+  k = caseArmEnd(words)
   for (;;) {
     skipTrivia()
     const word = words[k]
@@ -1094,9 +1162,17 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
         const option = words[k] as string
         if (option === '--') {
           k++
+          // env's own words still follow `--` (§16 item 47): a lone `-` is its `-i`, and a word with a `=` in it is an assignment.
+          if (canonical === 'env') {
+            const own = envOwnWordsEnd(words, k)
+            if (own.isNew) readAsProgram(k)
+            k = own.end
+          }
           break
         }
-        if (canonical === 'env' && (isAssignment(option) || option === '-')) {
+        // Before any option check: env takes a word with a `=` in it, however it starts, as an assignment (`=1`, `a-b=c`, `${X}=v`).
+        if (canonical === 'env' && (isEnvAssignment(option) || option === '-')) {
+          if (isEnvAssignment(option) && !isAssignment(option)) readAsProgram(k)
           k++
           continue
         }
@@ -1172,7 +1248,8 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
               markUnresolved(() => [name, ...words.slice(start + 1)])
               const tail = words.slice(read.next)
               extraScripts.push([...words.slice(0, k), ...vanished, ...tail].map(quoted).join(' '))
-              if (tail.length > 0) extraScripts.push(tail.map(quoted).join(' '))
+              // As env's own words: env goes on reading options and assignments there, so they are not the program (§16 item 47).
+              if (tail.length > 0) extraScripts.push(['env', ...tail.map(quoted)].join(' '))
             }
             if (isLooseDifferent) extraScripts.push([...loose, ...words.slice(read.next)].map(quoted).join(' '))
             splits.push({ raw, rest: words.slice(read.next) })
@@ -1200,6 +1277,15 @@ function coreOf(input: readonly string[], isReadingA = false): Core {
     if (PID_WRAPPERS.has(canonical) && !isPidForm && k < words.length) k++
     // The second reading of a spliced string (the shell scanner's, beside env's own that is in the part): an extra.
     for (const split of splits) extraScripts.push([split.raw, ...split.rest.map(quoted)].join(' '))
+  }
+  if (hasMainEnvString || envSplices > 0) {
+    // Not when it is the part's own words again (the walk of main stopped at the first word: a wrapper main did not know, a
+    // brace word): its reading would be this one, and so on to the extras' depth, and the call refused.
+    if (mainReading.length > 0 && !(mainReading.length === input.length && mainReading.every((word, index) => word === input[index]))) {
+      extraScripts.push(mainReading.map(quoted).join(' '))
+    }
+    // The `-c` and `--call` scripts of the runners that walk passed (a nested script of the part on `origin/main`).
+    for (const script of mainScripts) if (script !== '') extraScripts.push(script)
   }
   // Led by `env`, so that its options between and after the strings are read as options and not as the program. One
   // script of each reading for the whole call, however many wrappers it chains (one for each would hold all the words
