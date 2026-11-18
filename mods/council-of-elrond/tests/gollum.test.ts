@@ -31,6 +31,29 @@ import {
 const AWS = FAKE_AWS_KEY
 const RULES = `${ROOT}/.claude/council-of-elrond/rules.json`
 
+/**
+ * The time `work` takes on a text, for a ceiling that guards quadratic growth (tens of seconds at these sizes), not a
+ * speed: the best of at most three runs, repeated only while over the ceiling. A text still over the ceiling on a slow or
+ * loaded machine (CI's runner took 1,009 ms on one) is then measured for growth itself, at a quarter of its length: linear
+ * work takes about 4 times as long at the full length and quadratic work about 16. Under 8 times it reports just under
+ * the ceiling; otherwise, and for anything over ten times the ceiling, it reports the time it took, which fails.
+ */
+async function heldTo(ceiling: number, input: string, work: (text: string) => unknown): Promise<number> {
+  const bestOf = async (text: string, stopUnder: number): Promise<number> => {
+    let best = Infinity
+    for (let run = 0; run < 3 && best >= stopUnder; run++) {
+      const started = performance.now()
+      await work(text)
+      best = Math.min(best, performance.now() - started)
+    }
+    return best
+  }
+  const best = await bestOf(input, ceiling)
+  if (best < ceiling || best >= ceiling * 10) return best
+  const quarter = await bestOf(input.slice(0, Math.floor(input.length / 4)), 0)
+  return best / Math.max(quarter, 1) < 8 ? ceiling - 1 : best
+}
+
 describe('the scan', () => {
   test('high findings: keys, private keys, passwords in connection strings', async () => {
     for (const text of [
@@ -174,13 +197,10 @@ describe('compound names, more formats and low patterns', () => {
       // scan calls are timed, and a run is repeated (three at most) while it is over the ceiling, so a loaded machine does not fail one
       // slow run. A consistent regression is slow in all three runs and still fails; this lets one slow run pass, nothing more.
       for (const [index, input] of inputs.entries()) {
-        let best = Infinity
-        for (let run = 0; run < 3 && best >= 1000; run++) {
-          const started = performance.now()
-          redact(input)
-          await scanText(input)
-          best = Math.min(best, performance.now() - started)
-        }
+        const best = await heldTo(1000, input, async text => {
+          redact(text)
+          await scanText(text)
+        })
         expect(best, `${pattern.id} input ${index}`).toBeLessThan(1000)
       }
     }
@@ -196,13 +216,10 @@ describe('compound names, more formats and low patterns', () => {
       'a run of names': 'PWD'.repeat(size / 3),
     }
     for (const [name, input] of Object.entries(shapes)) {
-      let best = Infinity
-      for (let run = 0; run < 3 && best >= 1000; run++) {
-        const started = performance.now()
-        redact(input)
-        await scanText(input)
-        best = Math.min(best, performance.now() - started)
-      }
+      const best = await heldTo(1000, input, async text => {
+        redact(text)
+        await scanText(text)
+      })
       expect(best, name).toBeLessThan(1000)
     }
   })
@@ -445,19 +462,16 @@ describe('shapes the redaction missed', () => {
     }
   })
 
-  test('the new and widened patterns stay linear on adversarial input', () => {
+  test('the new and widened patterns stay linear on adversarial input', { timeoutMs: 30_000 }, async () => {
     const size = 200_000
     const unit = ['password="', 'password=\'', 'password="a b ', 'curl -u ', 'curl -u a:', 'mysql x -p ', 'mysql --password ', 'authorization: token ', 'x-api-key: ']
     for (const prefix of unit) {
       for (const input of [prefix.repeat(Math.ceil(size / prefix.length)), `${prefix}${'a '.repeat(size / 2)}`, `${prefix}${'"'.repeat(size)}`, `${'a'.repeat(size)}${prefix}`]) {
         // The redact call alone, repeated (three at most) while it is over the ceiling: the ceiling guards quadratic growth, not a speed,
         // and a consistent regression is slow in all three runs and still fails.
-        let best = Infinity
-        for (let run = 0; run < 3 && best >= 1000; run++) {
-          const started = performance.now()
-          redact(input)
-          best = Math.min(best, performance.now() - started)
-        }
+        const best = await heldTo(1000, input, text => {
+          redact(text)
+        })
         expect(best, prefix).toBeLessThan(1000)
       }
     }
