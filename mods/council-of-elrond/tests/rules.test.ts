@@ -3936,6 +3936,9 @@ describe('nsenter, gosu and busybox in front of an env -S string: what release 0
       ['busybox env -S x ls', 'allow'],
       ['sudo busybox env -S x ls', 'ask', 'privileged'],
       ['sudo -u bob busybox env -S x ls', 'ask', 'privileged'],
+      ['X=1 busybox env -S x ls', 'allow'],
+      ['/bin/busybox env -S x ls', 'allow'],
+      ['if busybox env -S x ls; then ls; fi', 'allow'],
       // The word after the `-c` word is classified as a command, whatever the applet makes of it.
       ["busybox grep -c 'rm -rf /home/me' file", 'block', RM],
       ['busybox wc -c ./file', 'review', 'script-path'],
