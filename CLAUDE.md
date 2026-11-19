@@ -13,7 +13,7 @@ A Claude Code mod (function-hooks plugin) in `mods/council-of-elrond` that gates
 - Stop rather than guess; stop at every checkpoint and wait.
 - Every fact lives in one file; everything else points to it.
 
-**Workflow for any change:** route through the skill and read the one file it names, grep the established pattern first (`.claude/skills/council-of-elrond-development/references/recipes.md`), validate against the rules and flag a conflict, implement, run `node scripts/verify.mjs` (`.claude/skills/council-of-elrond-development/references/qa-and-ci.md`), update the docs in the same brief (R10), then the simplicity audit (`.claude/skills/council-of-elrond-development/references/conventions.md#simplicity`) and the reviewer on the whole diff (`.claude/skills/council-of-elrond-development/references/recipes-orchestration.md`).
+**Workflow for any change:** route through the skill and read the one file it names, grep the established pattern first (`.claude/skills/council-of-elrond-development/references/recipes.md`), validate against the rules and flag a conflict, implement, update the docs in the same brief (R10), run the simplicity audit (`.claude/skills/council-of-elrond-development/references/conventions.md#simplicity`) and the reviewer on the whole diff (`.claude/skills/council-of-elrond-development/references/recipes-orchestration.md`), then `node scripts/verify.mjs` last (`.claude/skills/council-of-elrond-development/references/qa-and-ci.md`).
 
 ## Hard rules
 

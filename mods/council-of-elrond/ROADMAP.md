@@ -116,7 +116,7 @@ says so.
 
 ## 5. The board
 
-Every open brief from here to 1.0.0, in the order sessions take them. Sizes: S is one writer
+Every open brief from here to 1.0.0, in the order sessions take them. Sizes: S is one implementer
 pass, M is two to four, L is a planned sequence. "Gate" says which way the brief moves the gate.
 "Parallel-safe with" names briefs whose files are disjoint from this one's; an empty cell means
 run it alone. Nearly every behaviour brief edits `hooks/register.ts`, `hooks/strings.ts`,
@@ -186,7 +186,7 @@ edit the file that now holds it.
       architecture, domain topics, QA and CI, recipes, and one workflow file per common task
       shaped Preconditions, Steps, Verification, Docs to update, Ask first); no file over about
       10 KB;
-    - (C) agents: a writer, a read-only reader and a reviewer that never edits; guidance names
+    - (C) agents: an implementer, a read-only reader and a reviewer that never edits; guidance names
       roles, and model tiers appear only in agent frontmatter and one table; the orchestrator
       makes small edits itself and runs the full verify once at the end;
     - (D) one verify command that prints a single pass or fail table, reusing the existing
@@ -317,7 +317,7 @@ without a commit, and the facts about the host are checked by a script, not by h
   - **Decided behaviour.** Read both components' docs in the types first. A row while a full
     council sits; no row of the mod's when idle; the survey case as today's test states it; when
     `isCollapsed`, at most one line. Never weaken an assertion: if the engine's own row now
-    always shows, the tests say so, and the writer stops and reports.
+    always shows, the tests say so, and the implementer stops and reports.
   - **Acceptance.** All tests pass on the newly pinned build and DESIGN §11 records the behaviour.
 - [x] **M0.3 Pin Claude Code in CI** (S, neutral; finding R3, decision D10). Done: both workflows
   install the pinned version; `/upgrade-types` moves the pin and re-checks whether `$.fs` has

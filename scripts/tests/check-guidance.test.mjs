@@ -17,6 +17,8 @@ const SCRIPT = join(here, '..', 'check-guidance.mjs')
 const SKILL = '.claude/skills/council-of-elrond-development'
 const REFS = `${SKILL}/references`
 
+const EVALS_OK = JSON.stringify({ evals: [{ id: 'a', expect_reads: ['references/workflows/add-rule.md'] }, { id: 'b', expect_reads: [] }] }, null, 2)
+
 const made = []
 after(() => {
   for (const d of made) rmSync(d, { recursive: true, force: true })
@@ -37,6 +39,7 @@ function tree(overrides = {}) {
     [`${REFS}/conventions.md`]: '# Conventions\n\n<a id="r1"></a>\n## R1 Never load the mod\n\nText.\n\n<a id="r2"></a>\n## R2 Never edit the types\n\nText.\n\n## The pinned build\n',
     [`${REFS}/style.md`]: '# Style\n\nSee `conventions.md#the-pinned-build`.\n',
     [`${REFS}/workflows/add-rule.md`]: '# Add a rule\n',
+    [`${SKILL}/evals/evals.json`]: EVALS_OK,
     [`${REFS}/recipes-orchestration.md`]: '# Roles\n\n| Role | Model |\n| :- | :- |\n| implementer | sonnet |\n| reader | haiku |\n',
     '.claude/rules/classifier.md': '---\npaths:\n  - "mods/council-of-elrond/hooks/rules/**"\n---\n\n- Adding a rule: `references/workflows/add-rule.md`\n- Rules that apply: R1\n',
     '.claude/skills/verify/SKILL.md': '---\nname: verify\ndescription: x\n---\n\n# Verify\n\n- Run `scripts/verify.mjs` with node.\n',
@@ -565,6 +568,55 @@ describe('G10 the three ask-first lists agree', () => {
     remove('.github/CODEOWNERS')
     assert.match(messages(g.checkG10(root)), /no "Ask first" section/)
     assert.match(messages(g.checkG10(root)), /CODEOWNERS/)
+  })
+})
+
+describe('G12 the evals file', () => {
+  const EVALS = `${SKILL}/evals/evals.json`
+  const evals = (...list) => JSON.stringify({ evals: list }, null, 2)
+
+  test('a good file passes; a root path, a mod path and a skill-relative path all resolve', () => {
+    const { root, put } = tree()
+    put('mods/council-of-elrond/ROADMAP.md', '# Roadmap\n')
+    put(EVALS, evals({ id: 'a', expect_reads: ['references/workflows/add-rule.md', 'mods/council-of-elrond/ROADMAP.md', '.claude/agents/implementer.md'] }))
+    assert.deepEqual(g.checkG12(root), [])
+  })
+
+  test('a missing file fails', () => {
+    const { root, remove } = tree()
+    remove(EVALS)
+    assert.match(messages(g.checkG12(root)), /evals\.json:1 missing/)
+  })
+
+  test('invalid JSON fails', () => {
+    const { root, put } = tree()
+    put(EVALS, '{ "evals": [')
+    assert.match(messages(g.checkG12(root)), /not valid JSON/)
+  })
+
+  test('a file with no evals array fails', () => {
+    const { root, put } = tree()
+    put(EVALS, '{}')
+    assert.match(messages(g.checkG12(root)), /no "evals" array/)
+  })
+
+  test('a dangling expect_reads path fails, with the line of its eval', () => {
+    const { root, put } = tree()
+    put(EVALS, evals({ id: 'a', expect_reads: [] }, { id: 'b', expect_reads: ['references/workflows/gone.md'] }))
+    const f = g.checkG12(root)
+    assert.equal(f.length, 1)
+    assert.equal(f[0].id, 'G12')
+    assert.match(f[0].message, /"b" expects a read of "references\/workflows\/gone\.md"/)
+    assert.equal(f[0].line, 8)
+  })
+
+  test('a duplicate id fails, at the second one', () => {
+    const { root, put } = tree()
+    put(EVALS, evals({ id: 'a', expect_reads: [] }, { id: 'a', expect_reads: [] }))
+    const f = g.checkG12(root)
+    assert.equal(f.length, 1)
+    assert.match(f[0].message, /id "a" is used twice \(first at line 4\)/)
+    assert.equal(f[0].line, 8)
   })
 })
 

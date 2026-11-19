@@ -1,6 +1,6 @@
 # Conventions: the hard rules
 
-The fifteen hard rules, each in full under its id. `CLAUDE.md` carries the short forms; every other file points here, for example `references/conventions.md#r1`.
+The fifteen hard rules, each in full under its id, and the simplicity audit that closes every pull request. `CLAUDE.md` carries the short forms; every other file points here, for example `references/conventions.md#r1`.
 
 ## R1
 
@@ -123,6 +123,6 @@ Every pull request leaves the files it touches clearer, shorter and more modular
 6. Speculative parameters, options or abstractions no caller needs.
 7. Magic numbers and strings: a named constant, defined once (user-facing text in `hooks/strings.ts`, R4).
 8. Patterns that differ from the rest of the codebase without a recorded reason: align them.
-9. Comments that restate the code: say why, or delete them.
+9. Comments that restate the code (`references/style.md`): say why, or delete them.
 
 A fix that is mechanical and inside the diff's own files is made. A fix that would change behaviour, a public shape or an ask-first path (`CLAUDE.md`) is not bundled in: report it to the orchestrator as a separate item. A smaller, surgical change beats a wide refactor.

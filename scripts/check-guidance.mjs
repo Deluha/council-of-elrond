@@ -38,6 +38,9 @@
 // FIRST argument of a backticked command of the form `node <path>`, `bash <path>` or `sh <path>`
 // (a first argument that is a flag, such as `node --test scripts/tests/`, is not a path).
 //
+// G12 reads the one JSON file of hand-run prompts (evals/evals.json) that the markdown checks do not
+// reach: it parses, its ids are unique and every expect_reads entry resolves by the convention above.
+//
 // G11 (wired in) is a line-based check, not a proof. It does not prove that the wired line is
 // reachable: dead code (a line after an earlier `exit`, inside a never-true `if`, or in a function
 // nobody calls) and a command that only appears in a here-document or a string that a script later
@@ -877,8 +880,50 @@ export function checkG11(root) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// G12: the evals file
 
-export const CHECKS = [checkG1, checkG2, checkG3, checkG4, checkG5, checkG6, checkG7, checkG8, checkG9, checkG10, checkG11]
+export const EVALS = `${SKILL}/evals/evals.json`
+
+/**
+ * The hand-run prompts: the file exists and parses, each eval has a unique id, and every
+ * expect_reads entry resolves by the pointer convention (a missing file is a finding; two matches
+ * are not, since the entry names a file to read, not a link).
+ */
+export function checkG12(root) {
+  const text = readText(root, EVALS)
+  if (text === null) return [finding('G12', EVALS, 1, 'missing; SKILL.md points to it')]
+  let json
+  try {
+    json = JSON.parse(text)
+  } catch (e) {
+    return [finding('G12', EVALS, 1, `is not valid JSON: ${e.message}`)]
+  }
+  if (!Array.isArray(json?.evals)) return [finding('G12', EVALS, 1, 'has no "evals" array')]
+  const lines = text.split('\n')
+  const at = (needle, from = 0) => Math.max(1, lines.findIndex((l, i) => i >= from && l.includes(needle)) + 1)
+  const out = []
+  const seen = new Map()
+  for (const e of json.evals) {
+    const id = e?.id
+    if (typeof id !== 'string' || id === '') {
+      out.push(finding('G12', EVALS, 1, 'an eval has no string "id"'))
+      continue
+    }
+    const key = JSON.stringify(id)
+    const first = seen.get(id)
+    const line = first === undefined ? at(`"id": ${key}`) : at(`"id": ${key}`, first)
+    if (first !== undefined) out.push(finding('G12', EVALS, line, `id ${key} is used twice (first at line ${first}); ids are unique`))
+    else seen.set(id, line)
+    for (const f of Array.isArray(e.expect_reads) ? e.expect_reads : []) {
+      if (typeof f !== 'string' || resolvePointer(root, f).length === 0) out.push(finding('G12', EVALS, line, `eval ${key} expects a read of ${JSON.stringify(f)}, which does not resolve (looked in the root, ${MOD}/, the skill folder and its references/)`))
+    }
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------------------------
+
+export const CHECKS = [checkG1, checkG2, checkG3, checkG4, checkG5, checkG6, checkG7, checkG8, checkG9, checkG10, checkG11, checkG12]
 
 export function checkAll(root) {
   return CHECKS.flatMap((check) => check(root))
