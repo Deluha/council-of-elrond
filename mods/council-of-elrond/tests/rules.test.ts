@@ -3857,7 +3857,102 @@ describe('the classifier does not stall on crafted input', () => {
       'nsenter chain, then a follower': `${'nsenter -S nsenter '.repeat(1000)}true; rm -rf /home/me`,
       'env -S strings with escapes': `env ${'-S "a\\_b\\c" '.repeat(3000)}ls`,
       'env -S past the bound, with operators': `${'env -S "" '.repeat(8)}-S ${"'x; y && z' ".repeat(1000)}`,
+      // The added readings of `gosu` and `busybox` (DESIGN §16 item 48): one more walk for the part, one scan for the first `busybox`.
+      'gosu chain': fill('gosu a '),
+      'gosu chain behind nsenter -S': fill('nsenter -S gosu '),
+      'gosu and env -S chain': fill('gosu env -Sgosu '),
+      'busybox -c chain': fill('busybox -c '),
+      'busybox and a long cluster of c': `busybox -${'c'.repeat(N - 20)}! x`,
     }
     for (const [name, command] of Object.entries(shapes)) expect(time(command), name).toBeLessThan(SLOW_MS)
+  })
+})
+
+describe('nsenter, gosu and busybox in front of an env -S string: what release 0.5.0 read is read too (DESIGN §16 item 48)', () => {
+  test('the second nsenter reading makes the added readings of the first: an attached or clustered string behind one ambiguous option', () => {
+    expectCases([
+      // The first reading takes `0` for the program and meets no string; the second reaches `env`, and main's command is read.
+      ['nsenter -S 0 env -Sx rm -rf /home/me', 'block', RM],
+      ['nsenter -G 0 env -vSx rm -rf /home/me', 'block', RM],
+      ['nsenter -t 1 -S 0 env -Sx git push --force origin main', 'block', 'force-push-protected-branch'],
+      ["nsenter -S 0 env -iSx sh -c 'rm -rf /home/me'", 'block', RM],
+      ['nsenter --setuid 0 env -Sx dd if=/dev/zero of=/dev/sda', 'block', 'raw-disk-write'],
+      // A lone `-` after the option is a word too: it is read as the option's value and as the program.
+      ['nsenter -S - rm -rf /home/me', 'block', RM],
+      ['nsenter -G - mkfs.ext4 /dev/sda1', 'block', 'raw-disk-write'],
+      ['nsenter -S - ls', 'review', 'shell-runner-unresolved'],
+      // Nothing to find: the part is reviewed as before, and an unambiguous option changes nothing.
+      ['nsenter -S 0 env -Sx ls', 'review', 'shell-runner-unresolved'],
+      ['nsenter -S0 env -Sx ls', 'allow'],
+    ])
+    // The string the second reading met is read alone too, once: that reading's own part, the string alone, and the shell's reading of it.
+    const cores = splitShell("nsenter -S 0 env -S'rm -rf /home/me'").parts.map(part => part.core)
+    expect(cores.filter(core => core === 'rm -rf /home/me')).toHaveLength(3)
+  })
+
+  test('gosu: the word after it is read as the user and as the program, with and without an env -S string', () => {
+    expectCases([
+      ['gosu rm -rf /home/me', 'block', RM],
+      ["gosu sh -c 'rm -rf /home/me'", 'block', RM],
+      ['gosu bob rm -rf /home/me', 'block', RM],
+      // Main's command behind the wrapper that marks it privileged keeps its program.
+      ["gosu env -S 'x y' rm -rf /home/me", 'block', RM],
+      ["gosu env -S 'x y' git push --force origin main", 'block', 'force-push-protected-branch'],
+      ['sudo gosu env -Sx dd if=/dev/zero of=/dev/sda', 'block', 'raw-disk-write'],
+      // With an ambiguous nsenter option on either side: both choices are read together.
+      ['gosu nsenter -S 0 rm -rf /home/me', 'block', RM],
+      ['nsenter -S 0 gosu rm -rf /home/me', 'block', RM],
+      ['nsenter -S 0 gosu env -Sx rm -rf /home/me', 'block', RM],
+      // Everyday calls keep their tier.
+      ['gosu bob ls', 'ask', 'privileged'],
+      ["gosu postgres psql -c 'select 1'", 'ask', 'privileged'],
+      ['gosu', 'ask', 'privileged'],
+    ])
+    // One added part for the part, whatever the number of links, and it is charged to the extras: a call of 200 is read.
+    const parts = splitShell('gosu a gosu b ls').parts
+    expect(parts.map(part => part.core)).toEqual(['ls', 'a gosu b ls'])
+    expect(parts.every(part => part.wrappers.includes('gosu'))).toBe(true)
+    // What the added reading finds before its first `gosu` the first reading has found: the string's readings are made once.
+    expect(splitShell("env -S 'A=1' gosu bob ls").parts).toHaveLength(7)
+    expect(tierOf(Array.from({ length: 200 }, () => 'gosu bob ls').join('; '))).toBe('ask')
+    expect(ruleOf(Array.from({ length: 200 }, () => 'gosu bob ls').join('; '))).toBe('privileged')
+  })
+
+  test('busybox: the applet is read, and the value of a later -c word is read as a script; main\'s walk goes on behind it', () => {
+    expectCases([
+      ["busybox x -c 'rm -rf /home/me'", 'block', RM],
+      ["busybox -c 'git push --force origin main'", 'block', 'force-push-protected-branch'],
+      ["busybox ls --command -- 'rm -rf /home/me'", 'block', RM],
+      ["busybox env -S x sh -c 'rm -rf /home/me'", 'block', RM],
+      ["nice busybox env -Sx sh -xc 'rm -rf /home/me'", 'block', RM],
+      // Main's walk passes `busybox`: the command after the string is read, and the script main took from there stays read.
+      ["busybox env -S 'x y' rm -rf /home/me", 'block', RM],
+      ["env -S 'x y' -iS busybox rm -c 'rm -rf /home/me'", 'block', RM],
+      // The words from the `busybox` on stay read with this parser's tables, as before the walk went on (a wrapper main's table misread).
+      ["env -S 'x y' busybox chrt 10 rm -rf /home/me", 'block', RM],
+      ["env -S 'x y' busybox uv run --quiet rm -rf /home/me", 'block', RM],
+      ["sudo env -S 'x y' busybox taskset 1 rm -rf /home/me", 'block', RM],
+      // Those words are not read again when they are the part's own (that would be this reading, down to a refusal).
+      ['busybox env -S x ls', 'allow'],
+      ['sudo busybox env -S x ls', 'ask', 'privileged'],
+      ['sudo -u bob busybox env -S x ls', 'ask', 'privileged'],
+      ['X=1 busybox env -S x ls', 'allow'],
+      ['/bin/busybox env -S x ls', 'allow'],
+      ['if busybox env -S x ls; then ls; fi', 'allow'],
+      // The word after the `-c` word is classified as a command, whatever the applet makes of it.
+      ["busybox grep -c 'rm -rf /home/me' file", 'block', RM],
+      ['busybox wc -c ./file', 'review', 'script-path'],
+      // The applet reading stands, and everyday calls keep their tier.
+      ['busybox rm -rf /home/me', 'block', RM],
+      ["busybox sh -c 'rm -rf /home/me'", 'block', RM],
+      ["busybox sh -c 'ls'", 'review', 'script-shell'],
+      ['busybox ls -l', 'allow'],
+      ['busybox grep -c x file', 'allow'],
+      ['busybox tar -czf out.tgz src', 'allow'],
+    ])
+    // The script the applet reading holds already is not read a second time.
+    expect(splitShell("busybox sh -c 'ls'").parts.map(part => part.core)).toEqual(['sh -c ls', 'ls'])
+    // Only the first `busybox` of a part is read that way.
+    expect(splitShell('busybox ionice -c 2 busybox x -c b').parts.map(part => part.core)).toEqual(['x -c b', '2'])
   })
 })
