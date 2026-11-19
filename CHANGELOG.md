@@ -158,18 +158,21 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   classified as a command, whatever the applet makes of it, so a path there is reviewed as a program run by its path
   (`busybox tar -czf /tmp/out.tgz .`, `busybox wget -c <url>`, `busybox wc -c ./file`) and a text there that reads as
   a command gets that command's tier. Each added reading is one more part charged to the added readings' budget.
-- **A heredoc is read as a script wherever 0.5.0 read it as one.** A heredoc's body was read as a script only when
-  the part's own reading named a shell. It is now also read as one when a reading the parser adds feeds it to a shell
-  (the command 0.5.0 read after an `env` split string, the word after `gosu` read as the program, an ambiguous
-  `nsenter` option taking its word), when the part or a later part of the same line stands behind `busybox`, with any
-  applet or none, which 0.5.0 took for a shell, and when the shell is the script of a wrapper option
-  (`runuser --command sh`, `flock <file> -c sh`): `busybox cat <<EOF`, `cat <<EOF | busybox <applet>` and
-  `env -S '<program and a word>' sh <<EOF` get the tier of the commands in the body again. A heredoc that no reading
-  feeds to a shell stays data (`cat`, `tee`, `psql`, `kubectl apply -f -`, `git commit -F -`, `docker exec -i`,
-  `ssh`). The `$(...)` and backticks of an unquoted body stay read as before. The body read this way is charged to
-  the added readings' budget, never to the command's own, so it cannot leave a later command unread; such a body of
-  more than 400 command lines, or with substitutions nested four deep, is refused (`command-too-complex-to-read`),
-  where 0.5.0 reviewed it.
+- **A heredoc is read as a script where a reading the parser adds feeds it to a shell, and behind `busybox`.** A
+  heredoc's body was read as a script only when the part's own reading named a shell. It is now also read as one when
+  a reading the parser adds feeds it to a shell (the command 0.5.0 read after an `env` split string, the word after
+  `gosu` read as the program, an ambiguous `nsenter` option taking its word), when the part or a later part of the
+  same line stands behind `busybox`, with any applet or none, which 0.5.0 took for a shell, and when the shell is the
+  script of a wrapper option (`runuser --command sh`, `flock <file> -c sh`): `busybox cat <<EOF`, `cat <<EOF | busybox
+  <applet>` and `env -S '<program and a word>' sh <<EOF` get the tier of the commands in the body again. A heredoc
+  that no reading feeds to a shell stays data (`cat`, `tee`, `psql`, `kubectl apply -f -`, `git commit -F -`, `docker
+  exec -i`, `ssh`). The `$(...)` and backticks of an unquoted body stay read as before. The body read this way is
+  charged to the added readings' budget, never to the command's own, so it cannot leave a later command unread; such a
+  body of more than 400 command lines, or with substitutions nested four deep, is refused
+  (`command-too-complex-to-read`), where 0.5.0 reviewed it, and one with a line that ends in a redirect operator is
+  reviewed. A reader of a write-protected folder is followed to the end of its pipe past any text nested in the pipe
+  (a substitution, a process substitution, a subshell, a heredoc body, a link's script), and from a nested text on to
+  the level around it (`protected-path` asks when a program that is no reader stands there).
 - **An `env -S` string that holds a `${NAME}` expansion is reviewed and read three ways.** `env` expands the name
   from its environment, and one that is unset expands to nothing, so its word vanishes, an option before it takes the
   next word, and the words after the string can become the command. The classifier cannot know the value, so the
@@ -295,8 +298,9 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   (its blanks, quotes, `\_`, `\c`, `#` comments and `${NAME}`), and is also read alone, as a shell reads it, and as
   the earlier versions read it, so a string `env` cannot read (an error in it) is reviewed and still classified. A
   string that holds a `${NAME}` is reviewed and read three ways, and the command 0.5.0 read after any `env -S` string is
-  read too, so no `env -S` form is read below 0.5.0; `env`'s own words after `--` are read as `env`
-  reads them (a lone `-`, any word with a `=`).
+  read too, so no `env -S` form is read below 0.5.0 (an option of `env` that 0.5.0 misread aside, and a
+  command whose heredoc body makes it more than 200 parts long); `env`'s own words after `--` are read as
+  `env` reads them (a lone `-`, any word with a `=`).
   **The readings the parser adds beside the text have budgets of their own** (400,000 characters scanned, 400
   parts, 4 levels deep): the second `nsenter` reading, the shell scanner's reading of an `env -S` string, the
   strings past the eighth, and every script nested in one of those. The text the command holds (its parts, `-c`

@@ -44,6 +44,8 @@ export type ShellPart = {
   isUnreadable?: boolean
   /** Set when the part types or pastes into another terminal (a multiplexer, a window system's input tool): it can answer a prompt or type a command as the person. */
   isTerminalInput?: boolean
+  /** Set on a part made by a heredoc body read as an extra (DESIGN §16 item 49): no part of the parse before that item. */
+  isExtraBody?: boolean
 }
 
 export type Split = {
@@ -1903,10 +1905,10 @@ function substitutionsIn(text: string, depth = 0): string[] {
 }
 
 /**
- * The standard input of a part that has a heredoc, as its readings see it (§16 item 49). Every reading of the part, the
- * first and the added ones, and every extra script read for it marks it when its program is a shell or it stands behind
- * `busybox`: the heredoc's body is then read as a script, as release 0.5.0 read it. A part without a heredoc has none, so
- * nothing changes for it.
+ * Whether a shell reads a heredoc, as the readings of the parts see it (§16 item 49). The heredoc's part makes one; every
+ * reading of that part or of a later part of its line, and every extra or option script read for those, marks it when its
+ * program is a shell or it stands behind `busybox`: the body is then read as a script, as release 0.5.0 read it. A
+ * command with no heredoc makes none, so nothing changes for it.
  */
 type Stdin = { isFedToShell: boolean }
 
@@ -1916,7 +1918,7 @@ type Stdin = { isFedToShell: boolean }
  * reviewed). An extra reading (see `MAX_EXTRA_CHARS`) is scanned at `extraDepth` 1 or more, and so is everything nested
  * in one: it is charged to the extra budgets only, never to the text's own, and its depth does not count against
  * `MAX_DEPTH`. When an extra budget runs out the scanning of extras stops and `isExhausted` is set: the call is refused.
- * `stdinOf` is set when the text is an extra script read for a part that has a heredoc (see `Stdin`).
+ * `stdinOf` is set when the text is a script that reads the standard input of a part a heredoc may feed (see `Stdin`).
  */
 function scan(command: string, depth: number, isNested: boolean, out: Builder, scope = 0, parentScope?: number, extraDepth = 0, stdinOf?: Stdin): void {
   const isExtra = extraDepth > 0
@@ -2002,15 +2004,15 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
     const isPiped = isPipeNext
     // A pipe at the end of a line goes on to the next line's command.
     if (!isLineEnd || words.length > 0 || redirects.length > 0) isPipeNext = false
+    // Where the readings of this part say whether a shell reads a heredoc (`Stdin`): the part's own when it has one; else
+    // the one of the last part of this line that has one and whose body is not yet taken (release 0.5.0 fed a heredoc
+    // to a shell in any later part); else the one of the part this text is a script of.
+    const stdin: Stdin | undefined = heredocTags.length > 0 ? { isFedToShell: false } : (pendingHeredocs.at(-1)?.stdin ?? stdinOf)
     // One reading of the words as a part, with the scripts it holds. `isReadingA` is an added reading (`Reading`: the second
     // reading of an ambiguous `nsenter` option, the word after `gosu` as the program): an extra, and so is everything it
     // holds. It makes no part of the words as they stand: the first reading made it where an ambiguous option stands, and
     // a part behind `gosu` asks already (`privileged`), which is above the review that part gives. Returns whether the
     // part was made.
-    // Where the readings of this part say whether a shell reads a heredoc (`Stdin`): the part's own when it has one; else
-    // the one of the last part of this line that has one and whose body is not yet taken (release 0.5.0 fed a heredoc
-    // to a shell in any later part); else the one of the part this text is a script of.
-    const stdin: Stdin | undefined = heredocTags.length > 0 ? { isFedToShell: false } : (pendingHeredocs.at(-1)?.stdin ?? stdinOf)
     const makePart = (core: Core, isReadingA: boolean): boolean => {
       const isExtraPart = isExtra || isReadingA
       if (isExtraPart && out.isExhausted) return false
@@ -2120,7 +2122,11 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
         const from = out.parts.length
         nested(body, true)
         out.bodyParts ??= new Set()
-        for (let made = from; made < out.parts.length; made++) out.bodyParts.add(out.parts[made] as ShellPart)
+        for (let made = from; made < out.parts.length; made++) {
+          const bodyPart = out.parts[made] as ShellPart
+          bodyPart.isExtraBody = true
+          out.bodyParts.add(bodyPart)
+        }
       }
       // An unquoted delimiter: the shell expands `$(...)` and backticks in the body, so the commands they run are parts
       // of this call. Read as on `origin/main`, with the text's own bounds, whatever was read above: a script reading

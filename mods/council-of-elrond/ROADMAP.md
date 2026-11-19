@@ -816,9 +816,9 @@ and the code it concerns; a session that takes one writes it a brief first.
   own reading feeds to a shell is charged to the text's own 200 parts, so a long one cuts the parse
   and the call is reviewed, where release 0.5.0 read no shell in some of these parts (the shell held
   by a split string) and classified what follows; a wrapper that starts a shell when it is given no
-  command (`nsenter`, `chroot`, `unshare`) is not read as a shell for its heredoc; and in a body the
-  part's own reading feeds to a shell, a substitution inside quotes is read as a script reads it,
-  not as a heredoc expands it (`takeHeredocs` in `hooks/rules/shell.ts`). The same on `main`.
+  command is not read as a shell for its heredoc; and in a body the part's own reading feeds to a
+  shell, a substitution inside quotes is read as a script reads it, not as a heredoc expands it
+  (`takeHeredocs` in `hooks/rules/shell.ts`). The same on `main`.
 - A heredoc body read as an added reading (DESIGN §16 item 49) of more than 400 command lines, or
   with substitutions nested four deep, is refused; a long data file written through a `busybox`
   applet is the everyday case. Raising the bound or reviewing instead loosens: the maintainer's

@@ -4007,7 +4007,7 @@ describe('a heredoc is read as a script when an added reading feeds it to a shel
       [heredoc("busybox env -S 'x y' sh", 'rm -rf /home/me'), 'block', RM],
       [heredoc("env -S 'x y' busybox cat", 'rm -rf /home/me'), 'block', RM],
       [heredoc("nsenter -S 0 env -S 'x y' busybox cat", PUSH), 'block', FORCE_PUSH],
-      // The word after `gosu` read as the program.
+      // The word after `gosu` read as the program: an added part of the text, which fed the body before this item too.
       [heredoc('gosu sh', PUSH), 'block', FORCE_PUSH],
       // A body that is no command: the part is reviewed as before.
       [heredoc("env -S 'x y' sh", 'hello there'), 'review', 'script-shell'],
@@ -4082,6 +4082,42 @@ describe('a heredoc is read as a script when an added reading feeds it to a shel
       // The depth bound of the text still cuts the parse.
       ['( ( ( ( busybox cat <<EOF\n# $(date)\nEOF\n))))', 'review', 'command-too-complex'],
       ['( ( ( ( busybox cat <<EOF\nhello\nEOF\n))))', 'allow'],
+    ])
+  })
+
+  test('what the body read as an extra costs: substitutions four deep refuse the call, a line that ends in a redirect is reviewed', () => {
+    expectCases([
+      [heredoc('busybox cat', 'echo $(echo $(echo $(date)))'), 'allow'],
+      [heredoc('busybox cat', 'echo $(echo $(echo $(echo $(date))))'), 'block', TOO_COMPLEX_TO_READ],
+      [heredoc('cat', 'echo $(echo $(echo $(echo $(date))))'), 'allow'],
+      [heredoc('busybox cat', 'description: >'), 'review', 'command-too-complex'],
+      [heredoc('cat', 'description: >'), 'allow'],
+    ])
+  })
+
+  test('a pipe chain goes on behind the parts of a text nested in it: a reader of a write-protected folder still asks', () => {
+    expectCases([
+      // The body read as an extra stands between the line and the line the pipe goes on to.
+      ["ls ~/.claude/plugins | busybox cat <<'EOF' |\nhello\nEOF\nxyz", 'ask', 'protected-path'],
+      ["ls ~/.claude/plugins <<'EOF' | busybox cat |\nhello\nEOF\ncat | xyz", 'ask', 'protected-path'],
+      // So do the substitutions of a body and of a word, which were read before this item.
+      ['ls ~/.claude/plugins | cat <<EOF |\n$(date)\nEOF\nxyz', 'ask', 'protected-path'],
+      ['ls ~/.claude/plugins | cat $(date) | xyz', 'ask', 'protected-path'],
+      ['ls ~/.claude/plugins | cat | xyz', 'ask', 'protected-path'],
+      // A reader in a nested text whose chain goes on at the level around it, with a body read as an extra on its line.
+      ["sh -c 'ls ~/.claude/plugins <<EOF | busybox cat\nhello\nEOF' | xyz", 'ask', 'protected-path'],
+      ["sh -c 'busybox ls ~/.claude/plugins <<EOF\nhello\nEOF' | xyz", 'ask', 'protected-path'],
+      // The walk of the commit before still reaches what it reached: a substitution after the body whose first part is piped.
+      ['ls ~/.claude/plugins | busybox cat <<T\nx\nT\n$(<<Q | tee /x)', 'ask', 'protected-path'],
+      // A subshell or a process substitution in the chain.
+      ['ls ~/.claude/plugins | (sort) | xyz', 'ask', 'protected-path'],
+      ['ls ~/.claude/plugins | sort <(date) | xyz', 'ask', 'protected-path'],
+      // The chain ends where the reader's own level has a part that is not piped; a pipe inside a nested text is not the chain's.
+      ['ls ~/.claude/plugins; echo $(git log | head)', 'allow'],
+      ['ls ~/.claude/plugins | cat $(a | b)', 'allow'],
+      ['ls ~/.claude/plugins; cat a | xyz', 'allow'],
+      ['( ls ~/.claude/plugins | cat ) ; xyz', 'allow'],
+      ["ls ~/.claude/plugins | busybox cat <<'EOF'\nhello\nEOF\ncat a | xyz", 'allow'],
     ])
   })
 
