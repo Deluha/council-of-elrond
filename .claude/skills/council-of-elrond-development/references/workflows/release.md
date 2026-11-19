@@ -24,7 +24,7 @@ The maintainer cuts a release. A session prepares it only when the brief says so
 
 ## Verification
 
-Run `node scripts/verify.mjs` (`/verify-change`) on the pinned build (`references/qa-ci.md`) and read its table. The tag command checks that the plugin manifest and the marketplace entry agree; run it with `--dry-run` first. The release workflow checks the tag against the manifest and `CHANGELOG.md`, re-runs the gates and publishes.
+Run `node scripts/verify.mjs` on the pinned build (`references/qa-and-ci.md`) and read its table. The tag command checks that the plugin manifest and the marketplace entry agree; run it with `--dry-run` first. The release workflow checks the tag against the manifest and `CHANGELOG.md`, re-runs the gates and publishes.
 
 ## Docs to update
 

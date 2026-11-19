@@ -14,7 +14,7 @@
 
 ## Verification
 
-Run `node scripts/verify.mjs` (`/verify-change`) on the pinned build (`references/qa-ci.md`) and read its table. Run the sweep against `main` (R9, `references/domain-gate-direction.md`): the pull request states "lower than `main`: none", or lists each line with its approval. A path that decides what leaves the process gets the mutation check (R7).
+Run `node scripts/verify.mjs` on the pinned build (`references/qa-and-ci.md`) and read its table. Run the sweep against `main` (R9, `references/domain-gate-direction.md`): the pull request states "lower than `main`: none", or lists each line with its approval. A path that decides what leaves the process gets the mutation check (R7).
 
 ## Docs to update
 

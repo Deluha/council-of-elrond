@@ -49,7 +49,7 @@ Run them on the build you are upgrading to. Point `COUNCIL_CLAUDE` at that **new
 unset it if the new build is the installed `claude`): left pointing at the old pin, the gates
 would run on the old build. The pre-commit hook refuses a build other than the pin unless
 `COUNCIL_ALLOW_UNPINNED=1`; set it for this brief only. The full explanation is in
-`references/qa-ci.md` (The pinned build).
+`references/qa-and-ci.md` (The pinned build).
 
 ```sh
 tsc -p mods
@@ -96,14 +96,14 @@ still has none. (`session.append` in the types is a different call.)
 
 ## Verification
 
-The gates above pass on the new build (`tsc -p mods`, the tests, `claude plugin validate --strict mods/council-of-elrond`), then `node scripts/verify.mjs --all` on the new build with `COUNCIL_ALLOW_UNPINNED=1` for this brief only (`references/qa-ci.md`). `git diff --stat` shows `mods/types/claude-code.d.ts` replaced by the generated file, never edited by hand. The drift is classified (additive, changed or removed) and written down.
+The gates above pass on the new build (`tsc -p mods`, the tests, `claude plugin validate --strict mods/council-of-elrond`), then `node scripts/verify.mjs --all` on the new build with `COUNCIL_ALLOW_UNPINNED=1` for this brief only (`references/qa-and-ci.md`). `git diff --stat` shows `mods/types/claude-code.d.ts` replaced by the generated file, never edited by hand. The drift is classified (additive, changed or removed) and written down.
 
 ## Docs to update
 
 - DESIGN.md header: the new version (the "Targets" line), the drift in one sentence, and any
   changed decision.
 - CHANGELOG.md "Unreleased": "Types regenerated for Claude Code X.Y.Z; drift: …".
-- CI (`.github/workflows/ci.yml` and `.github/workflows/release.yml`): move the pin in both
+- CI (`.github/workflows/ci-tests.yml` and `.github/workflows/release.yml`): move the pin in both
   workflows to the new version (decision D10).
 
 ## Ask first

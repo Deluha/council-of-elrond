@@ -5,12 +5,12 @@ description: Development guidance for the council-of-elrond repository (the hard
 
 | Task or question | File |
 | :- | :- |
-| A rule's full form, R1 to R15 | `references/conventions.md` |
+| A rule's full form, R1 to R15; the simplicity audit | `references/conventions.md` |
 | Code, test and document style; commit messages | `references/style.md` |
 | Where things are; how `hooks/register.ts` is built | `references/architecture.md` |
 | Facts about the host API (budget, `$.ui.ask`, the test kit, denial wording) | `references/host-api-facts.md` |
 | Writing tests; the mutation check | `references/testing.md` |
-| Verify, CI, pre-commit, the pinned build, the hooks, the guidance checker | `references/qa-ci.md` |
+| Verify, CI, pre-commit, the pinned build, the hooks, the guidance checker | `references/qa-and-ci.md` |
 | The ask and deny rules, the two hooks, what the guidance checker checks and does not prove | `references/guidance-machinery.md` |
 | How a session runs a brief; stop conditions; hand-over | `references/session-protocol.md` |
 | Tightening or loosening; the sweep against `main` | `references/domain-gate-direction.md` |
@@ -20,7 +20,6 @@ description: Development guidance for the council-of-elrond repository (the hard
 | Reviewers and what reaches a model | `references/domain-reviewers.md` |
 | Roles, the brief template, the review loop, the model-tier table | `references/recipes-orchestration.md` |
 | Grep before coding; the shared helpers; the lessons loop | `references/recipes.md` |
-| The prompts that check this guidance | `references/evals.md` |
 | Add or change a shipped rule or a protected path | `references/workflows/add-rule.md` |
 | Teach the shell parser a wrapper, a runner or a command form | `references/workflows/teach-parser.md` |
 | Change a reviewer's prompt, a preview inspection or the members | `references/workflows/change-reviewer.md` |
@@ -32,3 +31,5 @@ description: Development guidance for the council-of-elrond repository (the hard
 | Run a headless live check or probe | `references/workflows/live-check.md` |
 | Update the documents; reach a checkpoint | `references/workflows/docs-and-checkpoint.md` |
 | Cut a release | `references/workflows/release.md` |
+
+The prompts to run by hand before a guidance change merges: `evals/evals.json`.

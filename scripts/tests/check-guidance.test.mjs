@@ -30,17 +30,17 @@ function tree(overrides = {}) {
     'CLAUDE.md': `# project\n\n## Hard rules\n\n- R1 Never load it. \`${REFS}/conventions.md#r1\`\n- R2 Never edit it. \`${REFS}/conventions.md#r2\`\n\n${fixture('ask-first.md')}`,
     '.claude/settings.json': fixture('settings.json'),
     '.github/CODEOWNERS': fixture('CODEOWNERS'),
-    '.github/workflows/ci.yml': 'jobs:\n  hygiene:\n    steps:\n      - run: node scripts/check-guidance.mjs\n      - run: node --test scripts/tests/\n',
+    '.github/workflows/ci-tests.yml': 'jobs:\n  hygiene:\n    steps:\n      - run: node scripts/check-guidance.mjs\n      - run: node --test scripts/tests/\n',
     '.githooks/pre-commit': '#!/bin/sh\nexec node scripts/verify.mjs --staged\n',
     'scripts/verify.mjs': "// the guidance row\nconst r = run('node', ['scripts/check-guidance.mjs', '--json'], { cwd: root })\n",
     [`${SKILL}/SKILL.md`]: '---\nname: council-of-elrond-development\ndescription: x\n---\n\n| Task | File under `references/` |\n| :- | :- |\n| Rules | `conventions.md` |\n| Style | `style.md` |\n| Add a rule | `workflows/add-rule.md` |\n| Roles | `recipes-orchestration.md` |\n',
     [`${REFS}/conventions.md`]: '# Conventions\n\n<a id="r1"></a>\n## R1 Never load the mod\n\nText.\n\n<a id="r2"></a>\n## R2 Never edit the types\n\nText.\n\n## The pinned build\n',
     [`${REFS}/style.md`]: '# Style\n\nSee `conventions.md#the-pinned-build`.\n',
     [`${REFS}/workflows/add-rule.md`]: '# Add a rule\n',
-    [`${REFS}/recipes-orchestration.md`]: '# Roles\n\n| Role | Model |\n| :- | :- |\n| writer | sonnet |\n| reader | haiku |\n',
+    [`${REFS}/recipes-orchestration.md`]: '# Roles\n\n| Role | Model |\n| :- | :- |\n| implementer | sonnet |\n| reader | haiku |\n',
     '.claude/rules/classifier.md': '---\npaths:\n  - "mods/council-of-elrond/hooks/rules/**"\n---\n\n- Adding a rule: `references/workflows/add-rule.md`\n- Rules that apply: R1\n',
-    '.claude/skills/verify-change/SKILL.md': '---\nname: verify-change\ndescription: x\n---\n\n# Verify\n\n- Run `scripts/verify.mjs` with node.\n',
-    '.claude/agents/writer.md': '---\nname: writer\nmodel: sonnet\n---\n\nEdit what the brief names. Roles: `references/recipes-orchestration.md`\n',
+    '.claude/skills/verify/SKILL.md': '---\nname: verify\ndescription: x\n---\n\n# Verify\n\n- Run `scripts/verify.mjs` with node.\n',
+    '.claude/agents/implementer.md': '---\nname: implementer\nmodel: sonnet\n---\n\nEdit what the brief names. Roles: `references/recipes-orchestration.md`\n',
     // The files the ask-first list names, so that its pointers resolve.
     'mods/council-of-elrond/hooks/config/defaults.ts': '',
     'mods/council-of-elrond/hooks/config/trust.ts': '',
@@ -118,7 +118,7 @@ describe('G1 pointers resolve', () => {
     put('mods/council-of-elrond/hooks/register.ts', '')
     put(
       '.claude/rules/x.md',
-      'Run `node scripts/verify.mjs --all`, `/verify-change`, `next(`, `$.state`, `tool.check`, `opus/sonnet`, `./schema.js`, `.ts`, `https://example.com/a.md`, `<name>.md` and `hooks/register.ts:1772-1776`.\n',
+      'Run `node scripts/verify.mjs --all`, `/verify`, `next(`, `$.state`, `tool.check`, `opus/sonnet`, `./schema.js`, `.ts`, `https://example.com/a.md`, `<name>.md` and `hooks/register.ts:1772-1776`.\n',
     )
     assert.deepEqual(g.checkG1(root), [])
   })
@@ -135,7 +135,7 @@ describe('G1 pointers resolve', () => {
     assert.deepEqual(g.checkG1(root), [])
     assert.deepEqual([...g.POINTER_DOCS].sort(), ['CONTRIBUTING.md', 'docs/DEVELOPMENT.md', 'docs/GITHUB.md', 'docs/MAINTENANCE.md'])
     for (const file of g.POINTER_DOCS) {
-      put(file, 'Prose with `docs/nowhere.md`, `src/x.ts`, `a/b.md` and a good pointer `.claude/skills/verify-change/SKILL.md` and `scripts/verify.mjs`.\n')
+      put(file, 'Prose with `docs/nowhere.md`, `src/x.ts`, `a/b.md` and a good pointer `.claude/skills/verify/SKILL.md` and `scripts/verify.mjs`.\n')
       assert.deepEqual(g.checkG1(root), [], file)
       put(file, 'See `.claude/skills/council-of-elrond-development/references/gone.md`.\n')
       const f = g.checkG1(root)
@@ -150,7 +150,7 @@ describe('G1 pointers resolve', () => {
   test('a token that starts with ./scripts/ or ./.claude/ is a pointer from the root, in the pointer documents', () => {
     const { root, put } = tree()
     for (const file of g.POINTER_DOCS) {
-      put(file, 'See `./scripts/verify.mjs`, `./.claude/skills/verify-change/SKILL.md` and `./schema.js`, `./other/x.md`.\n')
+      put(file, 'See `./scripts/verify.mjs`, `./.claude/skills/verify/SKILL.md` and `./schema.js`, `./other/x.md`.\n')
       assert.deepEqual(g.checkG1(root), [], file)
       put(file, 'See `./scripts/gone.mjs`.\n')
       assert.equal(g.checkG1(root).length, 1, `${file}: ./scripts/`)
@@ -184,7 +184,7 @@ describe('G1 pointers resolve', () => {
 
   test('a slash command naming one of the command skills needs its SKILL.md; an unknown name is skipped', () => {
     const { root, put } = tree()
-    put('.claude/rules/x.md', 'Run `/verify-change` or `/verify-change --all`.\n')
+    put('.claude/rules/x.md', 'Run `/verify` or `/verify --all`.\n')
     assert.deepEqual(g.checkG1(root), [])
     // A folder with no SKILL.md is a command skill that lost its file; a name with no folder is not a command of this repository.
     put('.claude/skills/live-check/notes.md', 'x\n')
@@ -198,9 +198,9 @@ describe('G1 pointers resolve', () => {
 
   test('the command skills are the folders under .claude/skills/ except the development skill: a new one needs no edit', () => {
     const { root, put } = tree()
-    assert.deepEqual(g.commandSkills(root), ['verify-change'])
+    assert.deepEqual(g.commandSkills(root), ['verify'])
     put('.claude/skills/brand-new/notes.md', 'x\n')
-    assert.deepEqual(g.commandSkills(root), ['brand-new', 'verify-change'])
+    assert.deepEqual(g.commandSkills(root), ['brand-new', 'verify'])
     put('.claude/rules/x.md', 'Run `/brand-new`, `/council-of-elrond-development`.\n')
     const f = g.checkG1(root)
     assert.equal(f.length, 1)
@@ -453,7 +453,7 @@ describe('G9 model tier names', () => {
   test('agent frontmatter may name a tier; the agent body may not', () => {
     const { root, put } = tree()
     assert.deepEqual(g.checkG9(root), [])
-    put('.claude/agents/writer.md', '---\nname: writer\nmodel: sonnet\n---\n\nThe sonnet model edits.\n')
+    put('.claude/agents/implementer.md', '---\nname: implementer\nmodel: sonnet\n---\n\nThe sonnet model edits.\n')
     const f = g.checkG9(root)
     assert.equal(f.length, 1)
     assert.equal(f[0].line, 6)
@@ -461,7 +461,7 @@ describe('G9 model tier names', () => {
 
   test('the one table of the orchestration recipe may name tiers; its prose and a second table may not', () => {
     const { root, put } = tree()
-    put(`${REFS}/recipes-orchestration.md`, '# Roles\n\nHaiku reads.\n\n| Role | Model |\n| :- | :- |\n| writer | sonnet |\n\nText.\n\n| Other | Model |\n| :- | :- |\n| x | opus |\n')
+    put(`${REFS}/recipes-orchestration.md`, '# Roles\n\nHaiku reads.\n\n| Role | Model |\n| :- | :- |\n| implementer | sonnet |\n\nText.\n\n| Other | Model |\n| :- | :- |\n| x | opus |\n')
     const f = g.checkG9(root)
     assert.equal(f.length, 2)
     assert.match(messages(f), /orchestration recipe/)
@@ -573,7 +573,7 @@ describe('G11 wired in', () => {
 
   test('removing the CI checker line fails', () => {
     const { root, put } = tree()
-    put('.github/workflows/ci.yml', 'jobs:\n  hygiene:\n    steps:\n      - run: node --test scripts/tests/\n')
+    put('.github/workflows/ci-tests.yml', 'jobs:\n  hygiene:\n    steps:\n      - run: node --test scripts/tests/\n')
     const f = g.checkG11(root)
     assert.equal(f.length, 1)
     assert.match(f[0].message, /check-guidance/)
@@ -581,7 +581,7 @@ describe('G11 wired in', () => {
 
   test('removing the CI test line fails; a commented-out line does not count', () => {
     const { root, put } = tree()
-    put('.github/workflows/ci.yml', 'steps:\n  - run: node scripts/check-guidance.mjs\n  # - run: node --test scripts/tests/\n')
+    put('.github/workflows/ci-tests.yml', 'steps:\n  - run: node scripts/check-guidance.mjs\n  # - run: node --test scripts/tests/\n')
     const f = g.checkG11(root)
     assert.equal(f.length, 1)
     assert.match(f[0].message, /--test/)
@@ -589,13 +589,13 @@ describe('G11 wired in', () => {
 
   test('CI: the commands in comments or in step names only do not count; a block scalar and a plain run do', () => {
     const { root, put } = tree()
-    put('.github/workflows/ci.yml', CI('      # run: node scripts/check-guidance.mjs', '      - name: node scripts/check-guidance.mjs', '        run: echo ok', '      - name: node --test scripts/tests/', '        run: echo node --test scripts/tests/'))
+    put('.github/workflows/ci-tests.yml', CI('      # run: node scripts/check-guidance.mjs', '      - name: node scripts/check-guidance.mjs', '        run: echo ok', '      - name: node --test scripts/tests/', '        run: echo node --test scripts/tests/'))
     assert.equal(g.checkG11(root).length, 2)
-    put('.github/workflows/ci.yml', CI('      - run: |', '          node scripts/check-guidance.mjs', '          node --test scripts/tests/'))
+    put('.github/workflows/ci-tests.yml', CI('      - run: |', '          node scripts/check-guidance.mjs', '          node --test scripts/tests/'))
     assert.deepEqual(g.checkG11(root), [])
-    put('.github/workflows/ci.yml', CI('      - name: x', '        run: node scripts/check-guidance.mjs', '      - run: "node --test scripts/tests/"'))
+    put('.github/workflows/ci-tests.yml', CI('      - name: x', '        run: node scripts/check-guidance.mjs', '      - run: "node --test scripts/tests/"'))
     assert.deepEqual(g.checkG11(root), [])
-    put('.github/workflows/ci.yml', CI('      - run: node scripts/check-guidance.mjs --root /tmp', '      - run: node --test scripts/tests/ other'))
+    put('.github/workflows/ci-tests.yml', CI('      - run: node scripts/check-guidance.mjs --root /tmp', '      - run: node --test scripts/tests/ other'))
     assert.equal(g.checkG11(root).length, 2, 'a different command is not the command')
   })
 
@@ -675,32 +675,32 @@ describe('G11 wired in', () => {
       ['      - run: |', '          node --test scripts/tests/', '        continue-on-error: true'],
     ]
     for (const step of off) {
-      put('.github/workflows/ci.yml', both(guidance, step))
+      put('.github/workflows/ci-tests.yml', both(guidance, step))
       const f = g.checkG11(root)
       assert.equal(f.length, 1, step.join('\n'))
       assert.match(f[0].message, /--test/)
     }
     // The same step with other keys, and a step that is off next to one that is on.
-    put('.github/workflows/ci.yml', both(guidance, ['      - name: x', "        if: github.event_name == 'push'", '        continue-on-error: false', '        run: node --test scripts/tests/']))
+    put('.github/workflows/ci-tests.yml', both(guidance, ['      - name: x', "        if: github.event_name == 'push'", '        continue-on-error: false', '        run: node --test scripts/tests/']))
     assert.deepEqual(g.checkG11(root), [])
-    put('.github/workflows/ci.yml', CI(...guidance, '      - if: false', '        run: node --test scripts/tests/', ...tests))
+    put('.github/workflows/ci-tests.yml', CI(...guidance, '      - if: false', '        run: node --test scripts/tests/', ...tests))
     assert.deepEqual(g.checkG11(root), [])
     // A neighbouring step's switch does not leak into the step that runs.
-    put('.github/workflows/ci.yml', CI(...guidance, '      - if: false', '        run: echo skipped', ...tests))
+    put('.github/workflows/ci-tests.yml', CI(...guidance, '      - if: false', '        run: echo skipped', ...tests))
     assert.deepEqual(g.checkG11(root), [])
   })
 
   test('CI: a job switched off by if: false or continue-on-error: true does not count its steps', () => {
     const { root, put } = tree()
     const job = (head, ...lines) => `jobs:\n  hygiene:\n${head}    steps:\n      - run: node scripts/check-guidance.mjs\n      - run: node --test scripts/tests/\n${lines.join('')}`
-    put('.github/workflows/ci.yml', job(''))
+    put('.github/workflows/ci-tests.yml', job(''))
     assert.deepEqual(g.checkG11(root), [])
     for (const head of ['    if: false\n', '    continue-on-error: true\n', "    if: 'false'\n"]) {
-      put('.github/workflows/ci.yml', job(head))
+      put('.github/workflows/ci-tests.yml', job(head))
       assert.equal(g.checkG11(root).length, 2, head)
     }
     // Another job's switch does not count, and a job's own steps keys at the step indentation are not job keys.
-    put('.github/workflows/ci.yml', `${job('')}  other:\n    if: false\n    steps:\n      - run: echo hi\n`)
+    put('.github/workflows/ci-tests.yml', `${job('')}  other:\n    if: false\n    steps:\n      - run: echo hi\n`)
     assert.deepEqual(g.checkG11(root), [])
   })
 

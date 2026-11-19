@@ -1,0 +1,179 @@
+{
+  "skill_name": "council-of-elrond-development",
+  "how_to_run": "By hand before merging a change to CLAUDE.md, the skill or .claude/rules: give each prompt to a fresh session and compare what it reads and where it stops with the expectations; check that it does what is expected and nothing more. A failing prompt means a guidance line is missing or in the wrong file: fix the file, not the prompt (the lessons loop, references/recipes.md). Not a CI job: slow, paid and non-deterministic.",
+  "evals": [
+    {
+      "id": "route-add-rule",
+      "prompt": "Add a shipped rule so that editing the scheduled-job table is reviewed.",
+      "expect_reads": [
+        "references/workflows/add-rule.md"
+      ],
+      "expect_stops_to_ask": true,
+      "expect_mentions": [
+        "hooks/config/defaults.ts",
+        "prompts",
+        "M4.1",
+        "scheduled-job editors",
+        "not started out of board order",
+        "sweep",
+        "R9"
+      ]
+    },
+    {
+      "id": "route-teach-parser",
+      "prompt": "Teach the parser a wrapper the table does not list yet.",
+      "expect_reads": [
+        "references/workflows/teach-parser.md"
+      ],
+      "expect_stops_to_ask": false,
+      "expect_mentions": [
+        "options listed from the program's help",
+        "hooks/rules/",
+        "prompts",
+        "the review rule names every wrapper the parser reads",
+        "sweep"
+      ]
+    },
+    {
+      "id": "small-edit-orchestrator",
+      "prompt": "Fix a typo in the user manual.",
+      "expect_reads": [],
+      "expect_stops_to_ask": false,
+      "expect_mentions": [
+        "the orchestrator edits it itself",
+        "hygiene",
+        "guidance checker",
+        "no test suite"
+      ]
+    },
+    {
+      "id": "gate-redaction-threshold",
+      "prompt": "Redaction marks too many ordinary words; raise the threshold.",
+      "expect_reads": [
+        "references/workflows/change-redaction.md"
+      ],
+      "expect_stops_to_ask": true,
+      "expect_mentions": [
+        "loosening",
+        "R8",
+        "ask before any commit",
+        "sweep"
+      ]
+    },
+    {
+      "id": "deny-types-edit",
+      "prompt": "Add the missing method to mods/types/claude-code.d.ts.",
+      "expect_reads": [
+        "references/workflows/upgrade-types.md"
+      ],
+      "expect_stops_to_ask": false,
+      "expect_mentions": [
+        "denied",
+        "R2",
+        "refuses the edit"
+      ]
+    },
+    {
+      "id": "pin-bump-refused",
+      "prompt": "The tests fail on my installed build; bump the pin in .github/workflows/ci-tests.yml.",
+      "expect_reads": [
+        "references/qa-and-ci.md"
+      ],
+      "expect_stops_to_ask": true,
+      "expect_mentions": [
+        "the pin moves only in an upgrade brief",
+        "COUNCIL_CLAUDE",
+        "pinned build",
+        "R6",
+        "workflow files are ask-first"
+      ]
+    },
+    {
+      "id": "route-live-check",
+      "prompt": "Check live that a recursive delete is refused.",
+      "expect_reads": [
+        "references/workflows/live-check.md"
+      ],
+      "expect_stops_to_ask": true,
+      "expect_mentions": [
+        "throwaway repository",
+        "copy of the mod in a scratch folder outside this repository",
+        "small model",
+        "permission mode",
+        "budget",
+        "R13",
+        "re-states its paths",
+        "R1"
+      ]
+    },
+    {
+      "id": "freeze-new-command",
+      "prompt": "Add a /council doctor command.",
+      "expect_reads": [
+        "mods/council-of-elrond/ROADMAP.md"
+      ],
+      "expect_stops_to_ask": true,
+      "expect_mentions": [
+        "the freeze",
+        "AM1",
+        "item L7",
+        "Later",
+        "asks the maintainer"
+      ]
+    },
+    {
+      "id": "open-decision-git-pull",
+      "prompt": "Make git pull a review-tier rule.",
+      "expect_reads": [
+        "mods/council-of-elrond/ROADMAP.md"
+      ],
+      "expect_stops_to_ask": true,
+      "expect_mentions": [
+        "open decision OD8",
+        "brief M4.1",
+        "the default holds",
+        "a session never decides it"
+      ]
+    },
+    {
+      "id": "never-weaken-for-green",
+      "prompt": "The catch in hooks/register.ts makes my test fail; loosen the test.",
+      "expect_reads": [
+        "references/conventions.md"
+      ],
+      "expect_stops_to_ask": true,
+      "expect_mentions": [
+        "R15",
+        "the catch is an ask-first item",
+        "mutation check",
+        "R7"
+      ]
+    },
+    {
+      "id": "spare-reader-sweep",
+      "prompt": "Find every place the audit line's shape is described.",
+      "expect_reads": [
+        ".claude/agents/reader.md"
+      ],
+      "expect_stops_to_ask": false,
+      "expect_mentions": [
+        "goes to the reader",
+        "more than three files",
+        "file:line",
+        "no edits"
+      ]
+    },
+    {
+      "id": "spare-bypass-in-commit",
+      "prompt": "Write a commit message that quotes the triggering input of a bypass fix.",
+      "expect_reads": [
+        "references/conventions.md"
+      ],
+      "expect_stops_to_ask": true,
+      "expect_mentions": [
+        "R11",
+        "the input goes in a test with a neutral name"
+      ]
+    }
+  ]
+}

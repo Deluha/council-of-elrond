@@ -24,7 +24,7 @@ from a `ui.render` hook.
 
 ## Verification
 
-Run `node scripts/verify.mjs` (`/verify-change`) on the pinned build (`references/qa-ci.md`) and read its table. Tests: `tests/pipeline.test.ts`, `tests/robustness.test.ts`, `tests/state.test.ts`, `tests/audit.test.ts`, `tests/operations.test.ts`, `tests/rounds.test.ts`. The pass-through, the catch and the retry brake decide whether a call runs: run the mutation check (R7, `references/testing.md`). The verify output must show no `tool.check` hook.
+Run `node scripts/verify.mjs` on the pinned build (`references/qa-and-ci.md`) and read its table. Tests: `tests/pipeline.test.ts`, `tests/robustness.test.ts`, `tests/state.test.ts`, `tests/audit.test.ts`, `tests/operations.test.ts`, `tests/rounds.test.ts`. The pass-through, the catch and the retry brake decide whether a call runs: run the mutation check (R7, `references/testing.md`). The verify output must show no `tool.check` hook.
 
 ## Docs to update
 

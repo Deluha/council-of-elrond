@@ -1,5 +1,5 @@
 ---
-name: writer
+name: implementer
 description: Use for any non-trivial edit: code, tests and the docs that describe them. Needs a complete brief with goal, exact files, constraints, acceptance criteria and how to verify. Pass effort high for bug fixes, migrations and edge-case-heavy work.
 model: sonnet
 effort: medium

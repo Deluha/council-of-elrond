@@ -26,7 +26,7 @@
 // code such as next( or $.state, URLs, ~/ paths and placeholders in <> are skipped); it does not
 // contain a "*"; a leading "/" means "from the repository root" (the ask-first list is written
 // that way): the slash is stripped and the path is looked up at the root only, while a token
-// with a leading "/" and no extension, "/" or folder (a slash command such as /verify-change)
+// with a leading "/" and no extension, "/" or folder (a slash command such as /verify)
 // is not a path; an import specifier ("./schema.js") and a bare extension (".ts") are not paths;
 // a trailing ":12" or ":12-20" line suffix and a "#anchor" are stripped first;
 // and it either ends in a known file extension
@@ -861,11 +861,11 @@ export function shellRuns(script, command) {
 
 export function checkG11(root) {
   const out = []
-  const ci = readText(root, '.github/workflows/ci.yml')
-  if (ci === null) out.push(finding('G11', '.github/workflows/ci.yml', 1, 'missing'))
+  const ci = readText(root, '.github/workflows/ci-tests.yml')
+  if (ci === null) out.push(finding('G11', '.github/workflows/ci-tests.yml', 1, 'missing'))
   else {
-    if (!ciRuns(ci, 'node scripts/check-guidance.mjs')) out.push(finding('G11', '.github/workflows/ci.yml', 1, 'has no `run:` step whose command is `node scripts/check-guidance.mjs`'))
-    if (!ciRuns(ci, 'node --test scripts/tests/') && !ciRuns(ci, 'node --test scripts/tests')) out.push(finding('G11', '.github/workflows/ci.yml', 1, 'has no `run:` step whose command is `node --test scripts/tests/`'))
+    if (!ciRuns(ci, 'node scripts/check-guidance.mjs')) out.push(finding('G11', '.github/workflows/ci-tests.yml', 1, 'has no `run:` step whose command is `node scripts/check-guidance.mjs`'))
+    if (!ciRuns(ci, 'node --test scripts/tests/') && !ciRuns(ci, 'node --test scripts/tests')) out.push(finding('G11', '.github/workflows/ci-tests.yml', 1, 'has no `run:` step whose command is `node --test scripts/tests/`'))
   }
   const hook = readText(root, '.githooks/pre-commit')
   if (hook === null) out.push(finding('G11', '.githooks/pre-commit', 1, 'missing'))

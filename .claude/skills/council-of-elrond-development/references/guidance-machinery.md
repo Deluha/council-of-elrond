@@ -1,6 +1,6 @@
 # The guidance machinery
 
-The permission rules of the developing session, the two Claude Code hooks, and the checker that keeps the guidance in step with the repository. The verify command and CI are in `references/qa-ci.md`.
+The permission rules of the developing session, the two Claude Code hooks, and the checker that keeps the guidance in step with the repository. The verify command and CI are in `references/qa-and-ci.md`.
 
 ## The ask rules and the two hooks
 

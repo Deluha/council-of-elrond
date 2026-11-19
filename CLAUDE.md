@@ -2,16 +2,18 @@
 
 A Claude Code mod (function-hooks plugin) in `mods/council-of-elrond` that gates risky tool calls. Public, MIT.
 
-## Operating principles
+## Operating principles (NON-NEGOTIABLE)
 
-- Start ready: in cloud sessions the session-start hook installs the pinned build; run `/verify-change --all` once and see it green before changing anything.
+- Start ready: in cloud sessions the session-start hook installs the pinned build; run `node scripts/verify.mjs --all` once and see it green before changing anything.
 - Load only what the task needs: open the `council-of-elrond-development` skill, find the task in its table, read the one file it names.
   The board of briefs is `mods/council-of-elrond/ROADMAP.md`.
-- Roles: the orchestrator plans, briefs, reviews and verifies; the writer edits from a complete brief; the reader reads when more than three files are involved; the reviewer reviews and never edits.
+- Roles: the orchestrator plans, briefs, reviews and verifies; the implementer edits from a complete brief; the reader reads when more than three files are involved; the reviewer reviews and never edits.
 - Small edits (one file, about 20 lines, no ask-first item, no new logic) the orchestrator makes itself. The full verify runs once, at the end.
 - The safer side: a tightening is decided, recorded in `mods/council-of-elrond/DESIGN.md` and reported; a loosening is asked first.
 - Stop rather than guess; stop at every checkpoint and wait.
 - Every fact lives in one file; everything else points to it.
+
+**Workflow for any change:** route through the skill and read the one file it names, grep the established pattern first (`.claude/skills/council-of-elrond-development/references/recipes.md`), validate against the rules and flag a conflict, implement, run `node scripts/verify.mjs` (`.claude/skills/council-of-elrond-development/references/qa-and-ci.md`), update the docs in the same brief (R10), then the simplicity audit (`.claude/skills/council-of-elrond-development/references/conventions.md#simplicity`) and the reviewer on the whole diff (`.claude/skills/council-of-elrond-development/references/recipes-orchestration.md`).
 
 ## Hard rules
 
@@ -34,6 +36,8 @@ Full form of each rule: the pointer after it.
 - R15 Never weaken a test or a guard to get green. `.claude/skills/council-of-elrond-development/references/conventions.md#r15`
 
 ## Ask first
+
+⚑ Never change without explicit maintainer confirmation.
 
 Edits prompt (path-gated in `.claude/settings.json`; the same paths head the safety-boundary block of `.github/CODEOWNERS`):
 
