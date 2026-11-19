@@ -19,7 +19,7 @@
 
 ## Verification
 
-Run `node scripts/verify.mjs` (`/verify-change`) on the pinned build (`references/qa-ci.md`) and read its table. The call that should match, the near miss and the compound form are in the tests.
+Run `node scripts/verify.mjs` on the pinned build (`references/qa-and-ci.md`) and read its table. The call that should match, the near miss and the compound form are in the tests.
 
 Finish with the sweep against `main` (R9, `references/domain-gate-direction.md`): no command may end up lower.
 

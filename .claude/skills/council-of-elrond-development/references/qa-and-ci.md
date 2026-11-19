@@ -4,7 +4,7 @@ What runs, on which build, and what each result means.
 
 ## The verify command
 
-`node scripts/verify.mjs` runs the checks a change needs and prints one table (check, result, time) and one summary line. It exits 0 only if nothing failed. In a session it is `/verify-change`. Modes:
+`node scripts/verify.mjs` runs the checks a change needs and prints one table (check, result, time) and one summary line. It exits 0 only if nothing failed. The user-only command `/verify` runs it with the same flags. Modes:
 
 - no flag: the current change (the merge base with `main`, plus staged, unstaged and untracked files);
 - `--staged`: the staged files, as the pre-commit hook runs it;
@@ -49,13 +49,13 @@ All four pass before every commit; the first three on the pinned build (below).
 ## The pinned build
 
 The three gates run on the Claude Code build CI pins: the `@anthropic-ai/claude-code@X.Y.Z` in the
-install step of `.github/workflows/ci.yml` (the release workflow pins the same one, and DESIGN.md's
+install step of `.github/workflows/ci-tests.yml` (the release workflow pins the same one, and DESIGN.md's
 header names it). A newer build can fail tests the pinned one passes, so `scripts/setup.sh`, the
 pre-commit hook and verify read the pin, compare it with `--version` of `${COUNCIL_CLAUDE:-claude}` and
 refuse on a difference. To get the pinned build, install it into a scratch folder and point the variable at it:
 
 ```
-. scripts/pinned-claude.sh && PIN=$(pinned_version)      # reads .github/workflows/ci.yml
+. scripts/pinned-claude.sh && PIN=$(pinned_version)      # reads .github/workflows/ci-tests.yml
 npm install --prefix <a scratch folder outside the repository> @anthropic-ai/claude-code@$PIN
 export COUNCIL_CLAUDE=<that folder>/node_modules/.bin/claude
 ```
@@ -64,9 +64,9 @@ export COUNCIL_CLAUDE=<that folder>/node_modules/.bin/claude
 
 ## Pre-commit and CI
 
-The pre-commit hook runs `node scripts/verify.mjs --staged`. The three gates must pass before every commit, on the pinned build (the section above); `git commit --no-verify` skips them when you must, and CI catches what you skipped. The hooks live in `.githooks/`; `scripts/setup.sh` points `core.hooksPath` at them, and the session-start hook does the same in cloud sessions when it is unset. Where `core.hooksPath` is unset neither git hook runs.
+The pre-commit hook runs `node scripts/verify.mjs --staged`. The three gates must pass before every commit, on the pinned build (the section above); `git commit --no-verify` skips them when you must, and CI catches what you skipped. The hooks live in `.githooks/`; `scripts/setup.sh` points `core.hooksPath` at them, and the session-start hook does the same in cloud sessions when it is unset. The pre-push hook runs the script tests (`node --test scripts/tests/`) before a push; `git push --no-verify` skips it. Where `core.hooksPath` is unset no git hook runs.
 
-CI (`.github/workflows/ci.yml`) has two jobs. `hygiene` runs `scripts/check-hygiene.sh`, the guidance checker (`node scripts/check-guidance.mjs`) and the script tests (`node --test scripts/tests/`). `checks` installs Node 22, the pinned build and `typescript`, then runs the tests, the typecheck, validate for the plugin and for the marketplace, and a step that fails if validate names a `tool.check` hook (the mod never takes part in the permission decision, SPEC §7). `.github/workflows/release.yml` runs on a tag `council-of-elrond--v*`, checks it against the plugin manifest and `CHANGELOG.md`, and runs the gates with the same pin (hygiene checks that the pins agree).
+CI (`.github/workflows/ci-tests.yml`) has two jobs. `hygiene` runs `scripts/check-hygiene.sh`, the guidance checker (`node scripts/check-guidance.mjs`) and the script tests (`node --test scripts/tests/`). `checks` installs Node 22, the pinned build and `typescript`, then runs the tests, the typecheck, validate for the plugin and for the marketplace, and a step that fails if validate names a `tool.check` hook (the mod never takes part in the permission decision, SPEC §7). `.github/workflows/release.yml` runs on a tag `council-of-elrond--v*`, checks it against the plugin manifest and `CHANGELOG.md`, and runs the gates with the same pin (hygiene checks that the pins agree).
 
 ## Checks with no command
 

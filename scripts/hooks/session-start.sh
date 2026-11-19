@@ -6,7 +6,7 @@
 #   - runs only when CLAUDE_CODE_REMOTE is "true"; exits at once when COUNCIL_SKIP_SESSION_SETUP=1
 #     (set it in any environment where an automated session clones this repository);
 #   - installs the Claude Code build CI pins (@anthropic-ai/claude-code@X.Y.Z in
-#     .github/workflows/ci.yml) and, when `tsc` is missing, typescript, into a cache folder outside
+#     .github/workflows/ci-tests.yml) and, when `tsc` is missing, typescript, into a cache folder outside
 #     the repository: ${XDG_CACHE_HOME:-$HOME/.cache}/council-of-elrond/claude-<pin>; when a cached
 #     binary's --version already equals the pin it installs nothing;
 #   - makes COUNCIL_CLAUDE available: appended to $CLAUDE_ENV_FILE when that is set, and always
@@ -35,12 +35,12 @@ within() { # within <seconds> <command...>: bounded when `timeout` exists
 main() {
   local root ci pin base cache bin have tsdir tsbin
   root=${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}
-  ci="$root/.github/workflows/ci.yml"
+  ci="$root/.github/workflows/ci-tests.yml"
   [ -f "$ci" ] || { say "no $ci; nothing to set up"; return 0; }
 
   # The pin: the same read as scripts/pinned-claude.sh.
   pin=$(grep -o '@anthropic-ai/claude-code@[0-9][0-9.]*' "$ci" | head -1 | sed 's/.*@//')
-  [ -n "$pin" ] || { say "could not read the pinned Claude Code version from .github/workflows/ci.yml"; return 0; }
+  [ -n "$pin" ] || { say "could not read the pinned Claude Code version from .github/workflows/ci-tests.yml"; return 0; }
 
   base="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/council-of-elrond"
   cache="$base/claude-$pin"

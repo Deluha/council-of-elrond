@@ -3,7 +3,7 @@
 
 # The version in the install step of the CI workflow: @anthropic-ai/claude-code@X.Y.Z.
 pinned_version() {
-  grep -o '@anthropic-ai/claude-code@[0-9][0-9.]*' .github/workflows/ci.yml | head -1 | sed 's/.*@//'
+  grep -o '@anthropic-ai/claude-code@[0-9][0-9.]*' .github/workflows/ci-tests.yml | head -1 | sed 's/.*@//'
 }
 
 # Sets CLAUDE_BIN (COUNCIL_CLAUDE, else claude) and PINNED. Returns 0 when that binary is the
@@ -12,7 +12,7 @@ check_pinned_claude() {
   CLAUDE_BIN=${COUNCIL_CLAUDE:-claude}
   PINNED=$(pinned_version)
   if [ -z "$PINNED" ]; then
-    echo "Could not read the pinned Claude Code version from .github/workflows/ci.yml."
+    echo "Could not read the pinned Claude Code version from .github/workflows/ci-tests.yml."
     return 1
   fi
   have=$("$CLAUDE_BIN" --version 2>/dev/null | head -1)

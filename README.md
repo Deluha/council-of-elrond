@@ -57,9 +57,9 @@ mods/types/               Claude Code's generated API types for the build it tar
 docs/                     install, development, maintenance guides and reviews
 .claude-plugin/           marketplace manifest, so `claude plugin install` works from this repo
 .claude/skills/           skills for Claude Code sessions working on this repo
-.claude/agents/           agents those sessions delegate to (writer edits and runs tests, reader reads across files, reviewer reviews and never edits; roles in `.claude/skills/council-of-elrond-development/references/recipes-orchestration.md`)
+.claude/agents/           agents those sessions delegate to (implementer edits and runs tests, reader reads across files, reviewer reviews and never edits; roles in `.claude/skills/council-of-elrond-development/references/recipes-orchestration.md`)
 .github/                  CI, release workflow, issue and pull request templates, CODEOWNERS
-.githooks/ scripts/       pre-commit and commit-msg hooks, setup and hygiene scripts
+.githooks/ scripts/       pre-commit, commit-msg and pre-push hooks, setup and hygiene scripts
 ```
 
 ```sh

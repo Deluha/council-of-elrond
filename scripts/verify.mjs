@@ -88,7 +88,7 @@ const GATES = ['pinned-build', 'tests', 'typecheck', 'validate-plugin', 'no-tool
 /** The rows that run the Claude Code binary, so they need the pinned build (and the pinned-build row). */
 const NEEDS_PIN = ['tests', 'validate-plugin', 'no-tool-check', 'validate-marketplace']
 /** A change to a workflow may move the pin: the gates then run on another build. */
-const WORKFLOW = /^\.github\/workflows\/(?:ci|release)\.yml$/
+const WORKFLOW = /^\.github\/workflows\/(?:ci-tests|release)\.yml$/
 
 /**
  * The check ids a change needs, in table order.
@@ -425,8 +425,8 @@ export async function main(argv, env = process.env, deps = {}) {
   let pinState = null
   const pinned = () => {
     if (pinState) return pinState
-    const pin = readPin(readRoot('.github/workflows/ci.yml') ?? '')
-    if (pin === '') return (pinState = { ok: false, pin, note: 'could not read the pin from .github/workflows/ci.yml' })
+    const pin = readPin(readRoot('.github/workflows/ci-tests.yml') ?? '')
+    if (pin === '') return (pinState = { ok: false, pin, note: 'could not read the pin from .github/workflows/ci-tests.yml' })
     const r = run(bin, ['--version'], { cwd: root, timeout: 30_000, env })
     const have = r.error || r.status !== 0 ? '' : (r.stdout.split('\n')[0] ?? '').trim()
     if (isPinned(have, pin)) return (pinState = { ok: true, pin, have, note: `${bin} reports ${have}` })

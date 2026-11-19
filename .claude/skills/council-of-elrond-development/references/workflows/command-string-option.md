@@ -31,7 +31,7 @@ Every user-facing string is an entry in `hooks/strings.ts`, picked by key, with 
 
 ## Verification
 
-Run `node scripts/verify.mjs` (`/verify-change`) on the pinned build (`references/qa-ci.md`) and read its table. Tests: `tests/commands.test.ts` for the parser and the output, `tests/theme.test.ts` for plain mode. A subcommand that loosens the gate is in `needsPerson` and has a test that a non-person origin is refused.
+Run `node scripts/verify.mjs` on the pinned build (`references/qa-and-ci.md`) and read its table. Tests: `tests/commands.test.ts` for the parser and the output, `tests/theme.test.ts` for plain mode. A subcommand that loosens the gate is in `needsPerson` and has a test that a non-person origin is refused.
 
 ## Docs to update
 
