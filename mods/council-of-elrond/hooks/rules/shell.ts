@@ -66,8 +66,9 @@ const MAX_PARTS = 200
 const MAX_DEPTH = 4
 /**
  * The budgets of the extra readings: what this parser reads beside the command's own text (the `nsenter -S` option read
- * as taking a value, the second reading of a spliced `env -S` string, the strings past the splice bound, and every script
- * nested inside one of those). They are never shared with the text's own: the text keeps `MAX_PARTS` and `MAX_DEPTH`
+ * as taking a value, the word after `gosu` read as the program, the second reading of a spliced `env -S` string, the
+ * strings past the splice bound, `origin/main`'s reading of a part with such a string, the script it took from a
+ * `busybox` part, and every script nested inside one of those). They are never shared with the text's own: the text keeps `MAX_PARTS` and `MAX_DEPTH`
  * exactly as before, and an extra neither uses them up nor is read through them. When an extra budget is used up the call
  * is refused (`isExhausted`), never reviewed: a bound that lowered a block to a review is how three earlier versions failed.
  */
@@ -486,8 +487,9 @@ type Core = {
   /** Scripts the part's own text holds (the value of a wrapper or runner's `-c` option, a shell string): read as the text's own. */
   nestedScripts: string[]
   /**
-   * The readings this parser adds: the shell scanner's second reading of each spliced `env -S` string, and both readings
-   * (env's and the shell's) of the strings past the splice bound. Read as extras, with budgets of their own.
+   * The readings this parser adds: each `env -S` string alone, the shell scanner's second reading of each spliced one,
+   * both readings (env's and the shell's) of the strings past the splice bound, `origin/main`'s reading of the part
+   * (§16 item 47) and the script it took from a `busybox` part (§16 item 48). Read as extras, with budgets of their own.
    */
   extraScripts: string[]
   /** An `nsenter` option whose separate next word may or may not be its value was met: the part is also read as if every one takes it. */
@@ -783,8 +785,9 @@ function envLooseWords(text: string): string[] {
 
 /**
  * The wrappers and the options of each that take a value, as `origin/main` read them (before the tables above were
- * corrected). Only `mainEnvStrings` uses it: it finds the `env -S` strings that `origin/main`'s walk found, however its
- * options were misread, because a string env's own splitting leaves unread must still be read as it was.
+ * corrected). Only `mainEnvWalk` uses it: it finds the `env -S` strings that `origin/main`'s walk found, however its
+ * options were misread, because a string env's own splitting leaves unread must still be read as it was. The last
+ * row, `busybox`, is not `origin/main`'s: its walk stopped there (§16 item 48).
  */
 const MAIN_WRAPPERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['sudo', new Set(['-u', '-g', '-h', '-p', '-C', '-D', '-r', '-t', '-U', '-T', '--user', '--group'])],
@@ -952,9 +955,14 @@ function mainEnvWalk(words: readonly string[]): { strings: string[]; rest: strin
     if (takesValue === undefined) break
     if (PRIVILEGE_WRAPPERS.has(name)) privileged.push(name)
     k++
-    // Main read the part as a shell's from its first `busybox` on: the script it took stays read when the walk goes on.
+    // Main's walk stopped at its first `busybox`: its command was the words from there on (read again with the tables
+    // of this parser), and it took a script from them as a shell's. Both stay read when the walk goes on: the words as a
+    // script of their own, behind the privilege wrappers passed (not when they are the part's own words again: that
+    // reading would be this one), and the script.
     if (name === 'busybox' && !hasMetBusybox) {
       hasMetBusybox = true
+      const fromBusybox = [...privileged, ...words.slice(k - 1)]
+      if (fromBusybox.length !== words.length || fromBusybox.some((word, index) => word !== words[index])) scripts.push(fromBusybox.map(quoted).join(' '))
       const script = mainShellScriptOf(words, k)
       if (script !== undefined) scripts.push(script)
     }
@@ -1233,13 +1241,15 @@ function coreOf(input: readonly string[], reading: Reading = FIRST_READING): Cor
         if (read.isUnknown) markUnresolved(() => [name, ...words.slice(start + 1)])
         if (read.attached !== undefined) optionValues.push(...read.attached)
         // nsenter's -S and -G: whether a separate word is the option's value depends on the installed util-linux, and one
-        // version holds for every link of a chain, so there are two readings of the whole part and no more. Reading B (the
-        // word is the program) is this loop: the word ends the options, and the part is reviewed as one not read for
-        // sure. Reading A (every such option takes the next word) is the same loop run once more with `isReadingA`: the
-        // caller makes one extra part of it for the part, whatever the number of options and links.
+        // version holds for every link of a chain, so there are two readings of these options for the whole part and no
+        // more. Reading B (the word is the program) is this loop: the word ends the options, and the part is reviewed as
+        // one not read for sure. Reading A (every such option takes the next word) is the same loop run once more with
+        // `reading.takesAmbiguous`: the caller makes one extra part of it for the part, whatever the number of options
+        // and links (and one more of each where a `gosu` is read both ways, see `Reading`).
         if (canonical === 'nsenter' && read.name !== undefined && NSENTER_AMBIGUOUS.has(read.name) && read.attached === undefined) {
           const next = words[read.next]
-          if (next !== undefined && !next.startsWith('-')) {
+          // A lone `-` is a word, not an option: `origin/main` read it as the option's value (§16 item 48).
+          if (next !== undefined && (!next.startsWith('-') || next === '-')) {
             if (isReadingA) {
               k = read.next + 1
               continue
@@ -1979,8 +1989,11 @@ function scan(command: string, depth: number, isNested: boolean, out: Builder, s
     const isPiped = isPipeNext
     // A pipe at the end of a line goes on to the next line's command.
     if (!isLineEnd || words.length > 0 || redirects.length > 0) isPipeNext = false
-    // One reading of the words as a part, with the scripts it holds. `isReadingA` is the second reading of an ambiguous
-    // `nsenter` option: an extra, and so is everything it holds. Returns whether the part was made.
+    // One reading of the words as a part, with the scripts it holds. `isReadingA` is an added reading (`Reading`: the second
+    // reading of an ambiguous `nsenter` option, the word after `gosu` as the program): an extra, and so is everything it
+    // holds. It makes no part of the words as they stand: the first reading made it where an ambiguous option stands, and
+    // a part behind `gosu` asks already (`privileged`), which is above the review that part gives. Returns whether the
+    // part was made.
     const makePart = (core: Core, isReadingA: boolean): boolean => {
       const isExtraPart = isExtra || isReadingA
       if (isExtraPart && out.isExhausted) return false

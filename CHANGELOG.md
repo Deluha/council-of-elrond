@@ -152,10 +152,14 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   script's tier again, and the command after a split string behind `busybox` is read. Where `nsenter -S` or `-G` is
   followed by a separate word, the reading in which the option takes that word now makes every added reading the
   first one makes (the string alone, 0.5.0's command), so a split string glued to `env`'s option or in a cluster
-  behind it is read as in 0.5.0. Everyday `gosu <user> <command>` and `busybox <applet>` keep their tier, with one
-  class of exceptions that 0.5.0 had too: a `busybox` applet option that is a cluster holding a `c` and is followed
-  by a path (`busybox tar -czf /tmp/out.tgz .`, `busybox wget -c <url>`) is reviewed as a program run by its path.
-  Each added reading is one more part charged to the added readings' budget.
+  behind it is read as in 0.5.0, and a lone `-` after such an option counts as a separate word. Everyday
+  `gosu <user> <command>` and `busybox <applet>` keep their tier, with one class of exceptions that 0.5.0 had too:
+  the word after a `busybox` applet option that is `-c` or a cluster of letters holding a `c` (`-czf`, `-cnewer`) is
+  classified as a command, whatever the applet makes of it, so a path there is reviewed as a program run by its path
+  (`busybox tar -czf /tmp/out.tgz .`, `busybox wget -c <url>`, `busybox wc -c ./file`) and a text there that reads as
+  a command gets that command's tier. Each added reading is one more part charged to the added readings' budget.
+  Still read below 0.5.0, which took the body for a script: a heredoc fed to a `busybox` applet that is no shell, and
+  a heredoc after an `env` split string that holds the program.
 - **An `env -S` string that holds a `${NAME}` expansion is reviewed and read three ways.** `env` expands the name
   from its environment, and one that is unset expands to nothing, so its word vanishes, an option before it takes the
   next word, and the words after the string can become the command. The classifier cannot know the value, so the
@@ -281,7 +285,7 @@ Each stage of the original build order (SPEC §20) landed as one pull request.
   (its blanks, quotes, `\_`, `\c`, `#` comments and `${NAME}`), and is also read alone, as a shell reads it, and as
   the earlier versions read it, so a string `env` cannot read (an error in it) is reviewed and still classified. A
   string that holds a `${NAME}` is reviewed and read three ways, and the command 0.5.0 read after any `env -S` string is
-  read too, so, with three exceptions (see "Changed"), no `env -S` form is read below 0.5.0; `env`'s own words after `--` are read as `env`
+  read too, so no `env -S` form is read below 0.5.0 (a heredoc aside, see "Changed"); `env`'s own words after `--` are read as `env`
   reads them (a lone `-`, any word with a `=`).
   **The readings the parser adds beside the text have budgets of their own** (400,000 characters scanned, 400
   parts, 4 levels deep): the second `nsenter` reading, the shell scanner's reading of an `env -S` string, the

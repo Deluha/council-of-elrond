@@ -812,11 +812,15 @@ and the code it concerns; a session that takes one writes it a brief first.
 - `cleanText` misses some invisible code points (DESIGN §16 item 28, `cleanText`).
 - The 6-character segment rule of the `PWD` exemption redacts ordinary directories named with
   letters and digits (DESIGN §16 item 43); loosening it is the maintainer's decision.
-- A heredoc fed to a `busybox` applet that is no shell is not read as a script, where release 0.5.0
-  read it as one (DESIGN §16 item 48, "still lower").
+- A heredoc is read as a script only for the part's own reading: one fed to a `busybox` applet that
+  is no shell, or following an `env` split string that holds the program, is not, where release
+  0.5.0 read it as one (DESIGN §16 item 48, "still lower"). Closing it changes what is read of
+  everyday heredocs and needs a sweep of its own.
 - A chain of four `env` split strings that each hold a wrapper, followed by one very long dash word
   with brace lists or expansions, takes about 1 s at 20,000 characters, growing linearly (a known
-  cost, DESIGN §16 item 47).
+  cost, DESIGN §16 item 47). Crafted chains of split strings next to an ambiguous `nsenter` option
+  or a `gosu`, padded to the length limit, take up to about 0.7 s before they are refused (0.4 s
+  before item 48; DESIGN §16 item 48).
 
 ## 6. Open decisions
 

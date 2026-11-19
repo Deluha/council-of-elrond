@@ -3877,6 +3877,10 @@ describe('nsenter, gosu and busybox in front of an env -S string: what release 0
       ['nsenter -t 1 -S 0 env -Sx git push --force origin main', 'block', 'force-push-protected-branch'],
       ["nsenter -S 0 env -iSx sh -c 'rm -rf /home/me'", 'block', RM],
       ['nsenter --setuid 0 env -Sx dd if=/dev/zero of=/dev/sda', 'block', 'raw-disk-write'],
+      // A lone `-` after the option is a word too: it is read as the option's value and as the program.
+      ['nsenter -S - rm -rf /home/me', 'block', RM],
+      ['nsenter -G - mkfs.ext4 /dev/sda1', 'block', 'raw-disk-write'],
+      ['nsenter -S - ls', 'review', 'shell-runner-unresolved'],
       // Nothing to find: the part is reviewed as before, and an unambiguous option changes nothing.
       ['nsenter -S 0 env -Sx ls', 'review', 'shell-runner-unresolved'],
       ['nsenter -S0 env -Sx ls', 'allow'],
@@ -3924,6 +3928,17 @@ describe('nsenter, gosu and busybox in front of an env -S string: what release 0
       // Main's walk passes `busybox`: the command after the string is read, and the script main took from there stays read.
       ["busybox env -S 'x y' rm -rf /home/me", 'block', RM],
       ["env -S 'x y' -iS busybox rm -c 'rm -rf /home/me'", 'block', RM],
+      // The words from the `busybox` on stay read with this parser's tables, as before the walk went on (a wrapper main's table misread).
+      ["env -S 'x y' busybox chrt 10 rm -rf /home/me", 'block', RM],
+      ["env -S 'x y' busybox uv run --quiet rm -rf /home/me", 'block', RM],
+      ["sudo env -S 'x y' busybox taskset 1 rm -rf /home/me", 'block', RM],
+      // Those words are not read again when they are the part's own (that would be this reading, down to a refusal).
+      ['busybox env -S x ls', 'allow'],
+      ['sudo busybox env -S x ls', 'ask', 'privileged'],
+      ['sudo -u bob busybox env -S x ls', 'ask', 'privileged'],
+      // The word after the `-c` word is classified as a command, whatever the applet makes of it.
+      ["busybox grep -c 'rm -rf /home/me' file", 'block', RM],
+      ['busybox wc -c ./file', 'review', 'script-path'],
       // The applet reading stands, and everyday calls keep their tier.
       ['busybox rm -rf /home/me', 'block', RM],
       ["busybox sh -c 'rm -rf /home/me'", 'block', RM],
