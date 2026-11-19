@@ -812,10 +812,17 @@ and the code it concerns; a session that takes one writes it a brief first.
 - `cleanText` misses some invisible code points (DESIGN §16 item 28, `cleanText`).
 - The 6-character segment rule of the `PWD` exemption redacts ordinary directories named with
   letters and digits (DESIGN §16 item 43); loosening it is the maintainer's decision.
-- A heredoc is read as a script only for the part's own reading: one fed to a `busybox` applet that
-  is no shell, or following an `env` split string that holds the program, is not, where release
-  0.5.0 read it as one (DESIGN §16 item 48, "still lower"). Closing it changes what is read of
-  everyday heredocs and needs a sweep of its own.
+- Heredocs, found by the probe of DESIGN §16 item 49 and not closed there: a body that the part's
+  own reading feeds to a shell is charged to the text's own 200 parts, so a long one cuts the parse
+  and the call is reviewed, where release 0.5.0 read no shell in some of these parts (the shell held
+  by a split string) and classified what follows; a wrapper that starts a shell when it is given no
+  command (`nsenter`, `chroot`, `unshare`) is not read as a shell for its heredoc; and in a body the
+  part's own reading feeds to a shell, a substitution inside quotes is read as a script reads it,
+  not as a heredoc expands it (`takeHeredocs` in `hooks/rules/shell.ts`). The same on `main`.
+- A heredoc body read as an added reading (DESIGN §16 item 49) of more than 400 command lines, or
+  with substitutions nested four deep, is refused; a long data file written through a `busybox`
+  applet is the everyday case. Raising the bound or reviewing instead loosens: the maintainer's
+  decision.
 - A chain of four `env` split strings that each hold a wrapper, followed by one very long dash word
   with brace lists or expansions, takes about 1 s at 20,000 characters, growing linearly (a known
   cost, DESIGN §16 item 47). Crafted chains of split strings next to an ambiguous `nsenter` option
