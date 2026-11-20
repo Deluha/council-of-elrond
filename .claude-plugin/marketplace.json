@@ -5,13 +5,13 @@
     "url": "https://github.com/Deluha"
   },
   "metadata": {
-    "description": "A council of specialist reviewers that gates risky Claude Code tool calls before they run."
+    "description": "A council that second-guesses risky Claude Code tool calls before they run."
   },
   "plugins": [
     {
       "name": "council-of-elrond",
-      "source": "./mods/council-of-elrond",
-      "description": "Gates risky tool calls: rules decide the tier, model reviewers give a second opinion, anything uncertain comes to you.",
+      "source": "./",
+      "description": "Risky tool calls go to a council of reviewers; what they cannot settle comes to you as a loot roll.",
       "category": "safety",
       "keywords": ["safety", "review", "gate", "tool-call", "mod"]
     }

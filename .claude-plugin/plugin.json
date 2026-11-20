@@ -1,0 +1,45 @@
+{
+  "name": "council-of-elrond",
+  "version": "1.0.0",
+  "description": "A council that second-guesses risky tool calls before they run: Gandalf, Aragorn, Legolas and Gimli review, Gollum guards secrets, and what they cannot settle comes to you as a loot roll.",
+  "author": {
+    "name": "Deluhathol",
+    "url": "https://github.com/Deluha"
+  },
+  "homepage": "https://github.com/Deluha/council-of-elrond",
+  "repository": "https://github.com/Deluha/council-of-elrond",
+  "license": "MIT",
+  "keywords": ["safety", "review", "gate", "tool-call", "mod"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "model": {
+      "type": "string",
+      "title": "Reviewer model",
+      "description": "The model the council members review with.",
+      "required": false,
+      "default": "sonnet",
+      "options": ["haiku", "sonnet", "opus"]
+    },
+    "shadowMode": {
+      "type": "boolean",
+      "title": "Shadow mode",
+      "description": "The council reviews and logs but never refuses. Block rules and the secrets scan still hold. Good for the first days.",
+      "required": false,
+      "default": false
+    },
+    "councilPattern": {
+      "type": "string",
+      "title": "Extra council pattern",
+      "description": "A regular expression; a shell command it matches goes to the council. Example: \\bmake\\s+deploy\\b",
+      "required": false,
+      "default": ""
+    },
+    "blockPattern": {
+      "type": "string",
+      "title": "Extra block pattern",
+      "description": "A regular expression; a shell command it matches is refused outright.",
+      "required": false,
+      "default": ""
+    }
+  }
+}
