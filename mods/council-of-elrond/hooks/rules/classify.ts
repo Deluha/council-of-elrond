@@ -293,8 +293,23 @@ function readOrRun(part: ShellPart, hits: readonly string[], matched: readonly C
  * the pipe chain after the part at `index` is followed to its end.
  */
 function pipesIntoNonReader(subjects: readonly Subject[], index: number): boolean {
-  for (let next = index + 1; subjects[next]?.part?.isPiped === true; next++) {
-    if (!isReaderPart(subjects[next]?.part as ShellPart)) return true
+  let next = index + 1
+  // The walk of the commit before, over its own parts: those of a body read as an extra are passed over (§16 item 49).
+  for (; next < subjects.length; next++) {
+    const part = subjects[next]?.part
+    if (part?.isExtraBody === true) continue
+    if (part?.isPiped !== true) break
+    if (!isReaderPart(part)) return true
+  }
+  // The parts of a text opened in the chain after the reader (a substitution in a word, a heredoc's body read as a script)
+  // stand between its links: the chain goes on behind them, to the next part of the reader's level or of a level around
+  // it, judged as above (DESIGN §16 item 49). Scopes are numbered in the order the texts open.
+  const scope = subjects[index]?.part?.scope ?? 0
+  for (; next < subjects.length; next++) {
+    const part = subjects[next]?.part
+    if (part === undefined || part.scope > scope) continue
+    if (!part.isPiped) return false
+    if (!isReaderPart(part)) return true
   }
   return false
 }

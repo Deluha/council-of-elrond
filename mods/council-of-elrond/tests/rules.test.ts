@@ -3863,6 +3863,19 @@ describe('the classifier does not stall on crafted input', () => {
       'gosu and env -S chain': fill('gosu env -Sgosu '),
       'busybox -c chain': fill('busybox -c '),
       'busybox and a long cluster of c': `busybox -${'c'.repeat(N - 20)}! x`,
+      // A heredoc's body read as an extra (DESIGN §16 item 49): one scan for a body, bounded by the extras' budgets.
+      'heredocs nested behind busybox': fill('busybox <<E\n'),
+      'heredocs behind busybox, one after the other': fill('busybox cat<<E\nx\nE\n'),
+      'heredoc tags on one busybox part': `busybox cat ${'<<E '.repeat(2400)}\n${'x\nE\n'.repeat(2400)}`,
+      'heredoc tags after a split string': `env -S 'x y' sh ${'<<E '.repeat(2400)}\n${'x\nE\n'.repeat(2400)}`,
+      'heredoc owners on one line, then busybox': `${'cat<<E|'.repeat(2200)}busybox cat\n${'x\nE\n'.repeat(1100)}`,
+      'heredoc tags in a nested text, with a long body read as an extra': `( busybox cat <<A ${'<<E '.repeat(1500)}\n${'npx --zz q\n'.repeat(399)}A\n${'x\nE\n'.repeat(1500)})`,
+      'heredoc owners behind busybox on one line': `${'busybox cat<<E|'.repeat(1100)}cat\n${'sh\nE\n'.repeat(660)}`,
+      'a long body behind busybox': `busybox cat <<E\n${'a b c\n'.repeat(3300)}E`,
+      'a body of split strings behind busybox': `busybox cat <<E\n${"env -S 'x y' sh\n".repeat(1200)}E`,
+      'a body of heredocs after a split string': `env -S 'x y' sh <<E\n${"env -S 'x y' sh <<F\n".repeat(990)}E`,
+      'a gosu and env -S chain with a heredoc': `${'gosu env -Sgosu '.repeat(580)}sh <<E\n${'gosu env -Sgosu '.repeat(580)}\nE`,
+      'split strings with expansions and a heredoc': `env ${"-S '${X} sh' ".repeat(700)}<<E\n${"env -S '${X} sh' <<F\n".repeat(450)}E`,
     }
     for (const [name, command] of Object.entries(shapes)) expect(time(command), name).toBeLessThan(SLOW_MS)
   })
@@ -3954,5 +3967,183 @@ describe('nsenter, gosu and busybox in front of an env -S string: what release 0
     expect(splitShell("busybox sh -c 'ls'").parts.map(part => part.core)).toEqual(['sh -c ls', 'ls'])
     // Only the first `busybox` of a part is read that way.
     expect(splitShell('busybox ionice -c 2 busybox x -c b').parts.map(part => part.core)).toEqual(['x -c b', '2'])
+  })
+})
+
+describe('a heredoc is read as a script when an added reading feeds it to a shell, and behind busybox (DESIGN §16 item 49)', () => {
+  const PUSH = 'git push --force origin main'
+  const FORCE_PUSH = 'force-push-protected-branch'
+  const heredoc = (command: string, body: string, tag = 'EOF'): string => `${command} <<${tag}\n${body}\nEOF`
+
+  test('behind busybox, with an applet that is no shell or with none, the body is read as release 0.5.0 read it', () => {
+    expectCases([
+      [heredoc('busybox cat', 'rm -rf /home/me'), 'block', RM],
+      [heredoc('busybox', PUSH), 'block', FORCE_PUSH],
+      [heredoc('/bin/busybox wc -l', PUSH), 'block', FORCE_PUSH],
+      [heredoc('sudo busybox tee out.txt', 'dd if=/dev/zero of=/dev/sda', "'EOF'"), 'block', 'raw-disk-write'],
+      [heredoc('gosu bob busybox cat', 'rm -rf /home/me'), 'block', RM],
+      ['busybox cat <<-EOF\n\trm -rf /home/me\n\tEOF', 'block', RM],
+      [`echo $(${heredoc('busybox cat', PUSH)}\n)`, 'block', FORCE_PUSH],
+      // A body that is no command keeps the tier of the part.
+      [heredoc('busybox cat', 'hello there'), 'allow'],
+      [heredoc('busybox cat', 'ls'), 'allow'],
+      [heredoc('busybox tee notes.md', 'kind: Pod\nmetadata:\n  name: x'), 'review', 'shell-tee'],
+    ])
+    // The body is one more script of the part, after what the part holds.
+    expect(splitShell(heredoc('busybox cat', 'ls')).parts.map(part => part.core)).toEqual(['cat', 'ls'])
+  })
+
+  test('after an env split string that holds the program, the shell that release 0.5.0 took for the command reads the body', () => {
+    expectCases([
+      [heredoc("env -S 'x y' sh", 'rm -rf /home/me'), 'block', RM],
+      [heredoc("env --split-string='x y' bash -s", PUSH), 'block', FORCE_PUSH],
+      [heredoc('env -Sx sh', 'dd if=/dev/zero of=/dev/sda'), 'block', 'raw-disk-write'],
+      [heredoc("env -S 'x y' /bin/bash", 'rm -rf /home/me', "'EOF'"), 'block', RM],
+      // A string that holds an expansion.
+      [heredoc("env -S '${X} y' sh", 'rm -rf /home/me'), 'block', RM],
+      // With the wrappers of item 48 in front, and `busybox` after the string.
+      [heredoc("nsenter -S 0 env -S 'x y' sh", 'rm -rf /home/me'), 'block', RM],
+      [heredoc("gosu env -S 'x y' sh", PUSH), 'block', FORCE_PUSH],
+      [heredoc("busybox env -S 'x y' sh", 'rm -rf /home/me'), 'block', RM],
+      [heredoc("env -S 'x y' busybox cat", 'rm -rf /home/me'), 'block', RM],
+      [heredoc("nsenter -S 0 env -S 'x y' busybox cat", PUSH), 'block', FORCE_PUSH],
+      // The word after `gosu` read as the program: an added part of the text, which fed the body before this item too.
+      [heredoc('gosu sh', PUSH), 'block', FORCE_PUSH],
+      // A body that is no command: the part is reviewed as before.
+      [heredoc("env -S 'x y' sh", 'hello there'), 'review', 'script-shell'],
+      [heredoc("env -S 'x y' sh", 'ls'), 'review', 'script-shell'],
+    ])
+    expect(splitShell(heredoc("env -S 'x y' sh", 'ls')).parts.map(part => part.core)).toEqual(['x y sh', 'x y', 'x y sh', 'sh', 'ls'])
+  })
+
+  test('a heredoc that no reading feeds to a shell stays data', () => {
+    expectCases([
+      [heredoc('cat', 'rm -rf /home/me'), 'allow'],
+      [heredoc('tee notes.md', PUSH), 'review', 'shell-tee'],
+      [heredoc("env -S 'x y' cat", 'rm -rf /home/me'), 'allow'],
+      [heredoc("env -S 'cat -n'", 'rm -rf /home/me'), 'allow'],
+      [heredoc("env -S 'x y' tee f", PUSH), 'review', 'shell-tee'],
+      [heredoc('gosu bob cat', 'rm -rf /home/me'), 'ask', 'privileged'],
+      [heredoc("docker exec -i web sh -c 'cat > /tmp/x'", PUSH), 'review', 'remote-exec'],
+      [heredoc('kubectl apply -f -', 'kind: Pod'), 'review', 'infrastructure'],
+      [heredoc('psql', 'DROP TABLE users;'), 'review', 'database-client'],
+      [heredoc('git commit -F -', 'Stop running rm -rf / in the cleanup'), 'allow'],
+    ])
+    expect(splitShell(heredoc('cat', 'ls')).parts.map(part => part.core)).toEqual(['cat'])
+  })
+
+  test('the body is charged to the budgets of the extras: it never uses the room of the text, and too long a body refuses the call', () => {
+    const lines = (count: number): string => 'true\n'.repeat(count)
+    // More lines than the text may have parts: the command after the heredoc is still read.
+    expect(ruleOf(`busybox cat <<EOF\n${lines(300)}EOF\nrm -rf /home/me`)).toBe(RM)
+    expect(splitShell(`busybox cat <<EOF\n${lines(300)}EOF\nls`).isCut).toBe(false)
+    expect(ruleOf(`env -S 'x y' sh <<EOF\n${lines(300)}EOF\n${PUSH}`)).toBe(FORCE_PUSH)
+    // The extras may make 400 parts: one line more and the call is refused.
+    expect(tierOf(`busybox cat <<EOF\n${lines(400)}EOF\nls`)).toBe('allow')
+    expect(ruleOf(`busybox cat <<EOF\n${lines(401)}EOF\nls`)).toBe(TOO_COMPLEX_TO_READ)
+    // A shell that the part's own reading names keeps the text's own bound, as before.
+    expect(splitShell(`sh <<EOF\n${lines(300)}EOF\nls`).isCut).toBe(true)
+    expect(splitShell(`sh <<EOF\n${lines(300)}EOF\nls`).isExhausted).toBe(false)
+  })
+  test('a later part of the line that is a shell by an added reading, or stands behind busybox, reads the heredoc too', () => {
+    expectCases([
+      ['cat <<EOF | busybox cat\nrm -rf /home/me\nEOF', 'block', RM],
+      [`cat <<EOF && busybox ls\n${PUSH}\nEOF`, 'block', FORCE_PUSH],
+      ["cat <<EOF | env -S 'x y' sh\nrm -rf /home/me\nEOF", 'block', RM],
+      // Past a second heredoc of the line: the first one is still fed.
+      ['cat <<A | cat <<B | busybox cat\nrm -rf /home/me\nA\nhello\nB', 'block', RM],
+      ["cat <<A | cat <<B | env -S 'x y' sh\nrm -rf /home/me\nA\nhello\nB", 'block', RM],
+      // Not a part before the heredoc's own, not the next line, and not a heredoc that comes after the shell's part.
+      ['busybox ls; cat <<EOF\nrm -rf /home/me\nEOF', 'allow'],
+      ['cat <<EOF\nrm -rf /home/me\nEOF\nbusybox ls', 'allow'],
+      ['busybox x <<A | cat <<B\nhello\nA\nrm -rf /home/me\nB', 'allow'],
+      ['cat <<EOF | cat\nrm -rf /home/me\nEOF', 'allow'],
+    ])
+  })
+
+  test('a shell that is the script of a wrapper option reads the heredoc; a script handed to another program does not', () => {
+    expectCases([
+      [heredoc('runuser --command sh', PUSH), 'block', FORCE_PUSH],
+      [heredoc('runuser -u bob -c bash', 'rm -rf /home/me'), 'block', RM],
+      [heredoc('flock lock -c sh', 'rm -rf /home/me'), 'block', RM],
+      [heredoc("runuser -c 'cat > f'", 'rm -rf /home/me'), 'ask', 'privileged'],
+      [heredoc("ssh host 'bash -s'", 'rm -rf /home/me'), 'review', 'remote-exec'],
+      [heredoc('docker exec -i web sh', 'rm -rf /home/me'), 'review', 'remote-exec'],
+    ])
+  })
+
+  test('the substitutions of an unquoted body stay read as before, with their bounds, beside the added reading', () => {
+    expectCases([
+      // A script reading alone would take these for a quoted word or a comment.
+      [heredoc('busybox cat', "it's $(rm -rf /home/me)"), 'block', RM],
+      [heredoc('busybox cat', `# $(${PUSH})`), 'block', FORCE_PUSH],
+      [heredoc("env -S 'x y' sh", "Don't run `rm -rf /home/me`"), 'block', RM],
+      [heredoc('busybox cat', "it's $(rm -rf /home/me)", "'EOF'"), 'allow'],
+      // The depth bound of the text still cuts the parse.
+      ['( ( ( ( busybox cat <<EOF\n# $(date)\nEOF\n))))', 'review', 'command-too-complex'],
+      ['( ( ( ( busybox cat <<EOF\nhello\nEOF\n))))', 'allow'],
+    ])
+  })
+
+  test('what the body read as an extra costs: substitutions four deep refuse the call, a line that ends in a redirect is reviewed', () => {
+    expectCases([
+      [heredoc('busybox cat', 'echo $(echo $(echo $(date)))'), 'allow'],
+      [heredoc('busybox cat', 'echo $(echo $(echo $(echo $(date))))'), 'block', TOO_COMPLEX_TO_READ],
+      [heredoc('cat', 'echo $(echo $(echo $(echo $(date))))'), 'allow'],
+      [heredoc('busybox cat', 'description: >'), 'review', 'command-too-complex'],
+      [heredoc('cat', 'description: >'), 'allow'],
+    ])
+  })
+
+  test('a pipe chain goes on behind the parts of a text nested in it: a reader of a write-protected folder still asks', () => {
+    expectCases([
+      // The body read as an extra stands between the line and the line the pipe goes on to.
+      ["ls ~/.claude/plugins | busybox cat <<'EOF' |\nhello\nEOF\nxyz", 'ask', 'protected-path'],
+      ["ls ~/.claude/plugins <<'EOF' | busybox cat |\nhello\nEOF\ncat | xyz", 'ask', 'protected-path'],
+      // So do the substitutions of a body and of a word, which were read before this item.
+      ['ls ~/.claude/plugins | cat <<EOF |\n$(date)\nEOF\nxyz', 'ask', 'protected-path'],
+      ['ls ~/.claude/plugins | cat $(date) | xyz', 'ask', 'protected-path'],
+      ['ls ~/.claude/plugins | cat | xyz', 'ask', 'protected-path'],
+      // A reader in a nested text whose chain goes on at the level around it, with a body read as an extra on its line.
+      ["sh -c 'ls ~/.claude/plugins <<EOF | busybox cat\nhello\nEOF' | xyz", 'ask', 'protected-path'],
+      ["sh -c 'busybox ls ~/.claude/plugins <<EOF\nhello\nEOF' | xyz", 'ask', 'protected-path'],
+      // The walk of the commit before still reaches what it reached: a substitution after the body whose first part is piped.
+      ['ls ~/.claude/plugins | busybox cat <<T\nx\nT\n$(<<Q | tee /x)', 'ask', 'protected-path'],
+      // A subshell or a process substitution in the chain.
+      ['ls ~/.claude/plugins | (sort) | xyz', 'ask', 'protected-path'],
+      ['ls ~/.claude/plugins | sort <(date) | xyz', 'ask', 'protected-path'],
+      // The chain ends where the reader's own level has a part that is not piped; a pipe inside a nested text is not the chain's.
+      ['ls ~/.claude/plugins; echo $(git log | head)', 'allow'],
+      ['ls ~/.claude/plugins | cat $(a | b)', 'allow'],
+      ['ls ~/.claude/plugins; cat a | xyz', 'allow'],
+      ['( ls ~/.claude/plugins | cat ) ; xyz', 'allow'],
+      ["ls ~/.claude/plugins | busybox cat <<'EOF'\nhello\nEOF\ncat a | xyz", 'allow'],
+    ])
+  })
+
+  test('two heredocs on one line of a nested text: a shell in the first body feeds the second as an extra, never as the text', () => {
+    expectCases([
+      // Release 0.5.0 read the second body as a script here.
+      [`( busybox tee out.txt <<A | cat <<B\nsh\nA\n${PUSH}\nB\n)`, 'block', FORCE_PUSH],
+      [`( busybox cat <<A | cat <<B\nhello\nA\n${PUSH}\nB\n)`, 'allow'],
+      // Its substitutions stay read as a heredoc's, and its lines do not use the room of the text.
+      ["( busybox cat <<A | cat <<B\nsh\nA\nit's $(rm -rf /home/me)\nB\n)", 'block', RM],
+      [`( busybox cat <<A | cat <<B\nsh\nA\n${'echo 1\n'.repeat(199)}B\n)\nrm -rf /home/me`, 'block', RM],
+      // The same when the first body was read in a deeper text of the line.
+      ["( cat <<A | echo $(busybox cat <<B\nsh\nB\n)\nit's $(rm -rf /home/me)\nA\n)", 'block', RM],
+      [`( cat <<A | echo $(busybox cat <<B\nsh\nB\n)\n${'echo 1\n'.repeat(199)}A\n)\nrm -rf /home/me`, 'block', RM],
+    ])
+  })
+
+  test('in a nested text a later part of any depth behind busybox feeds the heredoc, as release 0.5.0 read it', () => {
+    expectCases([
+      ['( cat <<EOF | echo $(busybox ls)\nrm -rf /home/me\nEOF\n)', 'block', RM],
+      [`( busybox cat <<A | cat <<B\nbusybox ls\nA\n${PUSH}\nB\n)`, 'block', FORCE_PUSH],
+      [`( sh <<A | cat <<B\nbusybox ls\nA\n${PUSH}\nB\n)`, 'block', FORCE_PUSH],
+      // Not at the top level, not on the next line, and not before the heredoc's part.
+      ['cat <<EOF | echo $(busybox ls)\nrm -rf /home/me\nEOF', 'allow'],
+      ['( cat <<EOF\nrm -rf /home/me\nEOF\nbusybox ls )', 'allow'],
+      ['( busybox ls; cat <<EOF\nrm -rf /home/me\nEOF\n)', 'allow'],
+    ])
   })
 })
