@@ -11,14 +11,14 @@ How a session runs one brief. Which brief to take is the board's job: `mods/coun
    session's own tool calls.
 3. Get the pinned build. The gates run on the Claude Code build CI pins, not on whatever is
    installed; a newer installed build is expected and is not a reason to upgrade.
-   The command and its variables: `references/qa-ci.md` (The pinned build).
-4. Run the **standard verify** once and see it green: `node scripts/verify.mjs --all` (`/verify-change`; what it runs is in `references/qa-ci.md`). With `--all` the expected green is `PASS (2 manual checks outstanding)`, because `--all` selects the two MANUAL rows (the sweep and the mutation check) whether or not anything changed; nothing is owed for them unless the change touches such a file. If it is red on a clean checkout, stop and report; do not fix forward inside another brief.
+   The command and its variables: `references/qa-and-ci.md` (The pinned build).
+4. Run the **standard verify** once and see it green: `node scripts/verify.mjs --all` (what it runs is in `references/qa-and-ci.md`). With `--all` the expected green is `PASS (2 manual checks outstanding)`, because `--all` selects the two MANUAL rows (the sweep and the mutation check) whether or not anything changed; nothing is owed for them unless the change touches such a file. If it is red on a clean checkout, stop and report; do not fix forward inside another brief.
 
 ## Run one brief
 
 - The brief in section 5 gives the goal, the files, the decided behaviour, the acceptance and the
   mutation checks. The orchestrator turns it into a delegation brief (`references/recipes-orchestration.md`):
-  the writer runs it, the reviewer reads the whole diff, and the orchestrator runs the verify
+  the implementer runs it, the reviewer reads the whole diff, and the orchestrator runs the verify
   command itself. Where a brief says "the session decides", the safer option is
   picked and recorded.
 - One brief, one branch, one pull request (R14). A change to a path that decides whether a call runs needs its mutation check (R7). A headless live check where the brief asks for one names a small model, a permission mode and a budget (R13).

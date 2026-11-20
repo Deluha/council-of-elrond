@@ -1,6 +1,6 @@
 # Conventions: the hard rules
 
-The fifteen hard rules, each in full under its id. `CLAUDE.md` carries the short forms; every other file points here, for example `references/conventions.md#r1`.
+The fifteen hard rules, each in full under its id, and the simplicity audit that closes every pull request. `CLAUDE.md` carries the short forms; every other file points here, for example `references/conventions.md#r1`.
 
 ## R1
 
@@ -36,7 +36,7 @@ How to add a field: `references/workflows/change-pipeline.md`.
 
 Before every commit: `claude plugin test mods/council-of-elrond`, `tsc -p mods` and
 `claude plugin validate --strict mods/council-of-elrond` all pass, run with the Claude Code build CI pins.
-The single command, the build and its pin: `references/qa-ci.md`.
+The single command, the build and its pin: `references/qa-and-ci.md`.
 
 ## R7
 
@@ -110,3 +110,19 @@ The protocol for one brief: `references/session-protocol.md`.
 ## R15
 
 Never weaken a test or a guard to get green. A failing test is evidence: read it, then fix the code or ask.
+
+## Simplicity
+
+Every pull request leaves the files it touches clearer, shorter and more modular than it found them. Before a diff is final, audit each touched file and the files it points at, and fix each finding or say why it stays:
+
+1. Dead imports, unused variables and unused exports.
+2. Commented-out code: delete it; git keeps the history.
+3. Duplicated logic: reuse the existing helper (`references/recipes.md`, grep before coding) rather than a second copy.
+4. Helpers nobody calls any more.
+5. Functions that have grown past one screen: split them into named helpers.
+6. Speculative parameters, options or abstractions no caller needs.
+7. Magic numbers and strings: a named constant, defined once (user-facing text in `hooks/strings.ts`, R4).
+8. Patterns that differ from the rest of the codebase without a recorded reason: align them.
+9. Comments that restate the code (`references/style.md`): say why, or delete them.
+
+A fix that is mechanical and inside the diff's own files is made. A fix that would change behaviour, a public shape or an ask-first path (`CLAUDE.md`) is not bundled in: report it to the orchestrator as a separate item. A smaller, surgical change beats a wide refactor.

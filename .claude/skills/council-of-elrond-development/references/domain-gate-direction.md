@@ -19,7 +19,7 @@ Until the policy table of brief M2.1 exists, the sweep is by hand:
 3. Compare the tiers. Every command whose tier is lower on the branch is a line to report.
 4. The pull request states "lower than `main`: none", or lists each line with the decision that approves it.
 
-The verify command selects the sweep row for a change to `hooks/rules/`, `hooks/config/defaults.ts`, `hooks/redact.ts` or `hooks/members/gollum.ts`; the row is MANUAL (`references/qa-ci.md`).
+The verify command selects the sweep row for a change to `hooks/rules/`, `hooks/config/defaults.ts`, `hooks/redact.ts` or `hooks/members/gollum.ts`; the row is MANUAL (`references/qa-and-ci.md`).
 
 ## What a sweep finds
 

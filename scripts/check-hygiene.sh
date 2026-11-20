@@ -67,10 +67,10 @@ done
 
 # 4b. The release workflow must pin the same Claude Code build as CI: the hooks read CI's pin.
 pin_of() { grep -o '@anthropic-ai/claude-code@[0-9][0-9.]*' "$1" 2>/dev/null | head -1; }
-if [ -f .github/workflows/ci.yml ] && [ -f .github/workflows/release.yml ]; then
-  ci_pin=$(pin_of .github/workflows/ci.yml); rel_pin=$(pin_of .github/workflows/release.yml)
+if [ -f .github/workflows/ci-tests.yml ] && [ -f .github/workflows/release.yml ]; then
+  ci_pin=$(pin_of .github/workflows/ci-tests.yml); rel_pin=$(pin_of .github/workflows/release.yml)
   if [ "$ci_pin" != "$rel_pin" ]; then
-    echo "release.yml pins '$rel_pin' but ci.yml pins '$ci_pin'" | report "Claude Code pin"
+    echo "release.yml pins '$rel_pin' but ci-tests.yml pins '$ci_pin'" | report "Claude Code pin"
   fi
 fi
 

@@ -10,9 +10,9 @@ summary. Do these steps in order; stop and report at the first failure.
 
 ### Gates
 
-Run `node scripts/verify.mjs --all` (`/verify-change`) from the repository root: the checks of `references/qa-ci.md`, on the pinned build.
+Run `node scripts/verify.mjs --all` from the repository root: the checks of `references/qa-and-ci.md`, on the pinned build.
 
-The gates run with the Claude Code build CI pins (the explanation is in `references/qa-ci.md`,
+The gates run with the Claude Code build CI pins (the explanation is in `references/qa-and-ci.md`,
 "The pinned build"). All four must pass. Paste the test count. If `validate` prints new `hooks:` or `calls:` lines
 (compare with DESIGN.md §2), update that section with the new lines.
 

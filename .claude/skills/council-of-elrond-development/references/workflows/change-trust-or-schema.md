@@ -14,7 +14,7 @@
 
 ## Verification
 
-Run `node scripts/verify.mjs` (`/verify-change`) on the pinned build (`references/qa-ci.md`) and read its table. The tests above must show an unconfirmed file can only add. This path decides what a call is held to: run the mutation check (R7, `references/testing.md`).
+Run `node scripts/verify.mjs` on the pinned build (`references/qa-and-ci.md`) and read its table. The tests above must show an unconfirmed file can only add. This path decides what a call is held to: run the mutation check (R7, `references/testing.md`).
 
 ## Docs to update
 

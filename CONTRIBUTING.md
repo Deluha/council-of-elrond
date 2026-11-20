@@ -16,7 +16,7 @@ developer guide is [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Setup
 
-You need the Claude Code build CI pins (see `.github/workflows/ci.yml`; the setup script and the
+You need the Claude Code build CI pins (see `.github/workflows/ci-tests.yml`; the setup script and the
 pre-commit hook check it, and [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md#the-pinned-build) says how
 to install it) and a TypeScript compiler (`npm install -g typescript`, or use `npx tsc`). There are no runtime
 dependencies and no `node_modules`.
@@ -28,7 +28,7 @@ scripts/setup.sh                               # checks the tools, installs the 
 ```
 
 
-The checks, the pinned build, the pre-commit hook and the headless live checks are in the development skill: `.claude/skills/council-of-elrond-development/references/qa-ci.md` and `.claude/skills/council-of-elrond-development/references/workflows/live-check.md`. Run `node scripts/verify.mjs` before every commit. Never load the mod into the Claude Code session you develop it in (R1, `.claude/skills/council-of-elrond-development/references/conventions.md`).
+The checks, the pinned build, the pre-commit hook and the headless live checks are in the development skill: `.claude/skills/council-of-elrond-development/references/qa-and-ci.md` and `.claude/skills/council-of-elrond-development/references/workflows/live-check.md`. Run `node scripts/verify.mjs` before every commit. Never load the mod into the Claude Code session you develop it in (R1, `.claude/skills/council-of-elrond-development/references/conventions.md`).
 
 ## How the code is organised
 
@@ -51,7 +51,9 @@ How tests are written, and the mutation check for safety paths: `.claude/skills/
    release notes.
 6. A change to the security-sensitive files, the safety-boundary block of `.github/CODEOWNERS`, needs the code owner's review. If it fixes a bypass, keep the triggering input out of the title and description (R11).
 
-Commit messages, and what may not appear in code, comments or docs (R11, `.claude/skills/council-of-elrond-development/references/conventions.md`): `.claude/skills/council-of-elrond-development/references/style.md`.
+## Commit messages
+
+An imperative summary line under 72 characters, then why the change was made; the `commit-msg` hook checks the summary. The full form is in `.claude/skills/council-of-elrond-development/references/style.md#commit-messages`. Nothing in a message may quote a bypass input (R11, `.claude/skills/council-of-elrond-development/references/conventions.md`).
 
 ## Writing style for docs
 

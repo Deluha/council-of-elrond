@@ -1,6 +1,6 @@
 # Testing
 
-How the tests are written. The command that runs them is in `references/qa-ci.md`.
+How the tests are written. The command that runs them is in `references/qa-and-ci.md`.
 
 ## Tests
 

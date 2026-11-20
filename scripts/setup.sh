@@ -14,7 +14,7 @@ need() {
   fi
 }
 echo "Tools"
-need "${COUNCIL_CLAUDE:-claude}" "install the Claude Code build CI pins (see .github/workflows/ci.yml; https://code.claude.com/docs/en/setup)"
+need "${COUNCIL_CLAUDE:-claude}" "install the Claude Code build CI pins (see .github/workflows/ci-tests.yml; https://code.claude.com/docs/en/setup)"
 need tsc    "npm install -g typescript"
 need git    "install git"
 # Optional: only the markdown link check of scripts/check-hygiene.sh uses it.
@@ -25,7 +25,7 @@ command -v python3 >/dev/null && printf '  %-8s %s\n' python3 "$(python3 --versi
 echo "Git hooks"
 chmod +x .githooks/* scripts/*.sh
 git config core.hooksPath .githooks
-echo "  core.hooksPath = .githooks (pre-commit runs the gates; commit-msg checks the summary)"
+echo "  core.hooksPath = .githooks (pre-commit runs the gates; commit-msg checks the summary; pre-push runs the script tests)"
 
 echo "Gates"
 # On another build the gates fail for reasons that are not yours: stop before running them.

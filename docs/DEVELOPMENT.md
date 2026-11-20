@@ -11,13 +11,13 @@ For contributors and for Claude Code sessions that work on the mod. The guidance
 | The layout; how `hooks/register.ts` is built | `.claude/skills/council-of-elrond-development/references/architecture.md` |
 | What the host API does that its types do not say | `.claude/skills/council-of-elrond-development/references/host-api-facts.md` |
 | How tests are written; the mutation check | `.claude/skills/council-of-elrond-development/references/testing.md` |
-| The verify command, CI, the pinned build | `.claude/skills/council-of-elrond-development/references/qa-ci.md` |
+| The verify command, CI, the pinned build | `.claude/skills/council-of-elrond-development/references/qa-and-ci.md` |
 | How a session runs a brief | `.claude/skills/council-of-elrond-development/references/session-protocol.md` |
 | One task, step by step (rule, parser, reviewer, command, pipeline, redaction, trust, types, live check, checkpoint, release) | `.claude/skills/council-of-elrond-development/references/workflows/` |
 
 ## The pinned build
 
-The gates run on the Claude Code build CI pins, not on the one on your PATH. How to get it, and what `COUNCIL_CLAUDE` and `COUNCIL_ALLOW_UNPINNED` do: `.claude/skills/council-of-elrond-development/references/qa-ci.md`, section "The pinned build".
+The gates run on the Claude Code build CI pins, not on the one on your PATH. How to get it, and what `COUNCIL_CLAUDE` and `COUNCIL_ALLOW_UNPINNED` do: `.claude/skills/council-of-elrond-development/references/qa-and-ci.md`, section "The pinned build".
 
 ## Live checks
 

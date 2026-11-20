@@ -70,7 +70,7 @@ describe('selectChecks', () => {
   })
 
   test('every row that runs the Claude Code binary comes with the pinned-build row', () => {
-    for (const p of ['.claude-plugin/marketplace.json', `${MOD}/.claude-plugin/plugin.json`, `${MOD}/hooks/strings.ts`, `${MOD}/tests/a.test.ts`, '.github/workflows/ci.yml']) {
+    for (const p of ['.claude-plugin/marketplace.json', `${MOD}/.claude-plugin/plugin.json`, `${MOD}/hooks/strings.ts`, `${MOD}/tests/a.test.ts`, '.github/workflows/ci-tests.yml']) {
       const sel = v.selectChecks([p])
       if (['tests', 'validate-plugin', 'no-tool-check', 'validate-marketplace'].some((c) => sel.includes(c))) assert.ok(sel.includes('pinned-build'), p)
     }
@@ -78,7 +78,7 @@ describe('selectChecks', () => {
   })
 
   test('a change to a workflow selects every row that needs the pinned build, the pin may have moved', () => {
-    for (const p of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
+    for (const p of ['.github/workflows/ci-tests.yml', '.github/workflows/release.yml']) {
       const sel = v.selectChecks([p])
       for (const c of [...GATES, 'validate-marketplace', 'scripts-tests']) assert.ok(sel.includes(c), `${p}: ${c}`)
     }
@@ -112,7 +112,7 @@ describe('selectChecks', () => {
   })
 
   test('automation selects the script tests', () => {
-    for (const p of ['scripts/verify.mjs', 'scripts/tests/verify.test.mjs', '.githooks/pre-commit', '.claude/rules/x.md', '.claude/settings.json', '.github/workflows/ci.yml']) {
+    for (const p of ['scripts/verify.mjs', 'scripts/tests/verify.test.mjs', '.githooks/pre-commit', '.claude/rules/x.md', '.claude/settings.json', '.github/workflows/ci-tests.yml']) {
       assert.ok(v.selectChecks([p]).includes('scripts-tests'), p)
     }
   })
@@ -135,7 +135,7 @@ describe('the pin', () => {
   }
 
   test('reads the same version as scripts/pinned-claude.sh, in the real workflow', () => {
-    const text = readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8')
+    const text = readFileSync(join(repo, '.github/workflows/ci-tests.yml'), 'utf8')
     assert.match(v.readPin(text), /^\d+\.\d+\.\d+$/)
     assert.equal(v.readPin(text), shellPin(repo))
   })
@@ -148,14 +148,14 @@ describe('the pin', () => {
       'run: nothing here\n',
     ]) {
       const dir = tmp('pin-')
-      put(dir, '.github/workflows/ci.yml', ci)
+      put(dir, '.github/workflows/ci-tests.yml', ci)
       assert.equal(v.readPin(ci), shellPin(dir), ci)
     }
   })
 
   test('the same build test as check_pinned_claude', () => {
     const dir = tmp('pin-')
-    put(dir, '.github/workflows/ci.yml', 'run: npm i @anthropic-ai/claude-code@2.1.322\n')
+    put(dir, '.github/workflows/ci-tests.yml', 'run: npm i @anthropic-ai/claude-code@2.1.322\n')
     for (const version of ['2.1.322 (Claude Code)', '2.1.322', '2.1.3220 (Claude Code)', '2.1.32', '2.1.325 (Claude Code)', '']) {
       const stub = join(dir, 'claude-stub')
       writeFileSync(stub, `#!/bin/sh\necho '${version}'\n`)
@@ -303,7 +303,7 @@ describe('main, with every command injected', () => {
   /** A repository folder with what verify reads, and a recorder for the commands it runs. */
   function setup({ git, commands = {}, settings } = {}) {
     const root = tmp('main-')
-    put(root, '.github/workflows/ci.yml', 'run: npm install -g @anthropic-ai/claude-code@2.1.322 typescript\n')
+    put(root, '.github/workflows/ci-tests.yml', 'run: npm install -g @anthropic-ai/claude-code@2.1.322 typescript\n')
     if (settings) put(root, '.claude/settings.json', settings)
     const calls = []
     const out = []
@@ -409,7 +409,7 @@ describe('main, with every command injected', () => {
   })
 
   test('a workflow change on the pinned build runs the gates and the marketplace validation', async () => {
-    const s = setup({ git: gitDefault(['.github/workflows/ci.yml']), commands: { 'check-guidance': guidanceOk, 'plugin validate': ok('valid\n') } })
+    const s = setup({ git: gitDefault(['.github/workflows/ci-tests.yml']), commands: { 'check-guidance': guidanceOk, 'plugin validate': ok('valid\n') } })
     assert.equal(await v.main([], env, s.deps), 0)
     for (const id of ['pinned-build', 'tests', 'typecheck', 'validate-plugin', 'no-tool-check', 'validate-marketplace', 'scripts-tests']) assert.match(s.text(), new RegExp(`^${id}\\s+PASS`, 'm'), id)
   })
@@ -531,7 +531,7 @@ describe('main, with every command injected', () => {
 
   test('without a settings ask list the built-in list is used', () => {
     const patterns = v.askFirstPatterns(null)
-    assert.deepEqual(v.askFirstMatches(['.github/workflows/ci.yml', 'README.md', `${MOD}/hooks/redact.ts`], patterns), ['.github/workflows/ci.yml', `${MOD}/hooks/redact.ts`])
+    assert.deepEqual(v.askFirstMatches(['.github/workflows/ci-tests.yml', 'README.md', `${MOD}/hooks/redact.ts`], patterns), ['.github/workflows/ci-tests.yml', `${MOD}/hooks/redact.ts`])
     assert.equal(v.FALLBACK_ASK.length, 14)
   })
 
@@ -575,7 +575,7 @@ describe('main against a real git repository', () => {
   test('the change set is the merge base diff plus staged, unstaged and untracked files', async (t) => {
     if (spawnClean('git', ['--version']).status !== 0) return t.skip('git is not installed')
     const root = tmp('real-')
-    put(root, '.github/workflows/ci.yml', 'run: npm i @anthropic-ai/claude-code@2.1.322\n')
+    put(root, '.github/workflows/ci-tests.yml', 'run: npm i @anthropic-ai/claude-code@2.1.322\n')
     put(root, 'README.md', 'one\n')
     put(root, 'tracked.txt', 'one\n')
     git(root, 'init', '-q', '-b', 'main')
@@ -605,7 +605,7 @@ describe('main against a real git repository', () => {
 
   test('outside a repository the run is red', async () => {
     const root = tmp('norepo-')
-    put(root, '.github/workflows/ci.yml', 'run: npm i @anthropic-ai/claude-code@2.1.322\n')
+    put(root, '.github/workflows/ci-tests.yml', 'run: npm i @anthropic-ai/claude-code@2.1.322\n')
     const out = []
     const run = (cmd, args, opts) =>
       cmd === 'git'

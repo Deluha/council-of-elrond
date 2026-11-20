@@ -50,7 +50,7 @@ pipeline step where it belongs; see `hooks/members/gollum.ts` and `hooks/members
 
 ## Verification
 
-Run `node scripts/verify.mjs` (`/verify-change`) on the pinned build (`references/qa-ci.md`) and read its table. A change to what a reviewer is told needs a test that fails without it (R7); the proposed command is never among `w.processes`; a plain-mode check shows its strings carry no theme text.
+Run `node scripts/verify.mjs` on the pinned build (`references/qa-and-ci.md`) and read its table. A change to what a reviewer is told needs a test that fails without it (R7); the proposed command is never among `w.processes`; a plain-mode check shows its strings carry no theme text.
 
 ## Docs to update
 

@@ -26,7 +26,7 @@
 // code such as next( or $.state, URLs, ~/ paths and placeholders in <> are skipped); it does not
 // contain a "*"; a leading "/" means "from the repository root" (the ask-first list is written
 // that way): the slash is stripped and the path is looked up at the root only, while a token
-// with a leading "/" and no extension, "/" or folder (a slash command such as /verify-change)
+// with a leading "/" and no extension, "/" or folder (a slash command such as /verify)
 // is not a path; an import specifier ("./schema.js") and a bare extension (".ts") are not paths;
 // a trailing ":12" or ":12-20" line suffix and a "#anchor" are stripped first;
 // and it either ends in a known file extension
@@ -37,6 +37,9 @@
 // "./scripts/" or "./.claude/" (the "./" is dropped; it means the repository root there), and the
 // FIRST argument of a backticked command of the form `node <path>`, `bash <path>` or `sh <path>`
 // (a first argument that is a flag, such as `node --test scripts/tests/`, is not a path).
+//
+// G12 reads the one JSON file of hand-run prompts (evals/evals.json) that the markdown checks do not
+// reach: it parses, its ids are unique and every expect_reads entry resolves by the convention above.
 //
 // G11 (wired in) is a line-based check, not a proof. It does not prove that the wired line is
 // reachable: dead code (a line after an earlier `exit`, inside a never-true `if`, or in a function
@@ -861,11 +864,11 @@ export function shellRuns(script, command) {
 
 export function checkG11(root) {
   const out = []
-  const ci = readText(root, '.github/workflows/ci.yml')
-  if (ci === null) out.push(finding('G11', '.github/workflows/ci.yml', 1, 'missing'))
+  const ci = readText(root, '.github/workflows/ci-tests.yml')
+  if (ci === null) out.push(finding('G11', '.github/workflows/ci-tests.yml', 1, 'missing'))
   else {
-    if (!ciRuns(ci, 'node scripts/check-guidance.mjs')) out.push(finding('G11', '.github/workflows/ci.yml', 1, 'has no `run:` step whose command is `node scripts/check-guidance.mjs`'))
-    if (!ciRuns(ci, 'node --test scripts/tests/') && !ciRuns(ci, 'node --test scripts/tests')) out.push(finding('G11', '.github/workflows/ci.yml', 1, 'has no `run:` step whose command is `node --test scripts/tests/`'))
+    if (!ciRuns(ci, 'node scripts/check-guidance.mjs')) out.push(finding('G11', '.github/workflows/ci-tests.yml', 1, 'has no `run:` step whose command is `node scripts/check-guidance.mjs`'))
+    if (!ciRuns(ci, 'node --test scripts/tests/') && !ciRuns(ci, 'node --test scripts/tests')) out.push(finding('G11', '.github/workflows/ci-tests.yml', 1, 'has no `run:` step whose command is `node --test scripts/tests/`'))
   }
   const hook = readText(root, '.githooks/pre-commit')
   if (hook === null) out.push(finding('G11', '.githooks/pre-commit', 1, 'missing'))
@@ -877,8 +880,50 @@ export function checkG11(root) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// G12: the evals file
 
-export const CHECKS = [checkG1, checkG2, checkG3, checkG4, checkG5, checkG6, checkG7, checkG8, checkG9, checkG10, checkG11]
+export const EVALS = `${SKILL}/evals/evals.json`
+
+/**
+ * The hand-run prompts: the file exists and parses, each eval has a unique id, and every
+ * expect_reads entry resolves by the pointer convention (a missing file is a finding; two matches
+ * are not, since the entry names a file to read, not a link).
+ */
+export function checkG12(root) {
+  const text = readText(root, EVALS)
+  if (text === null) return [finding('G12', EVALS, 1, 'missing; SKILL.md points to it')]
+  let json
+  try {
+    json = JSON.parse(text)
+  } catch (e) {
+    return [finding('G12', EVALS, 1, `is not valid JSON: ${e.message}`)]
+  }
+  if (!Array.isArray(json?.evals)) return [finding('G12', EVALS, 1, 'has no "evals" array')]
+  const lines = text.split('\n')
+  const at = (needle, from = 0) => Math.max(1, lines.findIndex((l, i) => i >= from && l.includes(needle)) + 1)
+  const out = []
+  const seen = new Map()
+  for (const e of json.evals) {
+    const id = e?.id
+    if (typeof id !== 'string' || id === '') {
+      out.push(finding('G12', EVALS, 1, 'an eval has no string "id"'))
+      continue
+    }
+    const key = JSON.stringify(id)
+    const first = seen.get(id)
+    const line = first === undefined ? at(`"id": ${key}`) : at(`"id": ${key}`, first)
+    if (first !== undefined) out.push(finding('G12', EVALS, line, `id ${key} is used twice (first at line ${first}); ids are unique`))
+    else seen.set(id, line)
+    for (const f of Array.isArray(e.expect_reads) ? e.expect_reads : []) {
+      if (typeof f !== 'string' || resolvePointer(root, f).length === 0) out.push(finding('G12', EVALS, line, `eval ${key} expects a read of ${JSON.stringify(f)}, which does not resolve (looked in the root, ${MOD}/, the skill folder and its references/)`))
+    }
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------------------------
+
+export const CHECKS = [checkG1, checkG2, checkG3, checkG4, checkG5, checkG6, checkG7, checkG8, checkG9, checkG10, checkG11, checkG12]
 
 export function checkAll(root) {
   return CHECKS.flatMap((check) => check(root))
