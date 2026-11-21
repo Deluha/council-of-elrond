@@ -1,3 +1,0 @@
-.claude-plugin/types/
-# Written by the engine on each --plugin-dir load; extends the types above.
-tsconfig.json

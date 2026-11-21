@@ -1,0 +1,4 @@
+{
+  "description": "Elrond: one tool.call hook that sends risky calls to the council",
+  "modules": ["./register.ts"]
+}

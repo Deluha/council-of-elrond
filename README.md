@@ -1,80 +1,119 @@
 # council-of-elrond
 
-A [Claude Code](https://code.claude.com/) mod that gates risky tool calls before they run.
+A [Claude Code](https://code.claude.com/) mod. Before a risky tool call runs, a council looks at it.
 
-Rules sort every tool call into a tier: **allow**, **review**, **ask** or **block**. Calls that
-need a second opinion go to a small council of model reviewers, each with its own checklist:
-destructive operations, diffs, git, databases. Big operations such as a `git push` convene the
-full council and run your project's own tests. Anything uncertain, and anything a reviewer
-refuses twice, comes to you. Secrets are scanned for and redacted, every decision is logged, and
-the mod never takes part in Claude Code's own permission decision.
+Most calls never meet the council: `git status`, an edit to `src/app.ts`, `npm test` pass untouched, with no model call and no delay. A call that matches a rule (`rm -rf build`, `git reset --hard`, a write to `.env`) goes to the member who watches that kind of thing. The member is one small model call with a checklist and your last message; it approves, refuses, or says it cannot tell. What the council cannot settle comes to you as a loot roll.
 
-> The rules tier is the safety boundary. The model reviewers are a second opinion: they can catch
-> what a pattern misses, but they never widen what the rules allow. This is not a sandbox or a
-> security product. The limits are stated plainly in the
-> [user manual](mods/council-of-elrond/README.md#what-it-does-not-protect-against).
+> **This is a seatbelt, not armour.** The rules are plain patterns over a command's text. They catch honest mistakes: the delete that is wider than you asked for, the force push you did not mean. Anything that wants past a pattern can get past it (a variable, a script file, `eval`). Claude Code's own permissions and sandbox are the security boundary; keep them on.
 
-**Status:** pre-release. The original build stages are done; no version has been tagged yet (0.5.0
-is a changelog heading on `main`; the work since then is under "Unreleased" and will be released as
-0.6.0, M1). The road to the first release and to 1.0 is in
-[ROADMAP.md](mods/council-of-elrond/ROADMAP.md), milestones M0 to M7.
+## Install
 
-## Quick start
+At the prompt of a terminal session:
 
-Requires Claude Code 2.1.287 or later.
-
-```sh
-git clone https://github.com/Deluha/council-of-elrond
-claude --plugin-dir ./council-of-elrond/mods/council-of-elrond
+```
+/plugin install council-of-elrond --marketplace Deluha/council-of-elrond
 ```
 
-In the session: `/council` shows the status, `/council shadow on` makes the reviewers log without
-refusing while you tune the rules, `/council test "rm -rf build"` shows how a command would be
-classified. To install permanently:
+From a shell:
 
 ```sh
-claude plugin marketplace add Deluha/council-of-elrond
-claude plugin install council-of-elrond@council-of-elrond
+claude plugin install council-of-elrond --marketplace Deluha/council-of-elrond
 ```
 
-Full instructions, configuration, updating and removal: [docs/INSTALL.md](docs/INSTALL.md).
+To try it for one session from a clone: `claude --plugin-dir ./council-of-elrond`.
 
-## Documentation
+## What happens to a call
 
-| For | Read |
+1. **Gollum** reads what the call would run or write. A token he knows by its shape (an AWS key, a GitHub token, a private key, and a few more) refuses the call. *My precious.*
+2. **No rule matches:** the call runs. The council never sees it.
+3. **A block rule matches:** refused. *You shall not pass.* No review and no override: `rm -rf /`, a force push to main, a write into `.ssh` or into git's own files.
+4. **A council rule matches:** the rule's member reviews it.
+   - **Approve:** it runs.
+   - **Refuse:** Claude is told who refused and why, and to narrow the call or explain itself.
+   - **Unsure, or no answer** (a timeout, an error, a reply that is not a verdict): it comes to you.
+5. **Claude tries the same call again:** it comes to you, with no second review.
+6. **A third time:** raid lockout. Nobody looks at that call again until you write your next message.
+
+Whatever fails along the way, the call does not run.
+
+## The council
+
+| Member | Watches | Examples |
+| :- | :- | :- |
+| Gandalf | destructive operations | `rm -r`, `find -delete`, `git clean -f`, `curl … \| sh`, `sudo`, `chmod -R` |
+| Aragorn | git history | force push, a push to main, `reset --hard`, `checkout -- .`, `branch -D`, `stash drop`, `--no-verify` |
+| Gimli | data, infrastructure, releases | `DROP TABLE`, a `DELETE` with no `WHERE`, `terraform apply`, `kubectl delete`, `docker system prune`, `npm publish` |
+| Legolas | sensitive files | writes to `.env`, CI workflows, key files, git hooks, shell profiles |
+| Gollum | secrets | token shapes in a command or in what a call writes. No model: a pattern match refuses. |
+
+The full list is the `RULES` table in [`hooks/rules.ts`](hooks/rules.ts), one line per rule.
+
+## The raid
+
+- **Loot roll.** When a call comes to you: **Need** lets it run once, **Greed** lets that rule through for the rest of the session (a command that also matches another rule is still reviewed), **Pass** keeps it blocked. Type something else instead and Claude gets your words.
+- **Wipes and raid lockout.** Each refusal of the same call is a wipe. After two, the call is locked out until your next message, so Claude cannot grind the gate down by retrying.
+- **Leeroy mode.** `/council leeroy` skips reviews for the session. Block rules and Gollum still hold. At least you have chicken.
+- **Loot.** A commit that lands rolls on the loot table. Mostly nothing drops. Sometimes a Rare does. Once in a hundred, a Legendary.
+
+## Commands
+
+| Command | Does |
 | :- | :- |
-| Users | [User manual](mods/council-of-elrond/README.md): tiers, reviewers, the full council, rules, models, options, commands, the secrets scan, escalation, the audit log, limits. [Installing and using](docs/INSTALL.md). |
-| Contributors | [CONTRIBUTING.md](CONTRIBUTING.md), [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (a short contributor index that points into the development skill; development guidance lives in its [routing table](.claude/skills/council-of-elrond-development/SKILL.md)), [ROADMAP.md](mods/council-of-elrond/ROADMAP.md) (status, next tasks, decisions, API facts). |
-| Maintainers | [docs/MAINTENANCE.md](docs/MAINTENANCE.md) (Claude Code updates, releases, review, triage), [docs/GITHUB.md](docs/GITHUB.md) (workflows, hooks, repository settings), [docs/REVIEW-2026-10.md](docs/REVIEW-2026-10.md) (the Stage 5 review: findings, mostly closed; its banner lists what remains open), [docs/REVIEW-2026-11.md](docs/REVIEW-2026-11.md) and [docs/REVIEW-2026-11-INDEPENDENT.md](docs/REVIEW-2026-11-INDEPENDENT.md) (the November review of the roadmap and the independent review of it). |
-| Design | [DESIGN.md](mods/council-of-elrond/DESIGN.md) (how it works, failure modes, every decision), [SPEC.md](mods/council-of-elrond/SPEC.md) (the original spec). |
-| Security | [SECURITY.md](SECURITY.md): what counts as a bypass and how to report one privately. [SUPPORT.md](SUPPORT.md) for everything else. |
+| `/council` | Status, the meter (who let through and refused how much, tokens spent) and the combat log of recent gated calls. |
+| `/council test <command or path>` | Shows what that command or file path would meet. Runs nothing. |
+| `/council allow` | Lets the last refused call through once: for when you disagree with a member, or the dialog could not be shown. |
+| `/council leeroy` | Toggles Leeroy mode. |
 
-## Repository layout
+`allow` and `leeroy` only work when you send them yourself, from the prompt or from a Remote Control client. Claude, a plugin, a script or a headless run cannot.
+
+## Options
+
+Set when you install, or later in `/config`.
+
+| Option | Default | |
+| :- | :- | :- |
+| Reviewer model | `sonnet` | `haiku` is faster and cheaper; `opus` is more careful. |
+| Shadow mode | off | The council reviews and logs, and a toast says what it would have stopped, but nothing is refused. Block rules and Gollum still hold. Good for the first days. |
+| Extra council pattern | none | A regular expression. A shell command it matches goes to the council. `\bmake\s+deploy\b` |
+| Extra block pattern | none | A regular expression. A shell command it matches is refused outright. `/council` tells you if a pattern does not compile. |
+
+## Limits
+
+- Patterns read the command as text. `rm -rf "$DIR"` is seen; a script that deletes things is a script.
+- A pattern cannot tell a command from a mention of one: `grep -rn "rm -rf" .` goes to Gandalf, who will wave it through.
+- Path rules are about writes. Reading `.env` meets no rule.
+- A plain `git push` while you are on main is not seen as a push to main; only a push that names `main` or `master` is.
+- The reviewer is a model reading text Claude wrote. It can be wrong, and it can be talked round. It never loosens a block rule.
+- A review costs one short model call (about a thousand tokens) and a few seconds. Only gated calls pay it.
+- Nothing is written to disk. The combat log lives with the session.
+
+## Developing
+
+Three source files and one test file:
 
 ```
-mods/council-of-elrond/   the mod: manifest, hooks, tests, user manual, design, roadmap, spec
-mods/types/               Claude Code's generated API types for the build it targets (DESIGN.md's header names it)
-docs/                     install, development, maintenance guides and reviews
-.claude-plugin/           marketplace manifest, so `claude plugin install` works from this repo
-.claude/skills/           skills for Claude Code sessions working on this repo
-.claude/agents/           agents those sessions delegate to (implementer edits and runs tests, reader reads across files, reviewer reviews and never edits; roles in `.claude/skills/council-of-elrond-development/references/recipes-orchestration.md`)
-.github/                  CI, release workflow, issue and pull request templates, CODEOWNERS
-.githooks/ scripts/       pre-commit, commit-msg and pre-push hooks, setup and hygiene scripts
+hooks/rules.ts      the rule table, the secrets patterns, classify()       pure
+hooks/council.ts    members, the reviewer's prompt, every string, state    pure
+hooks/register.ts   the hooks: the only file that touches the engine
+types/index.d.ts    the shape of the session state
+tests/council.test.ts
 ```
 
 ```sh
-claude plugin test mods/council-of-elrond       # run the tests
-tsc -p mods                                    # typecheck
-claude plugin validate --strict mods/council-of-elrond  # validate the plugin
+claude plugin test .                 # the tests, against the real engine
+claude plugin validate --strict .    # the manifest and the hooks module, as the engine reads them
 ```
 
-## Contributing
+That is the whole check, and CI runs the same two commands on the latest Claude Code.
 
-Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). A command that
-passes the gate when it should not is a security report: please use
-[private vulnerability reporting](https://github.com/Deluha/council-of-elrond/security/advisories/new).
+To add a rule: one line in `RULES`, one line in the `COMMANDS` or `PATHS` table of the test. To typecheck in an editor, load the mod once with `claude --plugin-dir .`; Claude Code writes its API types and a `tsconfig.json` beside the mod, and `tsc -p .` works from then on.
+
+Do not load the mod into the session you are developing it in: a bug in the gate would gate the fix.
+
+## History
+
+Versions before 1.0 were a much larger design: a shell parser, per-project rules files with a trust model, an audit log, a multi-reviewer full council. It was thorough and it was heavy to maintain. It is all in the git history, up to commit `9420d47`.
 
 ## Licence
 
-[MIT](LICENSE), except `mods/types/claude-code.d.ts`, which is Claude Code's generated API
-declaration file redistributed unchanged for typechecking; see [its notice](mods/types/NOTICE.md).
+[MIT](LICENSE)
