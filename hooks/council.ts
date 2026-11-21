@@ -43,10 +43,10 @@ const cut = (text: string, max: number): string => (text.length <= max ? text : 
 const oneLine = (text: string, max: number): string => cut(text.replace(/\s+/g, ' ').trim(), max)
 
 /** A call as one short line, for the log, the question and the refusal. */
-export const labelOf = (call: Call): string => oneLine(call.command ?? `${call.tool} ${call.path ?? ''}`, 100)
+export const labelOf = (call: Call, max = 100): string => oneLine(call.command ?? `${call.tool} ${call.path ?? ''}`, max)
 
-/** What an approval or a wipe is counted against: this tool, this command or file. */
-export const subjectOf = (call: Call): string => `${call.tool}\n${call.command ?? call.path ?? ''}`
+/** What an approval or a wipe is counted against: this tool, this command, or this file and what is written to it. */
+export const subjectOf = (call: Call): string => `${call.tool}\n${call.command ?? `${call.path ?? ''}\n${call.written ?? ''}`}`
 
 export type Verdict = { verdict: 'approve' | 'block' | 'unsure'; reason: string }
 
@@ -106,7 +106,7 @@ export const denyPerson = (rule: Rule, answer: string): string =>
   `${NAME}: the person kept this call blocked (rule ${rule.id}).${answer === PASS ? '' : ` They said: "${oneLine(answer, 300)}"`} Do not retry it; carry on without it or ask them what they want instead.`
 
 export const denyNobody = (rule: Rule): string =>
-  `${NAME}: this call needs the person's decision (rule ${rule.id}: ${rule.why}) and nobody could be asked here. It did not run. Tell the person; they can let it through with /council allow.`
+  `${NAME}: this call needs the person's decision (rule ${rule.id}: ${rule.why}) and nobody could be asked here. It did not run. Tell the person; in an interactive session they can let it through with /council allow.`
 
 export const denyLockout = (rule: Rule): string =>
   `${NAME}: raid lockout. This exact call has been refused twice since the person's last message (rule ${rule.id}), and it will not be looked at again until they write. Stop retrying and tell them.`
@@ -115,7 +115,7 @@ export const denyBroken = `${NAME}: the gate itself failed, so this call did not
 
 /** The question the loot roll asks. */
 export const questionOf = (rule: Rule, call: Call, reason: string): string =>
-  `${MEMBERS[rule.member].name} flagged \`${labelOf(call)}\` (${rule.why}${reason === '' ? '' : ` ${reason}`}) Let it run?`
+  `${MEMBERS[rule.member].name} flagged \`${labelOf(call, 600)}\` (${rule.why}${reason === '' ? '' : ` ${reason}`}) Let it run?`
 
 // Session state, changed only here.
 
@@ -154,14 +154,15 @@ export const lootFor = (roll: number): string | undefined => LOOT.find(([under])
 
 const HELP = 'Commands: /council test <command> · /council allow · /council leeroy'
 
-export const statusText = (state: CouncilState, model: string, isShadow: boolean): string => {
+export const statusText = (state: CouncilState, model: string, isShadow: boolean, broken: readonly string[] = []): string => {
   const meter = (Object.keys(MEMBERS) as Member[]).map(id => {
     const tally = state.meter[id] ?? { approved: 0, refused: 0 }
     return `  ${MEMBERS[id].name.padEnd(8)} ${tally.approved} let through · ${tally.refused} refused`
   })
-  const log = state.log.slice(-10).map(entry => `  ${entry.outcome.padEnd(8)} ${(MEMBERS[entry.who as Member]?.name ?? entry.who).padEnd(8)} ${entry.label}${entry.reason === '' ? '' : `: ${entry.reason}`}`)
+  const log = state.log.slice(-10).map(entry => `  ${entry.outcome.padEnd(8)} ${(MEMBERS[entry.who as Member]?.name ?? 'Gollum').padEnd(8)} ${entry.label}${entry.reason === '' ? '' : `: ${entry.reason}`}`)
   return [
     `The Council of Elrond · reviewer: ${model} · shadow mode ${isShadow ? 'on' : 'off'} · Leeroy mode ${state.isLeeroy ? 'ON (reviews skipped)' : 'off'}`,
+    ...broken.map(option => `  ! The ${option} in your settings is not a valid regular expression and is ignored.`),
     '',
     'Meter (this session)',
     ...meter,

@@ -28,7 +28,7 @@ import {
   wiped,
 } from './council.js'
 import type { Verdict } from './council.js'
-import { callOf, classify, customRule, secretIn } from './rules.js'
+import { callOf, classify, customRule, matchesOf, secretIn } from './rules.js'
 import type { Call, Rule } from './rules.js'
 
 /**
@@ -45,7 +45,7 @@ const session = atom({ plugin: 'council-of-elrond', key: 'session' } as const, I
 const PEOPLE: ReadonlySet<string> = new Set(['composer', 'bridge'])
 
 const REVIEW_TIMEOUT_MS = 45_000
-const COMMIT = /\bgit\b[^;&|\n]*\bcommit\b/
+const COMMIT = /\bgit\s+(-\S+\s+)*commit\b/
 
 const keyOf = async (call: Call): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(subjectOf(call)))
@@ -70,7 +70,13 @@ const review = async ($: EngineInterface, model: string, rule: Rule, call: Call,
 export const register: Register = (on, options) => {
   const model = typeof options.model === 'string' ? options.model : 'sonnet'
   const isShadow = options.shadowMode === true
-  const extra = [customRule('block', options.blockPattern), customRule('council', options.councilPattern)].filter(rule => rule !== undefined)
+  const patterns = [
+    ['block', 'extra block pattern', options.blockPattern],
+    ['council', 'extra council pattern', options.councilPattern],
+  ] as const
+  const extra = patterns.map(([tier, , source]) => customRule(tier, source)).filter(rule => rule !== undefined)
+  /** Patterns that were set and did not compile: /council says so. */
+  const broken = patterns.filter(([tier, , source]) => typeof source === 'string' && source.trim() !== '' && customRule(tier, source) === undefined).map(([, name]) => name)
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'council', description: 'The Council of Elrond: status, meter and combat log', argumentHint: '[test <command> | allow | leeroy]' })
@@ -88,7 +94,7 @@ export const register: Register = (on, options) => {
     const [verb = '', ...rest] = args.split(/\s+/)
     const state = await read($, session)
 
-    if (verb === '') return { text: statusText(state, model, isShadow) }
+    if (verb === '') return { text: statusText(state, model, isShadow, broken) }
 
     if (verb === 'test') {
       const subject = rest.join(' ')
@@ -114,7 +120,7 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const call = callOf(e as unknown as Record<string, unknown>)
     const secret = secretIn(call)
-    const rule = classify(call, extra)
+    const matches = matchesOf(call, extra)
     const label = labelOf(call)
 
     const run = async () => {
@@ -127,30 +133,40 @@ export const register: Register = (on, options) => {
     const note = (who: string, outcome: CouncilEntry['outcome'], reason = '') => update($, session, state => logged(state, { who, outcome, label, reason }))
 
     if (secret !== undefined) {
-      await note('gollum', 'blocked', secret)
+      // The label would repeat the secret, so the log keeps only the tool.
+      await update($, session, state => logged(state, { who: 'gollum', outcome: 'blocked', label: `${call.tool} (redacted)`, reason: secret }))
       return { deny: denySecret(secret) }
     }
-    if (rule === undefined) return run()
-    if (rule.tier === 'block') {
-      await note(rule.member, 'blocked', rule.why)
-      return { deny: denyBlocked(rule) }
+    const [first] = matches
+    if (first === undefined) return run()
+    if (first.tier === 'block') {
+      await note(first.member, 'blocked', first.why)
+      return { deny: denyBlocked(first) }
     }
 
     const state = await read($, session)
     const key = await keyOf(call)
+    // Greed covers a call only when it covers every rule the call matches; else the first uncovered rule's member reviews.
+    const rule = matches.find(one => !state.greed.includes(one.id))
+    if (rule === undefined) {
+      await note(first.member, 'allowed', GREED)
+      return run()
+    }
     const refuse = async (reason: string, deny: string) => {
       await update($, session, now => wiped(logged(now, { who: rule.member, outcome: 'refused', label, reason }), key, label))
       return { deny }
     }
-
     if (state.isLeeroy) {
       await note(rule.member, 'leeroy')
       return run()
     }
-    if (state.once.includes(key) || state.greed.includes(rule.id)) {
-      await update($, session, now => logged({ ...now, once: now.once.filter(one => one !== key) }, { who: rule.member, outcome: 'allowed', label, reason: 'allowed by you' }))
-      return run()
-    }
+    // A grant from /council allow is spent in the same write that finds it, so two calls cannot share one.
+    let isGranted = false
+    await update($, session, now => {
+      isGranted = now.once.includes(key)
+      return isGranted ? logged({ ...now, once: now.once.filter(one => one !== key) }, { who: rule.member, outcome: 'allowed', label, reason: '/council allow' }) : now
+    })
+    if (isGranted) return run()
 
     // The retry brake: first the member, then the person, then nobody until the person writes again.
     const wipes = state.wipes[key] ?? 0

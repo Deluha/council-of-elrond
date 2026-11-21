@@ -50,7 +50,7 @@ The full list is the `RULES` table in [`hooks/rules.ts`](hooks/rules.ts), one li
 
 ## The raid
 
-- **Loot roll.** When a call comes to you: **Need** lets it run once, **Greed** lets that rule through for the rest of the session, **Pass** keeps it blocked. Type something else instead and Claude gets your words.
+- **Loot roll.** When a call comes to you: **Need** lets it run once, **Greed** lets that rule through for the rest of the session (a command that also matches another rule is still reviewed), **Pass** keeps it blocked. Type something else instead and Claude gets your words.
 - **Wipes and raid lockout.** Each refusal of the same call is a wipe. After two, the call is locked out until your next message, so Claude cannot grind the gate down by retrying.
 - **Leeroy mode.** `/council leeroy` skips reviews for the session. Block rules and Gollum still hold. At least you have chicken.
 - **Loot.** A commit that lands rolls on the loot table. Mostly nothing drops. Sometimes a Rare does. Once in a hundred, a Legendary.
@@ -61,10 +61,10 @@ The full list is the `RULES` table in [`hooks/rules.ts`](hooks/rules.ts), one li
 | :- | :- |
 | `/council` | Status, the meter (who let through and refused how much, tokens spent) and the combat log of recent gated calls. |
 | `/council test <command or path>` | Shows what that command or file path would meet. Runs nothing. |
-| `/council allow` | Lets the last refused call through once. For sessions where no dialog can be shown, and for when you disagree with a member. |
+| `/council allow` | Lets the last refused call through once: for when you disagree with a member, or the dialog could not be shown. |
 | `/council leeroy` | Toggles Leeroy mode. |
 
-`allow` and `leeroy` only work when you type them. Claude, a plugin or a script cannot run them.
+`allow` and `leeroy` only work when you send them yourself, from the prompt or from a Remote Control client. Claude, a plugin, a script or a headless run cannot.
 
 ## Options
 
@@ -75,11 +75,13 @@ Set when you install, or later in `/config`.
 | Reviewer model | `sonnet` | `haiku` is faster and cheaper; `opus` is more careful. |
 | Shadow mode | off | The council reviews and logs, and a toast says what it would have stopped, but nothing is refused. Block rules and Gollum still hold. Good for the first days. |
 | Extra council pattern | none | A regular expression. A shell command it matches goes to the council. `\bmake\s+deploy\b` |
-| Extra block pattern | none | A regular expression. A shell command it matches is refused outright. |
+| Extra block pattern | none | A regular expression. A shell command it matches is refused outright. `/council` tells you if a pattern does not compile. |
 
 ## Limits
 
 - Patterns read the command as text. `rm -rf "$DIR"` is seen; a script that deletes things is a script.
+- A pattern cannot tell a command from a mention of one: `grep -rn "rm -rf" .` goes to Gandalf, who will wave it through.
+- Path rules are about writes. Reading `.env` meets no rule.
 - A plain `git push` while you are on main is not seen as a push to main; only a push that names `main` or `master` is.
 - The reviewer is a model reading text Claude wrote. It can be wrong, and it can be talked round. It never loosens a block rule.
 - A review costs one short model call (about a thousand tokens) and a few seconds. Only gated calls pay it.
