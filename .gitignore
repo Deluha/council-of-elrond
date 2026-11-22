@@ -1,14 +1,9 @@
-# Dependencies and tool output
 node_modules/
 *.log
 .DS_Store
 
-# The mod's own audit log, when the mod is loaded in this repository
-.claude/council-of-elrond/audit/
+# Written by Claude Code when it loads the mod from this folder: the API types and a tsconfig that uses them.
+.claude-plugin/types/
+/tsconfig.json
 
-# Local Claude Code settings (the committed .claude/ holds skills and agents only)
 .claude/settings.local.json
-
-# Throwaway folders used for headless live checks
-/tmp/
-/scratch/

@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# The two job names are the status checks the rule on main requires. Rename
+# them there first if you rename them here. Nothing typechecks in CI: the API
+# types only exist once Claude Code has loaded the mod (see the README).
+jobs:
+  test:
+    name: Test, typecheck, validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # The latest Claude Code on purpose: the mod API is early access, and a
+      # red run here is how we learn that it moved.
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude --version
+      - run: claude plugin test .
+
+  hygiene:
+    name: Hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude plugin validate --strict .
