@@ -104,7 +104,7 @@ claude plugin test .                 # the tests, against the real engine
 claude plugin validate --strict .    # the manifest and the hooks module, as the engine reads them
 ```
 
-That is the whole check, and CI runs the same two commands on the latest Claude Code.
+That is the whole check, and CI runs the same two commands on the latest Claude Code (as the jobs "Test, typecheck, validate" and "Hygiene", the names the rule on `main` requires).
 
 To add a rule: one line in `RULES`, one line in the `COMMANDS` or `PATHS` table of the test. To typecheck in an editor, load the mod once with `claude --plugin-dir .`; Claude Code writes its API types and a `tsconfig.json` beside the mod, and `tsc -p .` works from then on.
 
